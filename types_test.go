@@ -212,8 +212,10 @@ func validateEncoding(t *testing.T, tests map[string]dataType) {
 	for expected, dt := range tests {
 		w := &bytes.Buffer{}
 
-		require.NoError(t, dt.writeTo(w))
+		numBytes, err := dt.writeTo(w)
+		require.NoError(t, err)
 
+		assert.Equal(t, int64(len(expected)/2), numBytes, "number of bytes written")
 		actual := hex.EncodeToString(w.Bytes())
 
 		assert.Equal(t, expected, actual, "%v - size: %d", dt, dt.size())
