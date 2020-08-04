@@ -1,7 +1,7 @@
 package mmdbwriter
 
 import (
-	"io/ioutil"
+	"bytes"
 	"net"
 	"testing"
 
@@ -124,10 +124,11 @@ func TestTreeInsertAndGet(t *testing.T) {
 
 			assert.Equal(t, test.expectedNodeCount, tree.nodeCount)
 
-			numBytes, err := tree.WriteTo(ioutil.Discard)
+			buf := &bytes.Buffer{}
+			numBytes, err := tree.WriteTo(buf)
 			require.NoError(t, err)
 
-			assert.Equal(t, int64(tree.nodeCount*tree.recordSize/4), numBytes)
+			assert.Equal(t, int64(buf.Len()), numBytes)
 		})
 	}
 }

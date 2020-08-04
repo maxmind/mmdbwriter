@@ -3,17 +3,29 @@
 package mmdbwriter
 
 import (
+	"bufio"
 	"io"
 	"net"
+	"time"
 
 	"github.com/pkg/errors"
 )
 
+var (
+	metadataStartMarker  = []byte("\xAB\xCD\xEFMaxMind.com")
+	dataSectionSeparator = []byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
+)
+
 // Tree represents an MaxMind DB search tree.
 type Tree struct {
-	recordSize int
-	root       *node
-	treeDepth  int
+	buildEpoch   int64
+	databaseType string
+	description  map[string]string
+	ipVersion    int
+	languages    []string
+	recordSize   int
+	root         *node
+	treeDepth    int
 	// This is set when the tree is finalized
 	nodeCount int
 }
@@ -21,9 +33,14 @@ type Tree struct {
 // New creates a new Tree.
 func New() *Tree {
 	return &Tree{
-		// TODO: support other record sizes
-		recordSize: 32,
-		root:       &node{},
+		// TODO: allow setting of many of these
+		buildEpoch:   time.Now().Unix(),
+		databaseType: "Test",
+		description:  map[string]string{},
+		ipVersion:    6,
+		languages:    []string{},
+		recordSize:   32,
+		root:         &node{},
 		// TODO: support IPv4 trees
 		treeDepth: 128,
 	}
@@ -77,11 +94,16 @@ func (t *Tree) WriteTo(w io.Writer) (int64, error) {
 		return 0, errors.New("the Tree is not finalized; run Finalize() before writing")
 	}
 
-	// We create this here so that we don't have to allocate millions of these.
-	// We potentially could just use a bufio.Writer instead.
+	buf := bufio.NewWriter(w)
+
+	// We create this here so that we don't have to allocate millions of these. This
+	// may no longer make sense now that we are using a bufio.Writer anyway, which has
+	// WriteByte, but we should probably do some testing.
 	recordBuf := make([]byte, 2*t.recordSize/8)
-	nodeCount, numBytes, err := t.writeNode(w, t.root, recordBuf)
+
+	nodeCount, numBytes, err := t.writeNode(buf, t.root, recordBuf)
 	if nodeCount != t.nodeCount {
+		_ = buf.Flush()
 		// This should only happen if there is a programming bug
 		// in this library.
 		return numBytes, errors.Errorf(
@@ -90,6 +112,33 @@ func (t *Tree) WriteTo(w io.Writer) (int64, error) {
 			t.nodeCount,
 		)
 	}
+
+	nb, err := buf.Write(dataSectionSeparator)
+	numBytes += int64(nb)
+	if err != nil {
+		_ = buf.Flush()
+		return numBytes, errors.Wrap(err, "error writing data section separator")
+	}
+
+	nb, err = buf.Write(metadataStartMarker)
+	numBytes += int64(nb)
+	if err != nil {
+		_ = buf.Flush()
+		return numBytes, errors.Wrap(err, "error writing metadata start marker")
+	}
+
+	nb64, err := t.writeMetadata(buf)
+	numBytes += nb64
+	if err != nil {
+		_ = buf.Flush()
+		return numBytes, errors.Wrap(err, "error writing metadata")
+	}
+
+	err = buf.Flush()
+	if err != nil {
+		return numBytes, errors.Wrap(err, "error flushing buffer to writer")
+	}
+
 	return numBytes, err
 }
 
@@ -187,4 +236,28 @@ var v4Prefix = net.IP{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
 
 func ipV4ToV6(ip net.IP) net.IP {
 	return append(v4Prefix, ip...)
+}
+
+func (t *Tree) writeMetadata(w *bufio.Writer) (int64, error) {
+	description := typeMap{}
+	for k, v := range t.description {
+		description[typeString(k)] = typeString(v)
+	}
+
+	languages := typeSlice{}
+	for _, v := range t.languages {
+		languages = append(languages, typeString(v))
+	}
+	metadata := typeMap{
+		"binary_format_major_version": typeUint16(2),
+		"binary_format_minor_version": typeUint16(0),
+		"build_epoch":                 typeUint64(t.buildEpoch),
+		"database_type":               typeString(t.databaseType),
+		"description":                 description,
+		"ip_version":                  typeUint16(t.ipVersion),
+		"languages":                   languages,
+		"node_count":                  typeUint32(t.nodeCount),
+		"record_size":                 typeUint16(t.recordSize),
+	}
+	return metadata.writeTo(w)
 }
