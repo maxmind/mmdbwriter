@@ -12,7 +12,7 @@ import (
 type node struct {
 	children [2]*node
 	// not sure what this is yet
-	value *string
+	value   *dataType
 	nodeNum int
 }
 
@@ -20,8 +20,7 @@ func (n *node) insert(
 	ip net.IP,
 	prefixLen int,
 	depth int,
-	// XXX - temp
-	value string,
+	value dataType,
 ) {
 	if depth == prefixLen {
 		n.value = &value
@@ -50,7 +49,7 @@ func (n *node) insert(
 func (n *node) get(
 	ip net.IP,
 	depth int,
-) (int, *string) {
+) (int, *dataType) {
 	child := n.children[bitAt(ip, depth)]
 	if child == nil {
 		return depth, n.value

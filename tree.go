@@ -49,8 +49,9 @@ func New() *Tree {
 // Insert a data value into the tree.
 func (t *Tree) Insert(
 	network *net.IPNet,
-	// XXX - temp
-	value string,
+	// TODO - We current only support inserting dataType. In the future, we
+	// should support arbitrary tagged structs
+	value dataType,
 ) error {
 	// We set this to 0 so that the tree must be finalized again.
 	t.nodeCount = 0
@@ -69,7 +70,7 @@ func (t *Tree) Insert(
 }
 
 // Get the value for the given IP address from the tree.
-func (t *Tree) Get(ip net.IP) (*net.IPNet, *string) {
+func (t *Tree) Get(ip net.IP) (*net.IPNet, *dataType) {
 	if t.treeDepth == 128 && len(ip) == 4 {
 		ip = ipV4ToV6(ip)
 	}
@@ -101,7 +102,13 @@ func (t *Tree) WriteTo(w io.Writer) (int64, error) {
 	// WriteByte, but we should probably do some testing.
 	recordBuf := make([]byte, 2*t.recordSize/8)
 
-	nodeCount, numBytes, err := t.writeNode(buf, t.root, recordBuf)
+	dataWriter := newDataWriter()
+
+	nodeCount, numBytes, err := t.writeNode(buf, t.root, dataWriter, recordBuf)
+	if err != nil {
+		_ = buf.Flush()
+		return numBytes, err
+	}
 	if nodeCount != t.nodeCount {
 		_ = buf.Flush()
 		// This should only happen if there is a programming bug
@@ -120,6 +127,13 @@ func (t *Tree) WriteTo(w io.Writer) (int64, error) {
 		return numBytes, errors.Wrap(err, "error writing data section separator")
 	}
 
+	nb64, err := dataWriter.buf.WriteTo(buf)
+	numBytes += nb64
+	if err != nil {
+		_ = buf.Flush()
+		return numBytes, err
+	}
+
 	nb, err = buf.Write(metadataStartMarker)
 	numBytes += int64(nb)
 	if err != nil {
@@ -127,7 +141,7 @@ func (t *Tree) WriteTo(w io.Writer) (int64, error) {
 		return numBytes, errors.Wrap(err, "error writing metadata start marker")
 	}
 
-	nb64, err := t.writeMetadata(buf)
+	nb64, err = t.writeMetadata(buf)
 	numBytes += nb64
 	if err != nil {
 		_ = buf.Flush()
@@ -145,13 +159,14 @@ func (t *Tree) WriteTo(w io.Writer) (int64, error) {
 func (t *Tree) writeNode(
 	w io.Writer,
 	n *node,
+	dataWriter *dataWriter,
 	recordBuf []byte,
 ) (int, int64, error) {
 	if n.isLeaf() {
 		return 0, 0, nil
 	}
 
-	err := t.copyRecord(recordBuf, n.children)
+	err := t.copyRecord(recordBuf, n.children, dataWriter)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -167,6 +182,7 @@ func (t *Tree) writeNode(
 	leftNodes, leftNumBytes, err := t.writeNode(
 		w,
 		n.children[0],
+		dataWriter,
 		recordBuf,
 	)
 	nodesWritten += leftNodes
@@ -178,6 +194,7 @@ func (t *Tree) writeNode(
 	rightNodes, rightNumBytes, err := t.writeNode(
 		w,
 		n.children[1],
+		dataWriter,
 		recordBuf,
 	)
 	nodesWritten += rightNodes
@@ -187,17 +204,27 @@ func (t *Tree) writeNode(
 
 func (t *Tree) recordValueForNode(
 	n *node,
-) int {
+	dataWriter *dataWriter,
+) (int, error) {
 	if n.isLeaf() {
-		// XXX - support data nodes !!
-		return t.nodeCount
+		if n.value != nil {
+			offset, err := dataWriter.write(*n.value)
+			return t.nodeCount + len(dataSectionSeparator) + offset, err
+		}
+		return t.nodeCount, nil
 	}
-	return n.nodeNum
+	return n.nodeNum, nil
 }
 
-func (t *Tree) copyRecord(buf []byte, children [2]*node) error {
-	left := t.recordValueForNode(children[0])
-	right := t.recordValueForNode(children[1])
+func (t *Tree) copyRecord(buf []byte, children [2]*node, dataWriter *dataWriter) error {
+	left, err := t.recordValueForNode(children[0], dataWriter)
+	if err != nil {
+		return err
+	}
+	right, err := t.recordValueForNode(children[1], dataWriter)
+	if err != nil {
+		return err
+	}
 
 	// XXX check max size
 
