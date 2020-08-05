@@ -12,13 +12,13 @@ import (
 
 type testInsert struct {
 	network string
-	value   dataType
+	value   DataType
 }
 
 type testGet struct {
 	ip                  string
 	expectedNetwork     string
-	expectedGetValue    *dataType
+	expectedGetValue    *DataType
 	expectedLookupValue *interface{}
 }
 
@@ -34,7 +34,7 @@ func TestTreeInsertAndGet(t *testing.T) {
 			inserts: []testInsert{
 				{
 					network: "::/1",
-					value:   typeString("string"),
+					value:   String("string"),
 				},
 			},
 			gets: []testGet{
@@ -52,7 +52,7 @@ func TestTreeInsertAndGet(t *testing.T) {
 			inserts: []testInsert{
 				{
 					network: "8000::/1",
-					value:   typeString("string"),
+					value:   String("string"),
 				},
 			},
 			gets: []testGet{
@@ -70,11 +70,11 @@ func TestTreeInsertAndGet(t *testing.T) {
 			inserts: []testInsert{
 				{
 					network: "2002:1000::/32",
-					value:   typeString("string"),
+					value:   String("string"),
 				},
 				{
 					network: "2002::/16",
-					value:   typeString("new string"),
+					value:   String("new string"),
 				},
 			},
 			gets: []testGet{
@@ -98,11 +98,11 @@ func TestTreeInsertAndGet(t *testing.T) {
 			inserts: []testInsert{
 				{
 					network: "2002::/16",
-					value:   typeString("string"),
+					value:   String("string"),
 				},
 				{
 					network: "2002:1000::/32",
-					value:   typeString("new string"),
+					value:   String("new string"),
 				},
 			},
 			gets: []testGet{
@@ -180,7 +180,7 @@ func s2ip(v string) *interface{} {
 	return &i
 }
 
-func s2dtp(v string) *dataType {
-	ts := dataType(typeString(v))
+func s2dtp(v string) *DataType {
+	ts := DataType(String(v))
 	return &ts
 }

@@ -20,7 +20,7 @@ func newDataWriter() *dataWriter {
 	}
 }
 
-func (dw *dataWriter) write(t dataType) (int, error) {
+func (dw *dataWriter) write(t DataType) (int, error) {
 	key, err := key(t)
 	if err != nil {
 		return 0, err
@@ -44,7 +44,7 @@ func (dw *dataWriter) write(t dataType) (int, error) {
 
 // This is just a quick hack. I am sure there is
 // something better
-func key(t dataType) (string, error) {
+func key(t DataType) (string, error) {
 	bytes, err := json.Marshal(t)
 	if err != nil {
 		return "", errors.Wrap(err, "error marshalling to JSON")

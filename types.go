@@ -39,40 +39,43 @@ type writer interface {
 	WriteString(string) (int, error)
 }
 
-type dataType interface {
+// DataType represents a MaxMind DB data type
+type DataType interface {
 	size() int
 	typeNum() typeNum
 	writeTo(writer) (int64, error)
 }
 
-type typeBool bool
+// Bool is the MaxMind DB boolean type
+type Bool bool
 
-func (t typeBool) size() int {
+func (t Bool) size() int {
 	if t {
 		return 1
 	}
 	return 0
 }
 
-func (t typeBool) typeNum() typeNum {
+func (t Bool) typeNum() typeNum {
 	return typeNumBool
 }
 
-func (t typeBool) writeTo(w writer) (int64, error) {
+func (t Bool) writeTo(w writer) (int64, error) {
 	return writeCtrlByte(w, t)
 }
 
-type typeBytes []byte
+// Bytes is the MaxMind DB bytes type
+type Bytes []byte
 
-func (t typeBytes) size() int {
+func (t Bytes) size() int {
 	return len(t)
 }
 
-func (t typeBytes) typeNum() typeNum {
+func (t Bytes) typeNum() typeNum {
 	return typeNumBytes
 }
 
-func (t typeBytes) writeTo(w writer) (int64, error) {
+func (t Bytes) writeTo(w writer) (int64, error) {
 	numBytes, err := writeCtrlByte(w, t)
 	if err != nil {
 		return numBytes, err
@@ -86,17 +89,18 @@ func (t typeBytes) writeTo(w writer) (int64, error) {
 	return numBytes, nil
 }
 
-type typeFloat32 float32
+// Float32 is the MaxMind DB float type
+type Float32 float32
 
-func (t typeFloat32) size() int {
+func (t Float32) size() int {
 	return 4
 }
 
-func (t typeFloat32) typeNum() typeNum {
+func (t Float32) typeNum() typeNum {
 	return typeNumFloat32
 }
 
-func (t typeFloat32) writeTo(w writer) (int64, error) {
+func (t Float32) writeTo(w writer) (int64, error) {
 	numBytes, err := writeCtrlByte(w, t)
 	if err != nil {
 		return numBytes, err
@@ -109,17 +113,18 @@ func (t typeFloat32) writeTo(w writer) (int64, error) {
 	return numBytes + int64(t.size()), nil
 }
 
-type typeFloat64 float64
+// Float64 is the MaxMind DB double type
+type Float64 float64
 
-func (t typeFloat64) size() int {
+func (t Float64) size() int {
 	return 8
 }
 
-func (t typeFloat64) typeNum() typeNum {
+func (t Float64) typeNum() typeNum {
 	return typeNumFloat64
 }
 
-func (t typeFloat64) writeTo(w writer) (int64, error) {
+func (t Float64) writeTo(w writer) (int64, error) {
 	numBytes, err := writeCtrlByte(w, t)
 	if err != nil {
 		return numBytes, err
@@ -132,17 +137,18 @@ func (t typeFloat64) writeTo(w writer) (int64, error) {
 	return numBytes + int64(t.size()), nil
 }
 
-type typeInt32 int32
+// Int32 is the MaxMind DB signed 32-bit integer type
+type Int32 int32
 
-func (t typeInt32) size() int {
+func (t Int32) size() int {
 	return 4 - bits.LeadingZeros32(uint32(t))/8
 }
 
-func (t typeInt32) typeNum() typeNum {
+func (t Int32) typeNum() typeNum {
 	return typeNumInt32
 }
 
-func (t typeInt32) writeTo(w writer) (int64, error) {
+func (t Int32) writeTo(w writer) (int64, error) {
 	numBytes, err := writeCtrlByte(w, t)
 	if err != nil {
 		return numBytes, err
@@ -159,17 +165,18 @@ func (t typeInt32) writeTo(w writer) (int64, error) {
 	return numBytes + int64(size), nil
 }
 
-type typeMap map[typeString]dataType
+// Map is the MaxMind DB map type
+type Map map[String]DataType
 
-func (t typeMap) size() int {
+func (t Map) size() int {
 	return len(t)
 }
 
-func (t typeMap) typeNum() typeNum {
+func (t Map) typeNum() typeNum {
 	return typeNumMap
 }
 
-func (t typeMap) writeTo(w writer) (int64, error) {
+func (t Map) writeTo(w writer) (int64, error) {
 	numBytes, err := writeCtrlByte(w, t)
 	if err != nil {
 		return numBytes, err
@@ -186,7 +193,7 @@ func (t typeMap) writeTo(w writer) (int64, error) {
 	sort.Strings(keys)
 
 	for _, ks := range keys {
-		k := typeString(ks)
+		k := String(ks)
 		written, err := k.writeTo(w)
 		numBytes += written
 		if err != nil {
@@ -201,17 +208,18 @@ func (t typeMap) writeTo(w writer) (int64, error) {
 	return numBytes, nil
 }
 
-type typeSlice []dataType
+// Slice is the MaxMind DB array type
+type Slice []DataType
 
-func (t typeSlice) size() int {
+func (t Slice) size() int {
 	return len(t)
 }
 
-func (t typeSlice) typeNum() typeNum {
+func (t Slice) typeNum() typeNum {
 	return typeNumSlice
 }
 
-func (t typeSlice) writeTo(w writer) (int64, error) {
+func (t Slice) writeTo(w writer) (int64, error) {
 	numBytes, err := writeCtrlByte(w, t)
 	if err != nil {
 		return numBytes, err
@@ -227,17 +235,18 @@ func (t typeSlice) writeTo(w writer) (int64, error) {
 	return numBytes, nil
 }
 
-type typeString string
+// String is the MaxMind DB string type
+type String string
 
-func (t typeString) size() int {
+func (t String) size() int {
 	return len(t)
 }
 
-func (t typeString) typeNum() typeNum {
+func (t String) typeNum() typeNum {
 	return typeNumString
 }
 
-func (t typeString) writeTo(w writer) (int64, error) {
+func (t String) writeTo(w writer) (int64, error) {
 	numBytes, err := writeCtrlByte(w, t)
 	if err != nil {
 		return numBytes, err
@@ -251,17 +260,18 @@ func (t typeString) writeTo(w writer) (int64, error) {
 	return numBytes, nil
 }
 
-type typeUint16 uint16
+// Uint16 is the MaxMind DB unsigned 16-bit integer type
+type Uint16 uint16
 
-func (t typeUint16) size() int {
+func (t Uint16) size() int {
 	return 2 - bits.LeadingZeros16(uint16(t))/8
 }
 
-func (t typeUint16) typeNum() typeNum {
+func (t Uint16) typeNum() typeNum {
 	return typeNumUint16
 }
 
-func (t typeUint16) writeTo(w writer) (int64, error) {
+func (t Uint16) writeTo(w writer) (int64, error) {
 	numBytes, err := writeCtrlByte(w, t)
 	if err != nil {
 		return numBytes, err
@@ -278,17 +288,18 @@ func (t typeUint16) writeTo(w writer) (int64, error) {
 	return numBytes + int64(size), nil
 }
 
-type typeUint32 uint32
+// Uint32 is the MaxMind DB unsigned 32-bit integer type
+type Uint32 uint32
 
-func (t typeUint32) size() int {
+func (t Uint32) size() int {
 	return 4 - bits.LeadingZeros32(uint32(t))/8
 }
 
-func (t typeUint32) typeNum() typeNum {
+func (t Uint32) typeNum() typeNum {
 	return typeNumUint32
 }
 
-func (t typeUint32) writeTo(w writer) (int64, error) {
+func (t Uint32) writeTo(w writer) (int64, error) {
 	numBytes, err := writeCtrlByte(w, t)
 	if err != nil {
 		return numBytes, err
@@ -305,17 +316,18 @@ func (t typeUint32) writeTo(w writer) (int64, error) {
 	return numBytes + int64(size), nil
 }
 
-type typeUint64 uint64
+// Uint64 is the MaxMind DB unsigned 64-bit integer type
+type Uint64 uint64
 
-func (t typeUint64) size() int {
+func (t Uint64) size() int {
 	return 8 - bits.LeadingZeros64(uint64(t))/8
 }
 
-func (t typeUint64) typeNum() typeNum {
+func (t Uint64) typeNum() typeNum {
 	return typeNumUint64
 }
 
-func (t typeUint64) writeTo(w writer) (int64, error) {
+func (t Uint64) writeTo(w writer) (int64, error) {
 	numBytes, err := writeCtrlByte(w, t)
 	if err != nil {
 		return numBytes, err
@@ -333,17 +345,18 @@ func (t typeUint64) writeTo(w writer) (int64, error) {
 	return numBytes + int64(size), nil
 }
 
-type typeUint128 big.Int
+// Uint128 is the MaxMind DB unsigned 128-bit integer type
+type Uint128 big.Int
 
-func (t *typeUint128) size() int {
+func (t *Uint128) size() int {
 	return ((*big.Int)(t).BitLen() + 7) / 8
 }
 
-func (t *typeUint128) typeNum() typeNum {
+func (t *Uint128) typeNum() typeNum {
 	return typeNumUint128
 }
 
-func (t *typeUint128) writeTo(w writer) (int64, error) {
+func (t *Uint128) writeTo(w writer) (int64, error) {
 	numBytes, err := writeCtrlByte(w, t)
 	if err != nil {
 		return numBytes, err
@@ -364,7 +377,7 @@ const (
 	maxSize    = thirdSize + (1 << 24)
 )
 
-func writeCtrlByte(w writer, t dataType) (int64, error) {
+func writeCtrlByte(w writer, t DataType) (int64, error) {
 	size := t.size()
 
 	typeNum := t.typeNum()

@@ -51,7 +51,7 @@ func (t *Tree) Insert(
 	network *net.IPNet,
 	// TODO - We current only support inserting dataType. In the future, we
 	// should support arbitrary tagged structs
-	value dataType,
+	value DataType,
 ) error {
 	// We set this to 0 so that the tree must be finalized again.
 	t.nodeCount = 0
@@ -70,7 +70,7 @@ func (t *Tree) Insert(
 }
 
 // Get the value for the given IP address from the tree.
-func (t *Tree) Get(ip net.IP) (*net.IPNet, *dataType) {
+func (t *Tree) Get(ip net.IP) (*net.IPNet, *DataType) {
 	if t.treeDepth == 128 && len(ip) == 4 {
 		ip = ipV4ToV6(ip)
 	}
@@ -266,25 +266,25 @@ func ipV4ToV6(ip net.IP) net.IP {
 }
 
 func (t *Tree) writeMetadata(w *bufio.Writer) (int64, error) {
-	description := typeMap{}
+	description := Map{}
 	for k, v := range t.description {
-		description[typeString(k)] = typeString(v)
+		description[String(k)] = String(v)
 	}
 
-	languages := typeSlice{}
+	languages := Slice{}
 	for _, v := range t.languages {
-		languages = append(languages, typeString(v))
+		languages = append(languages, String(v))
 	}
-	metadata := typeMap{
-		"binary_format_major_version": typeUint16(2),
-		"binary_format_minor_version": typeUint16(0),
-		"build_epoch":                 typeUint64(t.buildEpoch),
-		"database_type":               typeString(t.databaseType),
+	metadata := Map{
+		"binary_format_major_version": Uint16(2),
+		"binary_format_minor_version": Uint16(0),
+		"build_epoch":                 Uint64(t.buildEpoch),
+		"database_type":               String(t.databaseType),
 		"description":                 description,
-		"ip_version":                  typeUint16(t.ipVersion),
+		"ip_version":                  Uint16(t.ipVersion),
 		"languages":                   languages,
-		"node_count":                  typeUint32(t.nodeCount),
-		"record_size":                 typeUint16(t.recordSize),
+		"node_count":                  Uint32(t.nodeCount),
+		"record_size":                 Uint16(t.recordSize),
 	}
 	return metadata.writeTo(w)
 }
