@@ -50,10 +50,15 @@ func (n *node) get(
 	ip net.IP,
 	depth int,
 ) (int, *DataType) {
+	if n.value != nil {
+		return depth, n.value
+	}
+
 	child := n.children[bitAt(ip, depth)]
 	if child == nil {
 		return depth, n.value
 	}
+
 	return child.get(ip, depth+1)
 }
 

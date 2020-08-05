@@ -65,17 +65,32 @@ func (t *Tree) Insert(
 		return errors.New("cannot insert a value into the root node of the tree")
 	}
 
-	t.root.insert(network.IP, prefixLen, 0, value)
+	ip := network.IP
+	if t.treeDepth == 128 && len(ip) == 4 {
+		ip = ipV4ToV6(ip)
+		prefixLen += 96
+	}
+
+	t.root.insert(ip, prefixLen, 0, value)
 	return nil
 }
 
 // Get the value for the given IP address from the tree.
 func (t *Tree) Get(ip net.IP) (*net.IPNet, *DataType) {
-	if t.treeDepth == 128 && len(ip) == 4 {
-		ip = ipV4ToV6(ip)
+	lookupIP := ip
+
+	if t.treeDepth == 128 {
+		if ipv4 := ip.To4(); ipv4 != nil {
+			lookupIP = ipV4ToV6(ipv4)
+		}
 	}
 
-	prefixLen, value := t.root.get(ip, 0)
+	prefixLen, value := t.root.get(lookupIP, 0)
+
+	if prefixLen >= 96 && len(ip) == 4 {
+		prefixLen -= 96
+	}
+
 	mask := net.CIDRMask(prefixLen, t.treeDepth)
 
 	return &net.IPNet{

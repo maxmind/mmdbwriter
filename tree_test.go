@@ -127,6 +127,30 @@ func TestTreeInsertAndGet(t *testing.T) {
 			},
 			expectedNodeCount: 32,
 		},
+		{
+			name: "inserting IPv4 address in IPv6 tree",
+			inserts: []testInsert{
+				{
+					network: "1.1.1.1/32",
+					value:   String("string"),
+				},
+			},
+			gets: []testGet{
+				{
+					ip:                  "1.1.1.1",
+					expectedNetwork:     "1.1.1.1/32",
+					expectedGetValue:    s2dtp("string"),
+					expectedLookupValue: s2ip("string"),
+				},
+				{
+					ip:                  "::1.1.1.1",
+					expectedNetwork:     "::101:101/128",
+					expectedGetValue:    s2dtp("string"),
+					expectedLookupValue: s2ip("string"),
+				},
+			},
+			expectedNodeCount: 128,
+		},
 	}
 
 	for _, test := range tests {
@@ -162,12 +186,12 @@ func TestTreeInsertAndGet(t *testing.T) {
 				network, ok, err := reader.LookupNetwork(net.ParseIP(get.ip), &v)
 				require.NoError(t, err)
 
-				assert.Equal(t, get.expectedNetwork, network.String(), "network for %s", get.ip)
+				assert.Equal(t, get.expectedNetwork, network.String(), "network for %s in database", get.ip)
 
 				if get.expectedLookupValue == nil {
 					assert.False(t, ok, "%s is not in the database", get.ip)
 				} else {
-					assert.Equal(t, *get.expectedLookupValue, v, "value for %s", get.ip)
+					assert.Equal(t, *get.expectedLookupValue, v, "value for %s in database", get.ip)
 				}
 			}
 			assert.Equal(t, int64(buf.Len()), numBytes, "number of bytes")
