@@ -16,6 +16,39 @@ var (
 	dataSectionSeparator = []byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
 )
 
+// Options holds configuration parameters for the writer
+type Options struct {
+	// BuildEpoch is the database build timestamp as a Unix epoch value. It
+	// defaults to the epoch of when New was called.
+	BuildEpoch int64
+
+	// DatabaseType is a string that indicates the structure of each data record
+	// associated with an IP address. The actual definition of these structures
+	// is left up to the database creator.
+	DatabaseType string
+
+	// Description is a map where the key is a language code and the value is
+	// the description of the database in that language.
+	Description map[string]string
+
+	// IPVersion indicates whether an IPv4 or IPv6 database should be built. An
+	// IPv6 database supports both IPv4 and IPv6 lookups. The default value is
+	// "6" for IPv6.
+	IPVersion int
+
+	// Languages is a slice of strings, each of which is a locale code. A given
+	// record may contain data items that have been localized to some or all of
+	// these locales. Records should not contain localized data for locales not
+	// included in this slice.
+	Languages []string
+
+	// RecordSize indicates the number of bits in a record in the search tree.
+	// The supported values are 24, 28, and 32. A smaller size will result in a
+	// smaller database, but it will limit the maximum size of the database.
+	// The default is 28.
+	RecordSize int
+}
+
 // Tree represents an MaxMind DB search tree.
 type Tree struct {
 	buildEpoch   int64
@@ -31,19 +64,47 @@ type Tree struct {
 }
 
 // New creates a new Tree.
-func New() *Tree {
-	return &Tree{
-		// TODO: allow setting of many of these
+func New(opts Options) (*Tree, error) {
+	tree := &Tree{
 		buildEpoch:   time.Now().Unix(),
-		databaseType: "Test",
+		databaseType: opts.DatabaseType,
 		description:  map[string]string{},
 		ipVersion:    6,
 		languages:    []string{},
-		recordSize:   32,
+		recordSize:   28,
 		root:         &node{},
-		// TODO: support IPv4 trees
-		treeDepth: 128,
 	}
+
+	if opts.BuildEpoch != 0 {
+		tree.buildEpoch = opts.BuildEpoch
+	}
+
+	if opts.Description != nil {
+		tree.description = opts.Description
+	}
+
+	if opts.IPVersion != 0 {
+		tree.ipVersion = opts.IPVersion
+	}
+
+	if opts.Languages != nil {
+		tree.languages = opts.Languages
+	}
+
+	if opts.RecordSize != 0 {
+		tree.recordSize = opts.RecordSize
+	}
+
+	switch tree.ipVersion {
+	case 6:
+		tree.treeDepth = 128
+	case 4:
+		tree.treeDepth = 32
+	default:
+		return nil, errors.Errorf("unsupported IPVersion: %d", tree.ipVersion)
+	}
+
+	return tree, nil
 }
 
 // Insert a data value into the tree.

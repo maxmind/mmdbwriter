@@ -2,6 +2,7 @@ package mmdbwriter
 
 import (
 	"bytes"
+	"fmt"
 	"net"
 	"testing"
 
@@ -153,48 +154,53 @@ func TestTreeInsertAndGet(t *testing.T) {
 		},
 	}
 
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			tree := New()
-			for _, insert := range test.inserts {
-				_, network, err := net.ParseCIDR(insert.network)
-				require.NoError(t, err)
+	for _, recordSize := range []int{24, 28, 32} {
+		t.Run(fmt.Sprintf("Record Size: %d", recordSize), func(t *testing.T) {
+			for _, test := range tests {
+				t.Run(test.name, func(t *testing.T) {
+					tree, err := New(Options{RecordSize: recordSize})
+					require.NoError(t, err)
+					for _, insert := range test.inserts {
+						_, network, err := net.ParseCIDR(insert.network)
+						require.NoError(t, err)
 
-				require.NoError(t, tree.Insert(network, insert.value))
+						require.NoError(t, tree.Insert(network, insert.value))
+					}
+
+					for _, get := range test.gets {
+						network, value := tree.Get(net.ParseIP(get.ip))
+
+						assert.Equal(t, get.expectedNetwork, network.String(), "network for %s", get.ip)
+						assert.Equal(t, get.expectedGetValue, value, "value for %s", get.ip)
+					}
+
+					tree.Finalize()
+
+					assert.Equal(t, test.expectedNodeCount, tree.nodeCount)
+
+					buf := &bytes.Buffer{}
+					numBytes, err := tree.WriteTo(buf)
+					require.NoError(t, err)
+
+					reader, err := maxminddb.FromBytes(buf.Bytes())
+					require.NoError(t, err)
+
+					for _, get := range test.gets {
+						var v interface{}
+						network, ok, err := reader.LookupNetwork(net.ParseIP(get.ip), &v)
+						require.NoError(t, err)
+
+						assert.Equal(t, get.expectedNetwork, network.String(), "network for %s in database", get.ip)
+
+						if get.expectedLookupValue == nil {
+							assert.False(t, ok, "%s is not in the database", get.ip)
+						} else {
+							assert.Equal(t, *get.expectedLookupValue, v, "value for %s in database", get.ip)
+						}
+					}
+					assert.Equal(t, int64(buf.Len()), numBytes, "number of bytes")
+				})
 			}
-
-			for _, get := range test.gets {
-				network, value := tree.Get(net.ParseIP(get.ip))
-
-				assert.Equal(t, get.expectedNetwork, network.String(), "network for %s", get.ip)
-				assert.Equal(t, get.expectedGetValue, value, "value for %s", get.ip)
-			}
-
-			tree.Finalize()
-
-			assert.Equal(t, test.expectedNodeCount, tree.nodeCount)
-
-			buf := &bytes.Buffer{}
-			numBytes, err := tree.WriteTo(buf)
-			require.NoError(t, err)
-
-			reader, err := maxminddb.FromBytes(buf.Bytes())
-			require.NoError(t, err)
-
-			for _, get := range test.gets {
-				var v interface{}
-				network, ok, err := reader.LookupNetwork(net.ParseIP(get.ip), &v)
-				require.NoError(t, err)
-
-				assert.Equal(t, get.expectedNetwork, network.String(), "network for %s in database", get.ip)
-
-				if get.expectedLookupValue == nil {
-					assert.False(t, ok, "%s is not in the database", get.ip)
-				} else {
-					assert.Equal(t, *get.expectedLookupValue, v, "value for %s in database", get.ip)
-				}
-			}
-			assert.Equal(t, int64(buf.Len()), numBytes, "number of bytes")
 		})
 	}
 }
