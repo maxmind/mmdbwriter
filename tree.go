@@ -131,7 +131,7 @@ func (t *Tree) Insert(
 		prefixLen += 96
 	}
 
-	t.root.insert(ip, prefixLen, 0, value)
+	t.root.insert(ip, prefixLen, recordTypeData, value, 0)
 	return nil
 }
 
@@ -247,11 +247,7 @@ func (t *Tree) writeNode(
 	dataWriter *dataWriter,
 	recordBuf []byte,
 ) (int, int64, error) {
-	if n.isLeaf() {
-		return 0, 0, nil
-	}
-
-	err := t.copyRecord(recordBuf, n.children, dataWriter)
+	err := t.copyNode(recordBuf, n, dataWriter)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -264,49 +260,48 @@ func (t *Tree) writeNode(
 		return nodesWritten, numBytes, errors.Wrap(err, "error writing node")
 	}
 
-	leftNodes, leftNumBytes, err := t.writeNode(
-		w,
-		n.children[0],
-		dataWriter,
-		recordBuf,
-	)
-	nodesWritten += leftNodes
-	numBytes += leftNumBytes
-	if err != nil {
-		return nodesWritten, numBytes, err
+	for i := 0; i < 2; i++ {
+		child := n.children[i]
+		if child.recordType != recordTypeNode {
+			continue
+		}
+		addedNodes, addedBytes, err := t.writeNode(
+			w,
+			n.children[i].node,
+			dataWriter,
+			recordBuf,
+		)
+		nodesWritten += addedNodes
+		numBytes += addedBytes
+		if err != nil {
+			return nodesWritten, numBytes, err
+		}
 	}
 
-	rightNodes, rightNumBytes, err := t.writeNode(
-		w,
-		n.children[1],
-		dataWriter,
-		recordBuf,
-	)
-	nodesWritten += rightNodes
-	numBytes += rightNumBytes
-	return nodesWritten, numBytes, err
+	return nodesWritten, numBytes, nil
 }
 
-func (t *Tree) recordValueForNode(
-	n *node,
+func (t *Tree) recordValue(
+	r record,
 	dataWriter *dataWriter,
 ) (int, error) {
-	if n.isLeaf() {
-		if n.value != nil {
-			offset, err := dataWriter.write(*n.value)
-			return t.nodeCount + len(dataSectionSeparator) + offset, err
-		}
+	switch r.recordType {
+	case recordTypeData:
+		offset, err := dataWriter.write(r.value)
+		return t.nodeCount + len(dataSectionSeparator) + offset, err
+	case recordTypeEmpty:
 		return t.nodeCount, nil
+	default:
+		return r.node.nodeNum, nil
 	}
-	return n.nodeNum, nil
 }
 
-func (t *Tree) copyRecord(buf []byte, children [2]*node, dataWriter *dataWriter) error {
-	left, err := t.recordValueForNode(children[0], dataWriter)
+func (t *Tree) copyNode(buf []byte, n *node, dataWriter *dataWriter) error {
+	left, err := t.recordValue(n.children[0], dataWriter)
 	if err != nil {
 		return err
 	}
-	right, err := t.recordValueForNode(children[1], dataWriter)
+	right, err := t.recordValue(n.children[1], dataWriter)
 	if err != nil {
 		return err
 	}

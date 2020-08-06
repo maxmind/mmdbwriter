@@ -1,82 +1,103 @@
 package mmdbwriter
 
 import (
+	"fmt"
 	"net"
 )
 
-// node represents a node of any type. Only leaf nodes should have a value
-// associated with it. Although this potentially could be clearer and more
-// compact as an interface with different concrete types, the compiler has
-// a harder time optimizing such code and the benefit doesn't seem that
-// great.
+type recordType byte
+
+const (
+	recordTypeEmpty recordType = iota
+	recordTypeData
+	recordTypeNode
+	recordTypeAlias     // nolint: deadcode, varcheck
+	recordTypeFixed     // nolint: deadcode, varcheck
+	recordTypeImmutable // nolint: deadcode, varcheck
+)
+
+type record struct {
+	node       *node
+	value      DataType
+	recordType recordType
+}
+
+// each node contains two records.
 type node struct {
-	children [2]*node
-	// not sure what this is yet
-	value   *DataType
-	nodeNum int
+	children [2]record
+	nodeNum  int
 }
 
 func (n *node) insert(
 	ip net.IP,
 	prefixLen int,
-	depth int,
+	recordType recordType,
 	value DataType,
+	currentDepth int,
 ) {
-	if depth == prefixLen {
-		n.value = &value
-		n.children = [2]*node{}
+	pos := bitAt(ip, currentDepth)
+	r := &n.children[pos]
+
+	currentDepth++
+	if currentDepth == prefixLen {
+		r.node = nil
+		r.value = value
+		r.recordType = recordType
 		return
 	}
 
-	pos := bitAt(ip, depth)
-	child := n.children[pos]
-
-	if child == nil {
-		// We create both children with the value of the parent as we are
-		// splitting this node.
-		child = &node{value: n.value}
-		n.children[pos] = child
-
-		// the other child
-		n.children[1-pos] = &node{value: n.value}
+	switch r.recordType {
+	case recordTypeNode:
+	case recordTypeEmpty, recordTypeData:
+		// We are splitting this record so we create two duplicate child
+		// records.
+		r.node = &node{children: [2]record{*r, *r}}
+		r.value = nil
+		r.recordType = recordTypeNode
+	default:
+		panic(fmt.Sprintf("record type %d not implemented!", r.recordType))
 	}
 
-	// This may have been a node with a value.
-	n.value = nil
-	child.insert(ip, prefixLen, depth+1, value)
+	r.node.insert(ip, prefixLen, recordType, value, currentDepth)
 }
 
 func (n *node) get(
 	ip net.IP,
 	depth int,
 ) (int, *DataType) {
-	if n.value != nil {
-		return depth, n.value
+	r := n.children[bitAt(ip, depth)]
+
+	depth++
+
+	if r.value != nil {
+		return depth, &r.value
 	}
 
-	child := n.children[bitAt(ip, depth)]
-	if child == nil {
-		return depth, n.value
+	if r.node == nil {
+		return depth, nil
 	}
 
-	return child.get(ip, depth+1)
+	return r.node.get(ip, depth)
 }
 
 // finalize current just returns the node count. However, it will prune the
 // tree eventually.
 func (n *node) finalize(currentNum int) int {
 	n.nodeNum = currentNum
-	if n.isLeaf() {
+	currentNum++
+	if n.children[0].recordType != recordTypeNode &&
+		n.children[1].recordType != recordTypeNode {
 		return currentNum
 	}
 
-	currentNum++
-	currentNum = n.children[0].finalize(currentNum)
-	return n.children[1].finalize(currentNum)
-}
+	if n.children[0].recordType == recordTypeNode {
+		currentNum = n.children[0].node.finalize(currentNum)
+	}
 
-func (n *node) isLeaf() bool {
-	return n.children[0] == nil
+	if n.children[1].recordType == recordTypeNode {
+		currentNum = n.children[1].node.finalize(currentNum)
+	}
+	return currentNum
 }
 
 func bitAt(ip net.IP, depth int) byte {
