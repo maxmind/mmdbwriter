@@ -140,6 +140,13 @@ func (t *Tree) Get(ip net.IP) (*net.IPNet, *DataType) {
 	lookupIP := ip
 
 	if t.treeDepth == 128 {
+		// We use To4() here as Go will parse an IPv4 address to a 16 byte
+		// IPv6-mapped IPv4 address, e.g.:
+		//
+		// len(net.ParseIP("1.1.1.1")) == 16
+		//
+		// The parsed address above is equal to ::ffff:1.1.1.1. However,
+		// the MaxMind DB format has the record for 1.1.1.1 at ::1.1.1.1.
 		if ipv4 := ip.To4(); ipv4 != nil {
 			lookupIP = ipV4ToV6(ipv4)
 		}
@@ -147,6 +154,9 @@ func (t *Tree) Get(ip net.IP) (*net.IPNet, *DataType) {
 
 	prefixLen, value := t.root.get(lookupIP, 0)
 
+	// This is so that if you look up an IPv4 address in a database that has
+	// an IPv4 subtree, you will get back an IPv4 network. This matches what
+	// github.com/oschwald/maxminddb-golang does.
 	if prefixLen >= 96 && len(ip) == 4 {
 		prefixLen -= 96
 	}

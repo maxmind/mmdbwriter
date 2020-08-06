@@ -349,6 +349,8 @@ func (t Uint64) writeTo(w writer) (int64, error) {
 type Uint128 big.Int
 
 func (t *Uint128) size() int {
+	// We add 7 here as we want the ceiling of the division operation rather
+	// than the floor.
 	return ((*big.Int)(t).BitLen() + 7) / 8
 }
 
