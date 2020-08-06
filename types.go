@@ -84,7 +84,7 @@ func (t Bytes) writeTo(w writer) (int64, error) {
 	written, err := w.Write([]byte(t))
 	numBytes += int64(written)
 	if err != nil {
-		return numBytes, errors.Wrapf(err, `error writing "%s" as a string`, t)
+		return numBytes, errors.Wrapf(err, `error writing "%s" as bytes`, t)
 	}
 	return numBytes, nil
 }
