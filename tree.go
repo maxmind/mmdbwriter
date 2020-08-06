@@ -70,7 +70,6 @@ func New(opts Options) (*Tree, error) {
 		databaseType: opts.DatabaseType,
 		description:  map[string]string{},
 		ipVersion:    6,
-		languages:    []string{},
 		recordSize:   28,
 		root:         &node{},
 	}
