@@ -31,6 +31,15 @@ type Options struct {
 	// the description of the database in that language.
 	Description map[string]string
 
+	// ExcludeReservedNetworks will prevent reserved networks from being added
+	// to the database. If you attempt to insert into these networks, an
+	// error will be returned. If you insert a network that contains these
+	// networks, the reserved portion of the network will be excluded.
+	//
+	// Reserved networks that are globally routable to an individual device, such
+	// as Teredo, may still be added.
+	ExcludeReservedNetworks bool
+
 	// IPVersion indicates whether an IPv4 or IPv6 database should be built. An
 	// IPv6 database supports both IPv4 and IPv6 lookups. The default value is
 	// "6" for IPv6.
@@ -103,14 +112,24 @@ func New(opts Options) (*Tree, error) {
 		return nil, errors.Errorf("unsupported IPVersion: %d", tree.ipVersion)
 	}
 
+	if opts.ExcludeReservedNetworks {
+		err := tree.insertReservedNetworks()
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	return tree, nil
 }
 
 // Insert a data value into the tree.
-func (t *Tree) Insert(
+func (t *Tree) Insert(network *net.IPNet, value DataType) error {
+	return t.insert(network, recordTypeData, value)
+}
+
+func (t *Tree) insert(
 	network *net.IPNet,
-	// TODO - We current only support inserting dataType. In the future, we
-	// should support arbitrary tagged structs
+	recordType recordType,
 	value DataType,
 ) error {
 	// We set this to 0 so that the tree must be finalized again.
@@ -131,7 +150,26 @@ func (t *Tree) Insert(
 		prefixLen += 96
 	}
 
-	t.root.insert(ip, prefixLen, recordTypeData, value, 0)
+	return t.root.insert(ip, prefixLen, recordType, value, 0)
+}
+
+func (t *Tree) insertReservedNetworks() error {
+	// the reserved networks are in reserved.go
+	networks := reservedNetworksIPv4
+	if t.ipVersion == 6 {
+		networks = append(networks, reservedNetworksIPv6...)
+	}
+
+	for _, network := range networks {
+		_, ipnet, err := net.ParseCIDR(network)
+		if err != nil {
+			return errors.Wrapf(err, "error parsing reserved network (%s)", network)
+		}
+		err = t.insert(ipnet, recordTypeReserved, nil)
+		if err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -289,7 +327,7 @@ func (t *Tree) recordValue(
 	case recordTypeData:
 		offset, err := dataWriter.write(r.value)
 		return t.nodeCount + len(dataSectionSeparator) + offset, err
-	case recordTypeEmpty:
+	case recordTypeEmpty, recordTypeReserved:
 		return t.nodeCount, nil
 	default:
 		return r.node.nodeNum, nil
