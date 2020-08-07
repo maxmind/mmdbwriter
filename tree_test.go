@@ -33,14 +33,15 @@ func TestTreeInsertAndGet(t *testing.T) {
 	tests := []struct {
 		name                    string
 		disableIPv4Aliasing     bool
-		excludeReservedNetworks bool
+		includeReservedNetworks bool
 		inserts                 []testInsert
 		insertErrors            []testInsertError
 		gets                    []testGet
 		expectedNodeCount       int
 	}{
 		{
-			name: "::/1 insert, IPv4 lookup",
+			name:                    "::/1 insert, IPv4 lookup",
+			includeReservedNetworks: true,
 			inserts: []testInsert{
 				{
 					network: "::/1",
@@ -58,7 +59,8 @@ func TestTreeInsertAndGet(t *testing.T) {
 			expectedNodeCount: 142,
 		},
 		{
-			name: "8000::/1 insert",
+			name:                    "8000::/1 insert",
+			includeReservedNetworks: true,
 			inserts: []testInsert{
 				{
 					network: "8000::/1",
@@ -76,7 +78,8 @@ func TestTreeInsertAndGet(t *testing.T) {
 			expectedNodeCount: 142,
 		},
 		{
-			name: "overwriting smaller network with bigger network",
+			name:                    "overwriting smaller network with bigger network",
+			includeReservedNetworks: true,
 			inserts: []testInsert{
 				{
 					network: "2003:1000::/32",
@@ -107,7 +110,8 @@ func TestTreeInsertAndGet(t *testing.T) {
 			expectedNodeCount: 158,
 		},
 		{
-			name: "insert smaller network into bigger network",
+			name:                    "insert smaller network into bigger network",
+			includeReservedNetworks: true,
 			inserts: []testInsert{
 				{
 					network: "2003::/16",
@@ -141,8 +145,9 @@ func TestTreeInsertAndGet(t *testing.T) {
 			expectedNodeCount: 158,
 		},
 		{
-			name:                "inserting IPv4 address in IPv6 tree, without aliasing",
-			disableIPv4Aliasing: true,
+			name:                    "inserting IPv4 address in IPv6 tree, without aliasing",
+			disableIPv4Aliasing:     true,
+			includeReservedNetworks: true,
 			inserts: []testInsert{
 				{
 					network: "1.1.1.1/32",
@@ -171,8 +176,7 @@ func TestTreeInsertAndGet(t *testing.T) {
 			expectedNodeCount: 128,
 		},
 		{
-			name:                    "reserved and aliased networks",
-			excludeReservedNetworks: true,
+			name: "reserved and aliased networks",
 			inserts: []testInsert{
 				{
 					network: "::/1",
@@ -224,7 +228,7 @@ func TestTreeInsertAndGet(t *testing.T) {
 					tree, err := New(
 						Options{
 							DisableIPv4Aliasing:     test.disableIPv4Aliasing,
-							ExcludeReservedNetworks: test.excludeReservedNetworks,
+							IncludeReservedNetworks: test.includeReservedNetworks,
 							RecordSize:              recordSize,
 						},
 					)

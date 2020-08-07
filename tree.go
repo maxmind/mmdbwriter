@@ -37,15 +37,15 @@ type Options struct {
 	// ::ffff:0:0/96.
 	DisableIPv4Aliasing bool
 
-	// XXX - rename so we exclude by default
-	// ExcludeReservedNetworks will prevent reserved networks from being added
-	// to the database. If you attempt to insert into these networks, an
-	// error will be returned. If you insert a network that contains these
-	// networks, the reserved portion of the network will be excluded.
+	// IncludeReservedNetworks will allow reserved networks to be added to the
+	// database.
 	//
-	// Reserved networks that are globally routable to an individual device, such
-	// as Teredo, may still be added.
-	ExcludeReservedNetworks bool
+	// If this is false, any attempt to insert into these networks will result
+	// in an error and inserting a network that contains a reserved network will
+	// result in the reserved portion of the network being excluded. Reserved
+	// networks that are globally routable to an individual device, such as
+	// Teredo, may still be added.
+	IncludeReservedNetworks bool
 
 	// IPVersion indicates whether an IPv4 or IPv6 database should be built. An
 	// IPv6 database supports both IPv4 and IPv6 lookups. The default value is
@@ -125,7 +125,7 @@ func New(opts Options) (*Tree, error) {
 		}
 	}
 
-	if opts.ExcludeReservedNetworks {
+	if !opts.IncludeReservedNetworks {
 		err := tree.insertReservedNetworks()
 		if err != nil {
 			return nil, err
