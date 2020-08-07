@@ -1,7 +1,6 @@
 package mmdbwriter
 
 import (
-	"fmt"
 	"net"
 
 	"github.com/pkg/errors"
@@ -13,8 +12,8 @@ const (
 	recordTypeEmpty recordType = iota
 	recordTypeData
 	recordTypeNode
-	recordTypeAlias // nolint: deadcode, varcheck
-	recordTypeFixed // nolint: deadcode, varcheck
+	recordTypeAlias
+	recordTypeFixedNode
 	recordTypeReserved
 )
 
@@ -35,6 +34,7 @@ func (n *node) insert(
 	prefixLen int,
 	recordType recordType,
 	value DataType,
+	insertedNode *node,
 	currentDepth int,
 ) error {
 	newDepth := currentDepth + 1
@@ -42,17 +42,17 @@ func (n *node) insert(
 	if newDepth > prefixLen {
 		// Data already exists for the network so insert into all the children.
 		// We will prune duplicate nodes when we finalize.
-		err := n.children[0].insert(ip, prefixLen, recordType, value, newDepth)
+		err := n.children[0].insert(ip, prefixLen, recordType, value, insertedNode, newDepth)
 		if err != nil {
 			return err
 		}
-		return n.children[1].insert(ip, prefixLen, recordType, value, newDepth)
+		return n.children[1].insert(ip, prefixLen, recordType, value, insertedNode, newDepth)
 	}
 
 	// We haven't reached the network yet.
 	pos := bitAt(ip, currentDepth)
 	r := &n.children[pos]
-	return r.insert(ip, prefixLen, recordType, value, newDepth)
+	return r.insert(ip, prefixLen, recordType, value, insertedNode, newDepth)
 }
 
 func (r *record) insert(
@@ -60,14 +60,15 @@ func (r *record) insert(
 	prefixLen int,
 	recordType recordType,
 	value DataType,
+	insertedNode *node,
 	newDepth int,
 ) error {
 	switch r.recordType {
-	case recordTypeNode:
+	case recordTypeNode, recordTypeFixedNode:
 	case recordTypeEmpty, recordTypeData:
 		// When we add record merging support, it should go here.
 		if newDepth >= prefixLen {
-			r.node = nil
+			r.node = insertedNode
 			r.value = value
 			r.recordType = recordType
 			return nil
@@ -81,38 +82,47 @@ func (r *record) insert(
 	case recordTypeReserved:
 		if prefixLen >= newDepth {
 			return errors.Errorf(
-				"attempt to insert into %s/%d, which is in a reserved network",
+				"attempt to insert %s/%d, which is in a reserved network",
 				ip,
 				prefixLen,
 			)
 		}
 		// If we are inserting a network that contains a reserved network,
-		// we silently remove the reserved network..
+		// we silently remove the reserved network.
 		return nil
+	case recordTypeAlias:
+		if prefixLen < newDepth {
+			// Do nothing. We are inserting a network that contains an aliased
+			// network. We silently ignore.
+			return nil
+		}
+		// attempting to insert _into_ an aliased network
+		return errors.Errorf(
+			"attempt to insert %s/%d, which is in an aliased network",
+			ip,
+			prefixLen,
+		)
 	default:
-		panic(fmt.Sprintf("record type %d not implemented!", r.recordType))
+		return errors.Errorf("inserting into record type %d not implemented!", r.recordType)
 	}
 
-	return r.node.insert(ip, prefixLen, recordType, value, newDepth)
+	return r.node.insert(ip, prefixLen, recordType, value, insertedNode, newDepth)
 }
 
 func (n *node) get(
 	ip net.IP,
 	depth int,
-) (int, *DataType) {
+) (int, record) {
 	r := n.children[bitAt(ip, depth)]
 
 	depth++
 
-	if r.value != nil {
-		return depth, &r.value
+	switch r.recordType {
+	case recordTypeNode, recordTypeAlias, recordTypeFixedNode:
+		return r.node.get(ip, depth)
+	default:
+		return depth, r
 	}
-
-	if r.node == nil {
-		return depth, nil
-	}
-
-	return r.node.get(ip, depth)
 }
 
 // finalize current just returns the node count. However, it will prune the
@@ -120,16 +130,14 @@ func (n *node) get(
 func (n *node) finalize(currentNum int) int {
 	n.nodeNum = currentNum
 	currentNum++
-	if n.children[0].recordType != recordTypeNode &&
-		n.children[1].recordType != recordTypeNode {
-		return currentNum
-	}
 
-	if n.children[0].recordType == recordTypeNode {
+	if n.children[0].recordType == recordTypeNode ||
+		n.children[0].recordType == recordTypeFixedNode {
 		currentNum = n.children[0].node.finalize(currentNum)
 	}
 
-	if n.children[1].recordType == recordTypeNode {
+	if n.children[1].recordType == recordTypeNode ||
+		n.children[1].recordType == recordTypeFixedNode {
 		currentNum = n.children[1].node.finalize(currentNum)
 	}
 	return currentNum

@@ -18,6 +18,7 @@ var (
 
 // Options holds configuration parameters for the writer
 type Options struct {
+
 	// BuildEpoch is the database build timestamp as a Unix epoch value. It
 	// defaults to the epoch of when New was called.
 	BuildEpoch int64
@@ -31,6 +32,12 @@ type Options struct {
 	// the description of the database in that language.
 	Description map[string]string
 
+	// DisableIPv4Aliasing will disable the IPv4 aliasing in IPv6 trees. This
+	// aliasing maps some IPv6 networks to the IPv4 network, e.g.,
+	// ::ffff:0:0/96.
+	DisableIPv4Aliasing bool
+
+	// XXX - rename so we exclude by default
 	// ExcludeReservedNetworks will prevent reserved networks from being added
 	// to the database. If you attempt to insert into these networks, an
 	// error will be returned. If you insert a network that contains these
@@ -112,6 +119,12 @@ func New(opts Options) (*Tree, error) {
 		return nil, errors.Errorf("unsupported IPVersion: %d", tree.ipVersion)
 	}
 
+	if tree.ipVersion == 6 && !opts.DisableIPv4Aliasing {
+		if err := tree.insertIPv4Aliases(); err != nil {
+			return nil, err
+		}
+	}
+
 	if opts.ExcludeReservedNetworks {
 		err := tree.insertReservedNetworks()
 		if err != nil {
@@ -124,13 +137,14 @@ func New(opts Options) (*Tree, error) {
 
 // Insert a data value into the tree.
 func (t *Tree) Insert(network *net.IPNet, value DataType) error {
-	return t.insert(network, recordTypeData, value)
+	return t.insert(network, recordTypeData, value, nil)
 }
 
 func (t *Tree) insert(
 	network *net.IPNet,
 	recordType recordType,
 	value DataType,
+	node *node,
 ) error {
 	// We set this to 0 so that the tree must be finalized again.
 	t.nodeCount = 0
@@ -150,7 +164,49 @@ func (t *Tree) insert(
 		prefixLen += 96
 	}
 
-	return t.root.insert(ip, prefixLen, recordType, value, 0)
+	return t.root.insert(ip, prefixLen, recordType, value, node, 0)
+}
+
+func (t *Tree) insertStringNetwork(
+	network string,
+	recordType recordType,
+	value DataType,
+	node *node,
+) error {
+	_, ipnet, err := net.ParseCIDR(network)
+	if err != nil {
+		return errors.Wrapf(err, "error parsing network (%s)", network)
+	}
+	return t.insert(ipnet, recordType, value, node)
+}
+
+var ipv4AliasNetworks = []string{
+	"::ffff:0:0/96",
+	"2001::/32",
+	"2002::/16",
+}
+
+func (t *Tree) insertIPv4Aliases() error {
+	_, ipv4Root, err := net.ParseCIDR("::/96")
+	if err != nil {
+		return errors.Wrap(err, "error parsing IPv4 root")
+	}
+
+	ipv4RootNode := &node{}
+
+	// Make ::/96, the IPv4 root, a fixed node.
+	err = t.insert(ipv4Root, recordTypeFixedNode, nil, ipv4RootNode)
+	if err != nil {
+		return err
+	}
+
+	for _, network := range ipv4AliasNetworks {
+		err := t.insertStringNetwork(network, recordTypeAlias, nil, ipv4RootNode)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (t *Tree) insertReservedNetworks() error {
@@ -161,11 +217,7 @@ func (t *Tree) insertReservedNetworks() error {
 	}
 
 	for _, network := range networks {
-		_, ipnet, err := net.ParseCIDR(network)
-		if err != nil {
-			return errors.Wrapf(err, "error parsing reserved network (%s)", network)
-		}
-		err = t.insert(ipnet, recordTypeReserved, nil)
+		err := t.insertStringNetwork(network, recordTypeReserved, nil, nil)
 		if err != nil {
 			return err
 		}
@@ -190,7 +242,7 @@ func (t *Tree) Get(ip net.IP) (*net.IPNet, *DataType) {
 		}
 	}
 
-	prefixLen, value := t.root.get(lookupIP, 0)
+	prefixLen, r := t.root.get(lookupIP, 0)
 
 	// This is so that if you look up an IPv4 address in a database that has
 	// an IPv4 subtree, you will get back an IPv4 network. This matches what
@@ -200,6 +252,11 @@ func (t *Tree) Get(ip net.IP) (*net.IPNet, *DataType) {
 	}
 
 	mask := net.CIDRMask(prefixLen, t.treeDepth)
+
+	var value *DataType
+	if r.recordType == recordTypeData {
+		value = &r.value
+	}
 
 	return &net.IPNet{
 		IP:   ip.Mask(mask),
@@ -300,7 +357,7 @@ func (t *Tree) writeNode(
 
 	for i := 0; i < 2; i++ {
 		child := n.children[i]
-		if child.recordType != recordTypeNode {
+		if child.recordType != recordTypeNode && child.recordType != recordTypeFixedNode {
 			continue
 		}
 		addedNodes, addedBytes, err := t.writeNode(

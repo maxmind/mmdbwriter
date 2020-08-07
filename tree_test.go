@@ -32,6 +32,7 @@ type testGet struct {
 func TestTreeInsertAndGet(t *testing.T) {
 	tests := []struct {
 		name                    string
+		disableIPv4Aliasing     bool
 		excludeReservedNetworks bool
 		inserts                 []testInsert
 		insertErrors            []testInsertError
@@ -49,12 +50,12 @@ func TestTreeInsertAndGet(t *testing.T) {
 			gets: []testGet{
 				{
 					ip:                  "1.1.1.1",
-					expectedNetwork:     "::/1",
+					expectedNetwork:     "0.0.0.0/1",
 					expectedGetValue:    s2dtp("string"),
 					expectedLookupValue: s2ip("string"),
 				},
 			},
-			expectedNodeCount: 1,
+			expectedNodeCount: 142,
 		},
 		{
 			name: "8000::/1 insert",
@@ -72,75 +73,76 @@ func TestTreeInsertAndGet(t *testing.T) {
 					expectedLookupValue: s2ip("string"),
 				},
 			},
-			expectedNodeCount: 1,
+			expectedNodeCount: 142,
 		},
 		{
 			name: "overwriting smaller network with bigger network",
 			inserts: []testInsert{
 				{
-					network: "2002:1000::/32",
+					network: "2003:1000::/32",
 					value:   String("string"),
 				},
 				{
-					network: "2002::/16",
+					network: "2003::/16",
 					value:   String("new string"),
 				},
 			},
 			gets: []testGet{
 				{
-					ip: "2002::",
-					// Once we support pruning, this should be 2002::/16
-					expectedNetwork:     "2002::/20",
+					ip: "2003::",
+					// Once we support pruning, this should be 2003::/16
+					expectedNetwork:     "2003::/20",
 					expectedGetValue:    s2dtp("new string"),
 					expectedLookupValue: s2ip("new string"),
 				},
 				{
-					ip: "2002:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
-					// Once we support pruning, this should be 2002::/16
-					expectedNetwork:     "2002:8000::/17",
+					ip: "2003:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+					// Once we support pruning, this should be 2003::/16
+					expectedNetwork:     "2003:8000::/17",
 					expectedGetValue:    s2dtp("new string"),
 					expectedLookupValue: s2ip("new string"),
 				},
 			},
-			// With pruning, this should be 16
-			expectedNodeCount: 32,
+			// With pruning, this should be less
+			expectedNodeCount: 158,
 		},
 		{
 			name: "insert smaller network into bigger network",
 			inserts: []testInsert{
 				{
-					network: "2002::/16",
+					network: "2003::/16",
 					value:   String("string"),
 				},
 				{
-					network: "2002:1000::/32",
+					network: "2003:1000::/32",
 					value:   String("new string"),
 				},
 			},
 			gets: []testGet{
 				{
-					ip:                  "2002::",
-					expectedNetwork:     "2002::/20",
+					ip:                  "2003::",
+					expectedNetwork:     "2003::/20",
 					expectedGetValue:    s2dtp("string"),
 					expectedLookupValue: s2ip("string"),
 				},
 				{
-					ip:                  "2002:1000::",
-					expectedNetwork:     "2002:1000::/32",
+					ip:                  "2003:1000::",
+					expectedNetwork:     "2003:1000::/32",
 					expectedGetValue:    s2dtp("new string"),
 					expectedLookupValue: s2ip("new string"),
 				},
 				{
-					ip:                  "2002:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
-					expectedNetwork:     "2002:8000::/17",
+					ip:                  "2003:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+					expectedNetwork:     "2003:8000::/17",
 					expectedGetValue:    s2dtp("string"),
 					expectedLookupValue: s2ip("string"),
 				},
 			},
-			expectedNodeCount: 32,
+			expectedNodeCount: 158,
 		},
 		{
-			name: "inserting IPv4 address in IPv6 tree",
+			name:                "inserting IPv4 address in IPv6 tree, without aliasing",
+			disableIPv4Aliasing: true,
 			inserts: []testInsert{
 				{
 					network: "1.1.1.1/32",
@@ -160,11 +162,16 @@ func TestTreeInsertAndGet(t *testing.T) {
 					expectedGetValue:    s2dtp("string"),
 					expectedLookupValue: s2ip("string"),
 				},
+				{
+					// The IPv4 network should not be aliased
+					ip:              "2002:100:100::",
+					expectedNetwork: "2000::/3",
+				},
 			},
 			expectedNodeCount: 128,
 		},
 		{
-			name:                    "excluding reserved networks",
+			name:                    "reserved and aliased networks",
 			excludeReservedNetworks: true,
 			inserts: []testInsert{
 				{
@@ -175,11 +182,15 @@ func TestTreeInsertAndGet(t *testing.T) {
 			insertErrors: []testInsertError{
 				{
 					network:          "10.0.0.0/8",
-					expectedErrorMsg: "attempt to insert into ::a00:0/104, which is in a reserved network",
+					expectedErrorMsg: "attempt to insert ::a00:0/104, which is in a reserved network",
 				},
 				{
 					network:          "10.0.0.1/32",
-					expectedErrorMsg: "attempt to insert into ::a00:1/128, which is in a reserved network",
+					expectedErrorMsg: "attempt to insert ::a00:1/128, which is in a reserved network",
+				},
+				{
+					network:          "2002:100::/24",
+					expectedErrorMsg: "attempt to insert 2002:100::/24, which is in an aliased network",
 				},
 			},
 			gets: []testGet{
@@ -194,8 +205,15 @@ func TestTreeInsertAndGet(t *testing.T) {
 					ip:              "203.0.113.0",
 					expectedNetwork: "203.0.113.0/24",
 				},
+				{
+					// This is in an aliased network
+					ip:                  "2002:100:100::",
+					expectedNetwork:     "2002:100::/24",
+					expectedGetValue:    s2dtp("string"),
+					expectedLookupValue: s2ip("string"),
+				},
 			},
-			expectedNodeCount: 336,
+			expectedNodeCount: 352,
 		},
 	}
 
@@ -205,6 +223,7 @@ func TestTreeInsertAndGet(t *testing.T) {
 				t.Run(test.name, func(t *testing.T) {
 					tree, err := New(
 						Options{
+							DisableIPv4Aliasing:     test.disableIPv4Aliasing,
 							ExcludeReservedNetworks: test.excludeReservedNetworks,
 							RecordSize:              recordSize,
 						},
