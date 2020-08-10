@@ -3,6 +3,7 @@ package mmdbwriter
 import (
 	"bytes"
 	"fmt"
+	"math/big"
 	"net"
 	"testing"
 
@@ -30,6 +31,77 @@ type testGet struct {
 }
 
 func TestTreeInsertAndGet(t *testing.T) {
+	bigInt := big.Int{}
+	bigInt.SetString("1329227995784915872903807060280344576", 10)
+	uint128 := Uint128(bigInt)
+	var allTypesGetSubmap DataType = Map{
+		"mapX": Map{
+			"arrayX": Slice{
+				Uint64(0x7),
+				Uint64(0x8),
+				Uint64(0x9),
+			},
+			"utf8_stringX": String("hello"),
+		},
+	}
+	var allTypesGetRecord DataType = Map{
+		"array": Slice{
+			Uint64(1),
+			Uint64(2),
+			Uint64(3),
+		},
+		"boolean": Bool(true),
+		"bytes": Bytes{
+			0x0,
+			0x0,
+			0x0,
+			0x2a,
+		},
+		"double":      Float64(42.123456),
+		"float":       Float32(1.1),
+		"int32":       Int32(-268435456),
+		"map":         allTypesGetSubmap,
+		"uint128":     &uint128,
+		"uint16":      Uint64(0x64),
+		"uint32":      Uint64(0x10000000),
+		"uint64":      Uint64(0x1000000000000000),
+		"utf8_string": String("unicode! ☯ - ♫"),
+	}
+
+	var allTypesLookupSubmap interface{} = map[string]interface{}{
+		"mapX": map[string]interface{}{
+			"arrayX": []interface{}{
+				uint64(0x7),
+				uint64(0x8),
+				uint64(0x9),
+			},
+			"utf8_stringX": "hello",
+		},
+	}
+	var allTypesLookupRecord interface{} = map[string]interface{}{
+		"array": []interface{}{
+			uint64(1),
+			uint64(2),
+			uint64(3),
+		},
+		"boolean": true,
+		"bytes": []uint8{
+			0x0,
+			0x0,
+			0x0,
+			0x2a,
+		},
+		"double":      42.123456,
+		"float":       float32(1.1),
+		"int32":       -268435456,
+		"map":         allTypesLookupSubmap,
+		"uint128":     &bigInt,
+		"uint16":      uint64(0x64),
+		"uint32":      uint64(0x10000000),
+		"uint64":      uint64(0x1000000000000000),
+		"utf8_string": "unicode! ☯ - ♫",
+	}
+
 	tests := []struct {
 		name                    string
 		disableIPv4Aliasing     bool
@@ -218,6 +290,34 @@ func TestTreeInsertAndGet(t *testing.T) {
 				},
 			},
 			expectedNodeCount: 352,
+		},
+		{
+			name: "all types and pointers",
+			inserts: []testInsert{
+				{
+					network: "1.1.1.0/24",
+					value:   allTypesGetSubmap,
+				},
+				{
+					network: "1.1.2.0/24",
+					value:   allTypesGetRecord,
+				},
+			},
+			gets: []testGet{
+				{
+					ip:                  "1.1.1.0",
+					expectedNetwork:     "1.1.1.0/24",
+					expectedGetValue:    &allTypesGetSubmap,
+					expectedLookupValue: &allTypesLookupSubmap,
+				},
+				{
+					ip:                  "1.1.2.128",
+					expectedNetwork:     "1.1.2.0/24",
+					expectedGetValue:    &allTypesGetRecord,
+					expectedLookupValue: &allTypesLookupRecord,
+				},
+			},
+			expectedNodeCount: 369,
 		},
 	}
 
