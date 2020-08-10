@@ -1,7 +1,6 @@
 package mmdbwriter
 
 import (
-	"bytes"
 	"encoding/hex"
 	"math/big"
 	"strings"
@@ -225,7 +224,7 @@ func powBigInt(bi *big.Int, pow uint) *big.Int {
 
 func validateEncoding(t *testing.T, tests map[string]DataType) {
 	for expected, dt := range tests {
-		w := &bytes.Buffer{}
+		w := newDataWriter()
 
 		numBytes, err := dt.writeTo(w)
 		require.NoError(t, err)

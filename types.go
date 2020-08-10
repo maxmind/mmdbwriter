@@ -37,6 +37,7 @@ type writer interface {
 	io.Writer
 	WriteByte(byte) error
 	WriteString(string) (int, error)
+	writeOrWritePointer(DataType) (int64, error)
 }
 
 // DataType represents a MaxMind DB data type
@@ -194,12 +195,12 @@ func (t Map) writeTo(w writer) (int64, error) {
 
 	for _, ks := range keys {
 		k := String(ks)
-		written, err := k.writeTo(w)
+		written, err := w.writeOrWritePointer(k)
 		numBytes += written
 		if err != nil {
 			return numBytes, err
 		}
-		written, err = t[k].writeTo(w)
+		written, err = w.writeOrWritePointer(t[k])
 		numBytes += written
 		if err != nil {
 			return numBytes, err
@@ -229,6 +230,10 @@ func (t pointer) size() int {
 	default:
 		return 3
 	}
+}
+
+func (t pointer) writtenSize() int64 {
+	return int64(t.size() + 2)
 }
 
 func (t pointer) typeNum() typeNum {
@@ -301,7 +306,7 @@ func (t pointer) writeTo(w writer) (int64, error) {
 			return 4, errors.Wrap(err, "error writing pointer")
 		}
 	}
-	return int64(size + 2), nil
+	return t.writtenSize(), nil
 }
 
 // Slice is the MaxMind DB array type
@@ -322,7 +327,7 @@ func (t Slice) writeTo(w writer) (int64, error) {
 	}
 
 	for _, e := range t {
-		written, err := e.writeTo(w)
+		written, err := w.writeOrWritePointer(e)
 		numBytes += written
 		if err != nil {
 			return numBytes, err
