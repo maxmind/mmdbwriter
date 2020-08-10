@@ -18,6 +18,7 @@ var (
 
 // Options holds configuration parameters for the writer
 type Options struct {
+
 	// BuildEpoch is the database build timestamp as a Unix epoch value. It
 	// defaults to the epoch of when New was called.
 	BuildEpoch int64
@@ -30,6 +31,21 @@ type Options struct {
 	// Description is a map where the key is a language code and the value is
 	// the description of the database in that language.
 	Description map[string]string
+
+	// DisableIPv4Aliasing will disable the IPv4 aliasing in IPv6 trees. This
+	// aliasing maps some IPv6 networks to the IPv4 network, e.g.,
+	// ::ffff:0:0/96.
+	DisableIPv4Aliasing bool
+
+	// IncludeReservedNetworks will allow reserved networks to be added to the
+	// database.
+	//
+	// If this is false, any attempt to insert into these networks will result
+	// in an error and inserting a network that contains a reserved network will
+	// result in the reserved portion of the network being excluded. Reserved
+	// networks that are globally routable to an individual device, such as
+	// Teredo, may still be added.
+	IncludeReservedNetworks bool
 
 	// IPVersion indicates whether an IPv4 or IPv6 database should be built. An
 	// IPv6 database supports both IPv4 and IPv6 lookups. The default value is
@@ -103,15 +119,32 @@ func New(opts Options) (*Tree, error) {
 		return nil, errors.Errorf("unsupported IPVersion: %d", tree.ipVersion)
 	}
 
+	if tree.ipVersion == 6 && !opts.DisableIPv4Aliasing {
+		if err := tree.insertIPv4Aliases(); err != nil {
+			return nil, err
+		}
+	}
+
+	if !opts.IncludeReservedNetworks {
+		err := tree.insertReservedNetworks()
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	return tree, nil
 }
 
 // Insert a data value into the tree.
-func (t *Tree) Insert(
+func (t *Tree) Insert(network *net.IPNet, value DataType) error {
+	return t.insert(network, recordTypeData, value, nil)
+}
+
+func (t *Tree) insert(
 	network *net.IPNet,
-	// TODO - We current only support inserting dataType. In the future, we
-	// should support arbitrary tagged structs
+	recordType recordType,
 	value DataType,
+	node *node,
 ) error {
 	// We set this to 0 so that the tree must be finalized again.
 	t.nodeCount = 0
@@ -131,7 +164,64 @@ func (t *Tree) Insert(
 		prefixLen += 96
 	}
 
-	t.root.insert(ip, prefixLen, 0, value)
+	return t.root.insert(ip, prefixLen, recordType, value, node, 0)
+}
+
+func (t *Tree) insertStringNetwork(
+	network string,
+	recordType recordType,
+	value DataType,
+	node *node,
+) error {
+	_, ipnet, err := net.ParseCIDR(network)
+	if err != nil {
+		return errors.Wrapf(err, "error parsing network (%s)", network)
+	}
+	return t.insert(ipnet, recordType, value, node)
+}
+
+var ipv4AliasNetworks = []string{
+	"::ffff:0:0/96",
+	"2001::/32",
+	"2002::/16",
+}
+
+func (t *Tree) insertIPv4Aliases() error {
+	_, ipv4Root, err := net.ParseCIDR("::/96")
+	if err != nil {
+		return errors.Wrap(err, "error parsing IPv4 root")
+	}
+
+	ipv4RootNode := &node{}
+
+	// Make ::/96, the IPv4 root, a fixed node.
+	err = t.insert(ipv4Root, recordTypeFixedNode, nil, ipv4RootNode)
+	if err != nil {
+		return err
+	}
+
+	for _, network := range ipv4AliasNetworks {
+		err := t.insertStringNetwork(network, recordTypeAlias, nil, ipv4RootNode)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (t *Tree) insertReservedNetworks() error {
+	// the reserved networks are in reserved.go
+	networks := reservedNetworksIPv4
+	if t.ipVersion == 6 {
+		networks = append(networks, reservedNetworksIPv6...)
+	}
+
+	for _, network := range networks {
+		err := t.insertStringNetwork(network, recordTypeReserved, nil, nil)
+		if err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -152,7 +242,7 @@ func (t *Tree) Get(ip net.IP) (*net.IPNet, *DataType) {
 		}
 	}
 
-	prefixLen, value := t.root.get(lookupIP, 0)
+	prefixLen, r := t.root.get(lookupIP, 0)
 
 	// This is so that if you look up an IPv4 address in a database that has
 	// an IPv4 subtree, you will get back an IPv4 network. This matches what
@@ -162,6 +252,11 @@ func (t *Tree) Get(ip net.IP) (*net.IPNet, *DataType) {
 	}
 
 	mask := net.CIDRMask(prefixLen, t.treeDepth)
+
+	var value *DataType
+	if r.recordType == recordTypeData {
+		value = &r.value
+	}
 
 	return &net.IPNet{
 		IP:   ip.Mask(mask),
@@ -247,11 +342,7 @@ func (t *Tree) writeNode(
 	dataWriter *dataWriter,
 	recordBuf []byte,
 ) (int, int64, error) {
-	if n.isLeaf() {
-		return 0, 0, nil
-	}
-
-	err := t.copyRecord(recordBuf, n.children, dataWriter)
+	err := t.copyNode(recordBuf, n, dataWriter)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -264,49 +355,48 @@ func (t *Tree) writeNode(
 		return nodesWritten, numBytes, errors.Wrap(err, "error writing node")
 	}
 
-	leftNodes, leftNumBytes, err := t.writeNode(
-		w,
-		n.children[0],
-		dataWriter,
-		recordBuf,
-	)
-	nodesWritten += leftNodes
-	numBytes += leftNumBytes
-	if err != nil {
-		return nodesWritten, numBytes, err
+	for i := 0; i < 2; i++ {
+		child := n.children[i]
+		if child.recordType != recordTypeNode && child.recordType != recordTypeFixedNode {
+			continue
+		}
+		addedNodes, addedBytes, err := t.writeNode(
+			w,
+			n.children[i].node,
+			dataWriter,
+			recordBuf,
+		)
+		nodesWritten += addedNodes
+		numBytes += addedBytes
+		if err != nil {
+			return nodesWritten, numBytes, err
+		}
 	}
 
-	rightNodes, rightNumBytes, err := t.writeNode(
-		w,
-		n.children[1],
-		dataWriter,
-		recordBuf,
-	)
-	nodesWritten += rightNodes
-	numBytes += rightNumBytes
-	return nodesWritten, numBytes, err
+	return nodesWritten, numBytes, nil
 }
 
-func (t *Tree) recordValueForNode(
-	n *node,
+func (t *Tree) recordValue(
+	r record,
 	dataWriter *dataWriter,
 ) (int, error) {
-	if n.isLeaf() {
-		if n.value != nil {
-			offset, err := dataWriter.write(*n.value)
-			return t.nodeCount + len(dataSectionSeparator) + offset, err
-		}
+	switch r.recordType {
+	case recordTypeData:
+		offset, err := dataWriter.write(r.value)
+		return t.nodeCount + len(dataSectionSeparator) + offset, err
+	case recordTypeEmpty, recordTypeReserved:
 		return t.nodeCount, nil
+	default:
+		return r.node.nodeNum, nil
 	}
-	return n.nodeNum, nil
 }
 
-func (t *Tree) copyRecord(buf []byte, children [2]*node, dataWriter *dataWriter) error {
-	left, err := t.recordValueForNode(children[0], dataWriter)
+func (t *Tree) copyNode(buf []byte, n *node, dataWriter *dataWriter) error {
+	left, err := t.recordValue(n.children[0], dataWriter)
 	if err != nil {
 		return err
 	}
-	right, err := t.recordValueForNode(children[1], dataWriter)
+	right, err := t.recordValue(n.children[1], dataWriter)
 	if err != nil {
 		return err
 	}
