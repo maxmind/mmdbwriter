@@ -14,7 +14,7 @@ type typeNum byte
 
 const (
 	typeNumExtended typeNum = iota
-	typeNumPointer          // nolint: deadcode, varcheck
+	typeNumPointer
 	typeNumString
 	typeNumFloat64
 	typeNumBytes
@@ -206,6 +206,102 @@ func (t Map) writeTo(w writer) (int64, error) {
 		}
 	}
 	return numBytes, nil
+}
+
+// pointer is the MaxMind DB pointer type. It is not exported as it should
+// only be used internally
+type pointer uint32
+
+const (
+	pointerMaxSize0 = 1 << 11
+	pointerMaxSize1 = pointerMaxSize0 + (1 << 19)
+	pointerMaxSize2 = pointerMaxSize1 + (1 << 27)
+)
+
+func (t pointer) size() int {
+	switch {
+	case t < pointerMaxSize0:
+		return 0
+	case t < pointerMaxSize1:
+		return 1
+	case t < pointerMaxSize2:
+		return 2
+	default:
+		return 3
+	}
+}
+
+func (t pointer) typeNum() typeNum {
+	return typeNumPointer
+}
+
+func (t pointer) writeTo(w writer) (int64, error) {
+	size := t.size()
+	switch size {
+	case 0:
+		err := w.WriteByte(0b00100000 | byte(0b111&(t>>8)))
+		if err != nil {
+			return 0, errors.Wrap(err, "error writing pointer")
+		}
+		err = w.WriteByte(byte(0xFF & t))
+		if err != nil {
+			return 1, errors.Wrap(err, "error writing pointer")
+		}
+	case 1:
+		v := t - pointerMaxSize0
+		err := w.WriteByte(0b00101000 | byte(0b111&(v>>16)))
+		if err != nil {
+			return 0, errors.Wrap(err, "error writing pointer")
+		}
+		err = w.WriteByte(byte(0xFF & (v >> 8)))
+		if err != nil {
+			return 1, errors.Wrap(err, "error writing pointer")
+		}
+		err = w.WriteByte(byte(0xFF & v))
+		if err != nil {
+			return 2, errors.Wrap(err, "error writing pointer")
+		}
+	case 2:
+		v := t - pointerMaxSize1
+		err := w.WriteByte(0b00110000 | byte(0b111&(v>>24)))
+		if err != nil {
+			return 0, errors.Wrap(err, "error writing pointer")
+		}
+		err = w.WriteByte(byte(0xFF & (v >> 16)))
+		if err != nil {
+			return 1, errors.Wrap(err, "error writing pointer")
+		}
+		err = w.WriteByte(byte(0xFF & (v >> 8)))
+		if err != nil {
+			return 2, errors.Wrap(err, "error writing pointer")
+		}
+		err = w.WriteByte(byte(0xFF & v))
+		if err != nil {
+			return 3, errors.Wrap(err, "error writing pointer")
+		}
+	case 3:
+		err := w.WriteByte(0b00111000)
+		if err != nil {
+			return 0, errors.Wrap(err, "error writing pointer")
+		}
+		err = w.WriteByte(byte(0xFF & (t >> 24)))
+		if err != nil {
+			return 1, errors.Wrap(err, "error writing pointer")
+		}
+		err = w.WriteByte(byte(0xFF & (t >> 16)))
+		if err != nil {
+			return 2, errors.Wrap(err, "error writing pointer")
+		}
+		err = w.WriteByte(byte(0xFF & (t >> 8)))
+		if err != nil {
+			return 3, errors.Wrap(err, "error writing pointer")
+		}
+		err = w.WriteByte(byte(0xFF & t))
+		if err != nil {
+			return 4, errors.Wrap(err, "error writing pointer")
+		}
+	}
+	return int64(size + 2), nil
 }
 
 // Slice is the MaxMind DB array type
