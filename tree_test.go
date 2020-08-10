@@ -227,6 +227,8 @@ func TestTreeInsertAndGet(t *testing.T) {
 				t.Run(test.name, func(t *testing.T) {
 					tree, err := New(
 						Options{
+							DatabaseType:            "mmdbwriter-test",
+							Description:             map[string]string{"en": "Test database"},
 							DisableIPv4Aliasing:     test.disableIPv4Aliasing,
 							IncludeReservedNetworks: test.includeReservedNetworks,
 							RecordSize:              recordSize,
@@ -280,6 +282,9 @@ func TestTreeInsertAndGet(t *testing.T) {
 							assert.Equal(t, *get.expectedLookupValue, v, "value for %s in database", get.ip)
 						}
 					}
+
+					assert.NoError(t, reader.Verify(), "verify database format")
+
 					assert.Equal(t, int64(buf.Len()), numBytes, "number of bytes")
 				})
 			}
