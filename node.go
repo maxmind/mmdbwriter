@@ -2,6 +2,7 @@ package mmdbwriter
 
 import (
 	"net"
+	"reflect"
 
 	"github.com/pkg/errors"
 )
@@ -125,22 +126,42 @@ func (n *node) get(
 	}
 }
 
-// finalize current just returns the node count. However, it will prune the
-// tree eventually.
-func (n *node) finalize(currentNum int) int {
+// finalize prunes unnecessary nodes (e.g., where the two records are the same) and
+// sets the node number for the node. It returns a record pointer that is nil if
+// the node is not mergeable or the value of the merged record if it can be merged.
+// The second return value is the current node count, including the subtree.
+func (n *node) finalize(currentNum int) (*record, int) {
 	n.nodeNum = currentNum
 	currentNum++
 
-	if n.children[0].recordType == recordTypeNode ||
-		n.children[0].recordType == recordTypeFixedNode {
-		currentNum = n.children[0].node.finalize(currentNum)
+	for i := 0; i < 2; i++ {
+		switch n.children[i].recordType {
+		case recordTypeFixedNode:
+			// We don't consider merging for fixed nodes
+			_, currentNum = n.children[i].node.finalize(currentNum)
+		case recordTypeNode:
+			record, newCurrentNum := n.children[i].node.finalize(currentNum)
+			if record == nil {
+				// nothing to merge. Use current number from child.
+				currentNum = newCurrentNum
+			} else {
+				n.children[i] = *record
+			}
+		default:
+		}
 	}
 
-	if n.children[1].recordType == recordTypeNode ||
-		n.children[1].recordType == recordTypeFixedNode {
-		currentNum = n.children[1].node.finalize(currentNum)
+	if n.children[0].recordType == n.children[1].recordType &&
+		(n.children[0].recordType == recordTypeEmpty ||
+			(n.children[0].recordType == recordTypeData &&
+				reflect.DeepEqual(n.children[0].value, n.children[1].value))) {
+		return &record{
+			recordType: n.children[0].recordType,
+			value:      n.children[0].value,
+		}, currentNum
 	}
-	return currentNum
+
+	return nil, currentNum
 }
 
 func bitAt(ip net.IP, depth int) byte {

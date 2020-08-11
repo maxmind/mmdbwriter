@@ -266,7 +266,7 @@ func (t *Tree) Get(ip net.IP) (*net.IPNet, *DataType) {
 
 // Finalize prepares the tree for writing. It is not threadsafe.
 func (t *Tree) Finalize() {
-	t.nodeCount = t.root.finalize(0)
+	_, t.nodeCount = t.root.finalize(0)
 }
 
 // WriteTo writes the tree to the provided Writer.
