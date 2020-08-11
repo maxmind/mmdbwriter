@@ -307,7 +307,7 @@ func (t *Tree) WriteTo(w io.Writer) (int64, error) {
 		return numBytes, errors.Wrap(err, "error writing data section separator")
 	}
 
-	nb64, err := dataWriter.buf.WriteTo(buf)
+	nb64, err := dataWriter.WriteTo(buf)
 	numBytes += nb64
 	if err != nil {
 		_ = buf.Flush()
@@ -321,11 +321,18 @@ func (t *Tree) WriteTo(w io.Writer) (int64, error) {
 		return numBytes, errors.Wrap(err, "error writing metadata start marker")
 	}
 
-	nb64, err = t.writeMetadata(buf)
-	numBytes += nb64
+	metadataWriter := newDataWriter()
+	_, err = t.writeMetadata(metadataWriter)
 	if err != nil {
 		_ = buf.Flush()
 		return numBytes, errors.Wrap(err, "error writing metadata")
+	}
+
+	nb64, err = metadataWriter.WriteTo(buf)
+	numBytes += nb64
+	if err != nil {
+		_ = buf.Flush()
+		return numBytes, errors.Wrap(err, "error writing metadata to buffer")
 	}
 
 	err = buf.Flush()
@@ -382,7 +389,7 @@ func (t *Tree) recordValue(
 ) (int, error) {
 	switch r.recordType {
 	case recordTypeData:
-		offset, err := dataWriter.write(r.value)
+		offset, err := dataWriter.maybeWrite(r.value)
 		return t.nodeCount + len(dataSectionSeparator) + offset, err
 	case recordTypeEmpty, recordTypeReserved:
 		return t.nodeCount, nil
@@ -440,7 +447,7 @@ func ipV4ToV6(ip net.IP) net.IP {
 	return append(v4Prefix, ip...)
 }
 
-func (t *Tree) writeMetadata(w *bufio.Writer) (int64, error) {
+func (t *Tree) writeMetadata(dw *dataWriter) (int64, error) {
 	description := Map{}
 	for k, v := range t.description {
 		description[String(k)] = String(v)
@@ -461,5 +468,5 @@ func (t *Tree) writeMetadata(w *bufio.Writer) (int64, error) {
 		"node_count":                  Uint32(t.nodeCount),
 		"record_size":                 Uint16(t.recordSize),
 	}
-	return metadata.writeTo(w)
+	return metadata.writeTo(dw)
 }

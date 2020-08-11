@@ -1,7 +1,6 @@
 package mmdbwriter
 
 import (
-	"bytes"
 	"encoding/hex"
 	"math/big"
 	"strings"
@@ -86,6 +85,21 @@ func TestMap(t *testing.T) {
 		},
 	}
 	validateEncoding(t, maps)
+}
+
+func TestPointers(t *testing.T) {
+	pointers := map[string]DataType{
+		"2000":       pointer(0),
+		"27ff":       pointer(pointerMaxSize0 - 1),
+		"280000":     pointer(pointerMaxSize0),
+		"2fffff":     pointer(pointerMaxSize1 - 1),
+		"30000000":   pointer(pointerMaxSize1),
+		"37ffffff":   pointer(pointerMaxSize2 - 1),
+		"3808080800": pointer(pointerMaxSize2),
+		"38ffffffff": pointer(1<<32 - 1),
+	}
+
+	validateEncoding(t, pointers)
 }
 
 func TestSlice(t *testing.T) {
@@ -210,7 +224,7 @@ func powBigInt(bi *big.Int, pow uint) *big.Int {
 
 func validateEncoding(t *testing.T, tests map[string]DataType) {
 	for expected, dt := range tests {
-		w := &bytes.Buffer{}
+		w := newDataWriter()
 
 		numBytes, err := dt.writeTo(w)
 		require.NoError(t, err)
@@ -221,27 +235,3 @@ func validateEncoding(t *testing.T, tests map[string]DataType) {
 		assert.Equal(t, expected, actual, "%v - size: %d", dt, dt.size())
 	}
 }
-
-// func TestPointers(t *testing.T) {
-// 	bytes, err := ioutil.ReadFile(testFile("maps-with-pointers.raw"))
-// 	require.NoError(t, err)
-// 	d := decoder{bytes}
-
-// 	expected := map[uint]map[string]string{
-// 		0:  {"long_key": "long_value1"},
-// 		22: {"long_key": "long_value2"},
-// 		37: {"long_key2": "long_value1"},
-// 		50: {"long_key2": "long_value2"},
-// 		55: {"long_key": "long_value1"},
-// 		57: {"long_key2": "long_value2"},
-// 	}
-
-// 	for offset, expectedValue := range expected {
-// 		var actual map[string]string
-// 		_, err := d.decode(offset, reflect.ValueOf(&actual), 0)
-// 		assert.NoError(t, err)
-// 		if !reflect.DeepEqual(actual, expectedValue) {
-// 			t.Errorf("Decode for pointer at %d failed", offset)
-// 		}
-// 	}
-// }

@@ -17,6 +17,7 @@ func main() {
 	writer, err := mmdbwriter.New(
 		mmdbwriter.Options{
 			DatabaseType: "My-ASN-DB",
+			RecordSize:   24,
 		},
 	)
 	if err != nil {
