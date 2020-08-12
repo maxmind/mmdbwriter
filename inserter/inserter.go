@@ -46,7 +46,7 @@ func TopLevelMergeWith(newValue mmdbtype.DataType) func(mmdbtype.DataType) (mmdb
 		if !ok {
 			return nil, errors.Errorf(
 				"the existing value is a %T, not a Map. TopLevelMergeWith only works if both values are Map values.",
-				newValue,
+				existingValue,
 			)
 		}
 
@@ -60,10 +60,10 @@ func TopLevelMergeWith(newValue mmdbtype.DataType) func(mmdbtype.DataType) (mmdb
 	}
 }
 
-// DeepMerge creates an inserter that will recursively update an existing
+// DeepMergeWith creates an inserter that will recursively update an existing
 // value. Map and Slice values will be merged recursively. Other values will
 // be replaced by the new value.
-func DeepMerge(newValue mmdbtype.DataType) func(mmdbtype.DataType) (mmdbtype.DataType, error) {
+func DeepMergeWith(newValue mmdbtype.DataType) func(mmdbtype.DataType) (mmdbtype.DataType, error) {
 	return func(existingValue mmdbtype.DataType) (mmdbtype.DataType, error) {
 		return deepMerge(existingValue, newValue)
 	}
