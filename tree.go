@@ -8,6 +8,7 @@ import (
 	"net"
 	"time"
 
+	"github.com/maxmind/mmdbwriter/mmdbtype"
 	"github.com/pkg/errors"
 )
 
@@ -136,17 +137,17 @@ func New(opts Options) (*Tree, error) {
 }
 
 // Insert a data value into the tree.
-func (t *Tree) Insert(network *net.IPNet, value DataType) error {
+func (t *Tree) Insert(network *net.IPNet, value mmdbtype.DataType) error {
 	return t.InsertFunc(network, ReplaceWith(value))
 }
 
 // InsertFunc will insert the output of the function passed to it. The argument
 // passed to the function is he existing value in the record. The function
-// should return the DataType to be inserted. In both cases, a nil value means
+// should return the mmdbtype.DataType to be inserted. In both cases, a nil value means
 // an empty record.
 //
 // You must never modify the argument passed to the function as the value may
-// be shared with other records. If you want a copy of the DataType to modify,
+// be shared with other records. If you want a copy of the mmdbtype.DataType to modify,
 // call the Copy method on it, which will make a deep copy. This isn't done
 // automatically before calling the function as not all functions will require
 // the record to be copied and there is a non-trivial performance impact.
@@ -155,7 +156,7 @@ func (t *Tree) Insert(network *net.IPNet, value DataType) error {
 // has multiple preexisting records associated with it.
 func (t *Tree) InsertFunc(
 	network *net.IPNet,
-	inserter func(value DataType) (DataType, error),
+	inserter func(value mmdbtype.DataType) (mmdbtype.DataType, error),
 ) error {
 	return t.insert(network, recordTypeData, inserter, nil)
 }
@@ -163,7 +164,7 @@ func (t *Tree) InsertFunc(
 func (t *Tree) insert(
 	network *net.IPNet,
 	recordType recordType,
-	inserter func(value DataType) (DataType, error),
+	inserter func(value mmdbtype.DataType) (mmdbtype.DataType, error),
 	node *node,
 ) error {
 	// We set this to 0 so that the tree must be finalized again.
@@ -190,7 +191,7 @@ func (t *Tree) insert(
 func (t *Tree) insertStringNetwork(
 	network string,
 	recordType recordType,
-	inserter func(value DataType) (DataType, error),
+	inserter func(value mmdbtype.DataType) (mmdbtype.DataType, error),
 	node *node,
 ) error {
 	_, ipnet, err := net.ParseCIDR(network)
@@ -246,7 +247,7 @@ func (t *Tree) insertReservedNetworks() error {
 }
 
 // Get the value for the given IP address from the tree.
-func (t *Tree) Get(ip net.IP) (*net.IPNet, *DataType) {
+func (t *Tree) Get(ip net.IP) (*net.IPNet, *mmdbtype.DataType) {
 	lookupIP := ip
 
 	if t.treeDepth == 128 {
@@ -273,7 +274,7 @@ func (t *Tree) Get(ip net.IP) (*net.IPNet, *DataType) {
 
 	mask := net.CIDRMask(prefixLen, t.treeDepth)
 
-	var value *DataType
+	var value *mmdbtype.DataType
 	if r.recordType == recordTypeData {
 		value = &r.value
 	}
@@ -468,25 +469,25 @@ func ipV4ToV6(ip net.IP) net.IP {
 }
 
 func (t *Tree) writeMetadata(dw *dataWriter) (int64, error) {
-	description := Map{}
+	description := mmdbtype.Map{}
 	for k, v := range t.description {
-		description[String(k)] = String(v)
+		description[mmdbtype.String(k)] = mmdbtype.String(v)
 	}
 
-	languages := Slice{}
+	languages := mmdbtype.Slice{}
 	for _, v := range t.languages {
-		languages = append(languages, String(v))
+		languages = append(languages, mmdbtype.String(v))
 	}
-	metadata := Map{
-		"binary_format_major_version": Uint16(2),
-		"binary_format_minor_version": Uint16(0),
-		"build_epoch":                 Uint64(t.buildEpoch),
-		"database_type":               String(t.databaseType),
+	metadata := mmdbtype.Map{
+		"binary_format_major_version": mmdbtype.Uint16(2),
+		"binary_format_minor_version": mmdbtype.Uint16(0),
+		"build_epoch":                 mmdbtype.Uint64(t.buildEpoch),
+		"database_type":               mmdbtype.String(t.databaseType),
 		"description":                 description,
-		"ip_version":                  Uint16(t.ipVersion),
+		"ip_version":                  mmdbtype.Uint16(t.ipVersion),
 		"languages":                   languages,
-		"node_count":                  Uint32(t.nodeCount),
-		"record_size":                 Uint16(t.recordSize),
+		"node_count":                  mmdbtype.Uint32(t.nodeCount),
+		"record_size":                 mmdbtype.Uint16(t.recordSize),
 	}
-	return metadata.writeTo(dw)
+	return metadata.WriteTo(dw)
 }

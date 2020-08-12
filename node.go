@@ -4,6 +4,7 @@ import (
 	"net"
 	"reflect"
 
+	"github.com/maxmind/mmdbwriter/mmdbtype"
 	"github.com/pkg/errors"
 )
 
@@ -20,7 +21,7 @@ const (
 
 type record struct {
 	node       *node
-	value      DataType
+	value      mmdbtype.DataType
 	recordType recordType
 }
 
@@ -34,7 +35,7 @@ func (n *node) insert(
 	ip net.IP,
 	prefixLen int,
 	recordType recordType,
-	inserter func(value DataType) (DataType, error),
+	inserter func(value mmdbtype.DataType) (mmdbtype.DataType, error),
 	insertedNode *node,
 	currentDepth int,
 ) error {
@@ -60,7 +61,7 @@ func (r *record) insert(
 	ip net.IP,
 	prefixLen int,
 	recordType recordType,
-	inserter func(value DataType) (DataType, error),
+	inserter func(value mmdbtype.DataType) (mmdbtype.DataType, error),
 	insertedNode *node,
 	newDepth int,
 ) error {

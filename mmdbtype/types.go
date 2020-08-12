@@ -1,4 +1,5 @@
-package mmdbwriter
+// Package mmdbtype provides types used within the MaxMind DB format.
+package mmdbtype
 
 import (
 	"encoding/binary"
@@ -37,7 +38,7 @@ type writer interface {
 	io.Writer
 	WriteByte(byte) error
 	WriteString(string) (int, error)
-	writeOrWritePointer(DataType) (int64, error)
+	WriteOrWritePointer(DataType) (int64, error)
 }
 
 // DataType represents a MaxMind DB data type
@@ -45,7 +46,7 @@ type DataType interface {
 	Copy() DataType
 	size() int
 	typeNum() typeNum
-	writeTo(writer) (int64, error)
+	WriteTo(writer) (int64, error)
 }
 
 // Bool is the MaxMind DB boolean type
@@ -65,7 +66,8 @@ func (t Bool) typeNum() typeNum {
 	return typeNumBool
 }
 
-func (t Bool) writeTo(w writer) (int64, error) {
+// WriteTo writes the value to w.
+func (t Bool) WriteTo(w writer) (int64, error) {
 	return writeCtrlByte(w, t)
 }
 
@@ -87,7 +89,8 @@ func (t Bytes) typeNum() typeNum {
 	return typeNumBytes
 }
 
-func (t Bytes) writeTo(w writer) (int64, error) {
+// WriteTo writes the value to w.
+func (t Bytes) WriteTo(w writer) (int64, error) {
 	numBytes, err := writeCtrlByte(w, t)
 	if err != nil {
 		return numBytes, err
@@ -115,7 +118,8 @@ func (t Float32) typeNum() typeNum {
 	return typeNumFloat32
 }
 
-func (t Float32) writeTo(w writer) (int64, error) {
+// WriteTo writes the value to w.
+func (t Float32) WriteTo(w writer) (int64, error) {
 	numBytes, err := writeCtrlByte(w, t)
 	if err != nil {
 		return numBytes, err
@@ -142,7 +146,8 @@ func (t Float64) typeNum() typeNum {
 	return typeNumFloat64
 }
 
-func (t Float64) writeTo(w writer) (int64, error) {
+// WriteTo writes the value to w.
+func (t Float64) WriteTo(w writer) (int64, error) {
 	numBytes, err := writeCtrlByte(w, t)
 	if err != nil {
 		return numBytes, err
@@ -169,7 +174,8 @@ func (t Int32) typeNum() typeNum {
 	return typeNumInt32
 }
 
-func (t Int32) writeTo(w writer) (int64, error) {
+// WriteTo writes the value to w.
+func (t Int32) WriteTo(w writer) (int64, error) {
 	numBytes, err := writeCtrlByte(w, t)
 	if err != nil {
 		return numBytes, err
@@ -206,7 +212,8 @@ func (t Map) typeNum() typeNum {
 	return typeNumMap
 }
 
-func (t Map) writeTo(w writer) (int64, error) {
+// WriteTo writes the value to w.
+func (t Map) WriteTo(w writer) (int64, error) {
 	numBytes, err := writeCtrlByte(w, t)
 	if err != nil {
 		return numBytes, err
@@ -224,12 +231,12 @@ func (t Map) writeTo(w writer) (int64, error) {
 
 	for _, ks := range keys {
 		k := String(ks)
-		written, err := w.writeOrWritePointer(k)
+		written, err := w.WriteOrWritePointer(k)
 		numBytes += written
 		if err != nil {
 			return numBytes, err
 		}
-		written, err = w.writeOrWritePointer(t[k])
+		written, err = w.WriteOrWritePointer(t[k])
 		numBytes += written
 		if err != nil {
 			return numBytes, err
@@ -238,11 +245,12 @@ func (t Map) writeTo(w writer) (int64, error) {
 	return numBytes, nil
 }
 
-// pointer is the MaxMind DB pointer type. It is not exported as it should
+// Pointer is the MaxMind DB pointer type. It is not exported as it should
 // only be used internally
-type pointer uint32
+type Pointer uint32
 
-func (t pointer) Copy() DataType { return t }
+// Copy the value
+func (t Pointer) Copy() DataType { return t }
 
 const (
 	pointerMaxSize0 = 1 << 11
@@ -250,7 +258,7 @@ const (
 	pointerMaxSize2 = pointerMaxSize1 + (1 << 27)
 )
 
-func (t pointer) size() int {
+func (t Pointer) size() int {
 	switch {
 	case t < pointerMaxSize0:
 		return 0
@@ -263,15 +271,18 @@ func (t pointer) size() int {
 	}
 }
 
-func (t pointer) writtenSize() int64 {
+// WrittenSize is the actual total size of the pointer in the
+// database data section.
+func (t Pointer) WrittenSize() int64 {
 	return int64(t.size() + 2)
 }
 
-func (t pointer) typeNum() typeNum {
+func (t Pointer) typeNum() typeNum {
 	return typeNumPointer
 }
 
-func (t pointer) writeTo(w writer) (int64, error) {
+// WriteTo writes the value to w.
+func (t Pointer) WriteTo(w writer) (int64, error) {
 	size := t.size()
 	switch size {
 	case 0:
@@ -337,7 +348,7 @@ func (t pointer) writeTo(w writer) (int64, error) {
 			return 4, errors.Wrap(err, "error writing pointer")
 		}
 	}
-	return t.writtenSize(), nil
+	return t.WrittenSize(), nil
 }
 
 // Slice is the MaxMind DB array type
@@ -360,14 +371,15 @@ func (t Slice) typeNum() typeNum {
 	return typeNumSlice
 }
 
-func (t Slice) writeTo(w writer) (int64, error) {
+// WriteTo writes the value to w.
+func (t Slice) WriteTo(w writer) (int64, error) {
 	numBytes, err := writeCtrlByte(w, t)
 	if err != nil {
 		return numBytes, err
 	}
 
 	for _, e := range t {
-		written, err := w.writeOrWritePointer(e)
+		written, err := w.WriteOrWritePointer(e)
 		numBytes += written
 		if err != nil {
 			return numBytes, err
@@ -390,7 +402,8 @@ func (t String) typeNum() typeNum {
 	return typeNumString
 }
 
-func (t String) writeTo(w writer) (int64, error) {
+// WriteTo writes the value to w.
+func (t String) WriteTo(w writer) (int64, error) {
 	numBytes, err := writeCtrlByte(w, t)
 	if err != nil {
 		return numBytes, err
@@ -418,7 +431,8 @@ func (t Uint16) typeNum() typeNum {
 	return typeNumUint16
 }
 
-func (t Uint16) writeTo(w writer) (int64, error) {
+// WriteTo writes the value to w.
+func (t Uint16) WriteTo(w writer) (int64, error) {
 	numBytes, err := writeCtrlByte(w, t)
 	if err != nil {
 		return numBytes, err
@@ -449,7 +463,8 @@ func (t Uint32) typeNum() typeNum {
 	return typeNumUint32
 }
 
-func (t Uint32) writeTo(w writer) (int64, error) {
+// WriteTo writes the value to w.
+func (t Uint32) WriteTo(w writer) (int64, error) {
 	numBytes, err := writeCtrlByte(w, t)
 	if err != nil {
 		return numBytes, err
@@ -480,7 +495,8 @@ func (t Uint64) typeNum() typeNum {
 	return typeNumUint64
 }
 
-func (t Uint64) writeTo(w writer) (int64, error) {
+// WriteTo writes the value to w.
+func (t Uint64) WriteTo(w writer) (int64, error) {
 	numBytes, err := writeCtrlByte(w, t)
 	if err != nil {
 		return numBytes, err
@@ -519,7 +535,8 @@ func (t *Uint128) typeNum() typeNum {
 	return typeNumUint128
 }
 
-func (t *Uint128) writeTo(w writer) (int64, error) {
+// WriteTo writes the value to w.
+func (t *Uint128) WriteTo(w writer) (int64, error) {
 	numBytes, err := writeCtrlByte(w, t)
 	if err != nil {
 		return numBytes, err
