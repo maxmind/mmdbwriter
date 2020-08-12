@@ -164,22 +164,19 @@ func TestTreeInsertAndGet(t *testing.T) {
 			},
 			gets: []testGet{
 				{
-					ip: "2003::",
-					// Once we support pruning, this should be 2003::/16
-					expectedNetwork:     "2003::/20",
+					ip:                  "2003::",
+					expectedNetwork:     "2003::/16",
 					expectedGetValue:    s2dtp("new string"),
 					expectedLookupValue: s2ip("new string"),
 				},
 				{
-					ip: "2003:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
-					// Once we support pruning, this should be 2003::/16
-					expectedNetwork:     "2003:8000::/17",
+					ip:                  "2003:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+					expectedNetwork:     "2003::/16",
 					expectedGetValue:    s2dtp("new string"),
 					expectedLookupValue: s2ip("new string"),
 				},
 			},
-			// With pruning, this should be less
-			expectedNodeCount: 158,
+			expectedNodeCount: 142,
 		},
 		{
 			name:                    "insert smaller network into bigger network",
@@ -319,6 +316,36 @@ func TestTreeInsertAndGet(t *testing.T) {
 			},
 			expectedNodeCount: 369,
 		},
+		{
+			name: "node pruning",
+			inserts: []testInsert{
+				{
+					network: "1.1.0.0/24",
+					value:   Map{"a": Slice{Uint64(1), Bytes{1, 2}}},
+				},
+				{
+					network: "1.1.1.0/24",
+					// We intentionally don't use the same variable for
+					// here and above as we want them to be different instances.
+					value: Map{"a": Slice{Uint64(1), Bytes{1, 2}}},
+				},
+			},
+			gets: []testGet{
+				{
+					ip:              "1.1.0.0",
+					expectedNetwork: "1.1.0.0/23",
+					expectedGetValue: func() *DataType {
+						v := DataType(Map{"a": Slice{Uint64(1), Bytes{1, 2}}})
+						return &v
+					}(),
+					expectedLookupValue: func() *interface{} {
+						v := interface{}(map[string]interface{}{"a": []interface{}{uint64(1), []byte{1, 2}}})
+						return &v
+					}(),
+				},
+			},
+			expectedNodeCount: 367,
+		},
 	}
 
 	for _, recordSize := range []int{24, 28, 32} {
@@ -351,14 +378,14 @@ func TestTreeInsertAndGet(t *testing.T) {
 						assert.EqualError(t, err, insert.expectedErrorMsg)
 					}
 
+					tree.Finalize()
+
 					for _, get := range test.gets {
 						network, value := tree.Get(net.ParseIP(get.ip))
 
 						assert.Equal(t, get.expectedNetwork, network.String(), "network for %s", get.ip)
 						assert.Equal(t, get.expectedGetValue, value, "value for %s", get.ip)
 					}
-
-					tree.Finalize()
 
 					assert.Equal(t, test.expectedNodeCount, tree.nodeCount)
 
