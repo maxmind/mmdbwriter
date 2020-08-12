@@ -1,11 +1,11 @@
-package mmdbwriter
+// Package inserter provides some common inserter functions for
+// mmdbwriter.InsertFunc.
+package inserter
 
 import (
 	"github.com/maxmind/mmdbwriter/mmdbtype"
 	"github.com/pkg/errors"
 )
-
-// XXX separate package?
 
 // Remove any records for the network being inserted.
 func Remove(value mmdbtype.DataType) (mmdbtype.DataType, error) {

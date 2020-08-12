@@ -8,6 +8,7 @@ import (
 	"net"
 	"time"
 
+	"github.com/maxmind/mmdbwriter/inserter"
 	"github.com/maxmind/mmdbwriter/mmdbtype"
 	"github.com/pkg/errors"
 )
@@ -138,7 +139,7 @@ func New(opts Options) (*Tree, error) {
 
 // Insert a data value into the tree.
 func (t *Tree) Insert(network *net.IPNet, value mmdbtype.DataType) error {
-	return t.InsertFunc(network, ReplaceWith(value))
+	return t.InsertFunc(network, inserter.ReplaceWith(value))
 }
 
 // InsertFunc will insert the output of the function passed to it. The argument
