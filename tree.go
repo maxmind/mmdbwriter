@@ -137,13 +137,33 @@ func New(opts Options) (*Tree, error) {
 
 // Insert a data value into the tree.
 func (t *Tree) Insert(network *net.IPNet, value DataType) error {
-	return t.insert(network, recordTypeData, value, nil)
+	return t.InsertFunc(network, ReplaceWith(value))
+}
+
+// InsertFunc will insert the output of the function passed to it. The argument
+// passed to the function is he existing value in the record. The function
+// should return the DataType to be inserted. In both cases, a nil value means
+// an empty record.
+//
+// You must never modify the argument passed to the function as the value may
+// be shared with other records. If you want a copy of the DataType to modify,
+// call the Copy method on it, which will make a deep copy. This isn't done
+// automatically before calling the function as not all functions will require
+// the record to be copied and there is a non-trivial performance impact.
+//
+// The function will be called multiple times per insert when the network
+// has multiple preexisting records associated with it.
+func (t *Tree) InsertFunc(
+	network *net.IPNet,
+	inserter func(value DataType) DataType,
+) error {
+	return t.insert(network, recordTypeData, inserter, nil)
 }
 
 func (t *Tree) insert(
 	network *net.IPNet,
 	recordType recordType,
-	value DataType,
+	inserter func(DataType) DataType,
 	node *node,
 ) error {
 	// We set this to 0 so that the tree must be finalized again.
@@ -164,20 +184,20 @@ func (t *Tree) insert(
 		prefixLen += 96
 	}
 
-	return t.root.insert(ip, prefixLen, recordType, value, node, 0)
+	return t.root.insert(ip, prefixLen, recordType, inserter, node, 0)
 }
 
 func (t *Tree) insertStringNetwork(
 	network string,
 	recordType recordType,
-	value DataType,
+	inserter func(DataType) DataType,
 	node *node,
 ) error {
 	_, ipnet, err := net.ParseCIDR(network)
 	if err != nil {
 		return errors.Wrapf(err, "error parsing network (%s)", network)
 	}
-	return t.insert(ipnet, recordType, value, node)
+	return t.insert(ipnet, recordType, inserter, node)
 }
 
 var ipv4AliasNetworks = []string{
