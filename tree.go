@@ -155,7 +155,7 @@ func (t *Tree) Insert(network *net.IPNet, value DataType) error {
 // has multiple preexisting records associated with it.
 func (t *Tree) InsertFunc(
 	network *net.IPNet,
-	inserter func(value DataType) DataType,
+	inserter func(value DataType) (DataType, error),
 ) error {
 	return t.insert(network, recordTypeData, inserter, nil)
 }
@@ -163,7 +163,7 @@ func (t *Tree) InsertFunc(
 func (t *Tree) insert(
 	network *net.IPNet,
 	recordType recordType,
-	inserter func(DataType) DataType,
+	inserter func(value DataType) (DataType, error),
 	node *node,
 ) error {
 	// We set this to 0 so that the tree must be finalized again.
@@ -190,7 +190,7 @@ func (t *Tree) insert(
 func (t *Tree) insertStringNetwork(
 	network string,
 	recordType recordType,
-	inserter func(DataType) DataType,
+	inserter func(value DataType) (DataType, error),
 	node *node,
 ) error {
 	_, ipnet, err := net.ParseCIDR(network)

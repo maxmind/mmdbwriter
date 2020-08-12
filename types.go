@@ -42,6 +42,7 @@ type writer interface {
 
 // DataType represents a MaxMind DB data type
 type DataType interface {
+	Copy() DataType
 	size() int
 	typeNum() typeNum
 	writeTo(writer) (int64, error)
@@ -49,6 +50,9 @@ type DataType interface {
 
 // Bool is the MaxMind DB boolean type
 type Bool bool
+
+// Copy the value
+func (t Bool) Copy() DataType { return t }
 
 func (t Bool) size() int {
 	if t {
@@ -67,6 +71,13 @@ func (t Bool) writeTo(w writer) (int64, error) {
 
 // Bytes is the MaxMind DB bytes type
 type Bytes []byte
+
+// Copy the value
+func (t Bytes) Copy() DataType {
+	nv := make(Bytes, len(t))
+	copy(nv, t)
+	return nv
+}
 
 func (t Bytes) size() int {
 	return len(t)
@@ -93,6 +104,9 @@ func (t Bytes) writeTo(w writer) (int64, error) {
 // Float32 is the MaxMind DB float type
 type Float32 float32
 
+// Copy the value
+func (t Float32) Copy() DataType { return t }
+
 func (t Float32) size() int {
 	return 4
 }
@@ -117,6 +131,9 @@ func (t Float32) writeTo(w writer) (int64, error) {
 // Float64 is the MaxMind DB double type
 type Float64 float64
 
+// Copy the value
+func (t Float64) Copy() DataType { return t }
+
 func (t Float64) size() int {
 	return 8
 }
@@ -140,6 +157,9 @@ func (t Float64) writeTo(w writer) (int64, error) {
 
 // Int32 is the MaxMind DB signed 32-bit integer type
 type Int32 int32
+
+// Copy the value
+func (t Int32) Copy() DataType { return t }
 
 func (t Int32) size() int {
 	return 4 - bits.LeadingZeros32(uint32(t))/8
@@ -168,6 +188,15 @@ func (t Int32) writeTo(w writer) (int64, error) {
 
 // Map is the MaxMind DB map type
 type Map map[String]DataType
+
+// Copy makes a deep copy of the Map
+func (t Map) Copy() DataType {
+	newMap := make(Map, len(t))
+	for k, v := range t {
+		newMap[k] = v.Copy()
+	}
+	return newMap
+}
 
 func (t Map) size() int {
 	return len(t)
@@ -212,6 +241,8 @@ func (t Map) writeTo(w writer) (int64, error) {
 // pointer is the MaxMind DB pointer type. It is not exported as it should
 // only be used internally
 type pointer uint32
+
+func (t pointer) Copy() DataType { return t }
 
 const (
 	pointerMaxSize0 = 1 << 11
@@ -312,6 +343,15 @@ func (t pointer) writeTo(w writer) (int64, error) {
 // Slice is the MaxMind DB array type
 type Slice []DataType
 
+// Copy makes a deep copy of the Slice
+func (t Slice) Copy() DataType {
+	newSlice := make(Slice, len(t))
+	for k, v := range t {
+		newSlice[k] = v.Copy()
+	}
+	return newSlice
+}
+
 func (t Slice) size() int {
 	return len(t)
 }
@@ -339,6 +379,9 @@ func (t Slice) writeTo(w writer) (int64, error) {
 // String is the MaxMind DB string type
 type String string
 
+// Copy the value
+func (t String) Copy() DataType { return t }
+
 func (t String) size() int {
 	return len(t)
 }
@@ -363,6 +406,9 @@ func (t String) writeTo(w writer) (int64, error) {
 
 // Uint16 is the MaxMind DB unsigned 16-bit integer type
 type Uint16 uint16
+
+// Copy the value
+func (t Uint16) Copy() DataType { return t }
 
 func (t Uint16) size() int {
 	return 2 - bits.LeadingZeros16(uint16(t))/8
@@ -392,6 +438,9 @@ func (t Uint16) writeTo(w writer) (int64, error) {
 // Uint32 is the MaxMind DB unsigned 32-bit integer type
 type Uint32 uint32
 
+// Copy the value
+func (t Uint32) Copy() DataType { return t }
+
 func (t Uint32) size() int {
 	return 4 - bits.LeadingZeros32(uint32(t))/8
 }
@@ -419,6 +468,9 @@ func (t Uint32) writeTo(w writer) (int64, error) {
 
 // Uint64 is the MaxMind DB unsigned 64-bit integer type
 type Uint64 uint64
+
+// Copy the value
+func (t Uint64) Copy() DataType { return t }
 
 func (t Uint64) size() int {
 	return 8 - bits.LeadingZeros64(uint64(t))/8
@@ -448,6 +500,14 @@ func (t Uint64) writeTo(w writer) (int64, error) {
 
 // Uint128 is the MaxMind DB unsigned 128-bit integer type
 type Uint128 big.Int
+
+// Copy make a deep copy ov the Uint128
+func (t *Uint128) Copy() DataType {
+	nv := big.Int{}
+	nv.Set((*big.Int)(t))
+	uv := Uint128(nv)
+	return &uv
+}
 
 func (t *Uint128) size() int {
 	// We add 7 here as we want the ceiling of the division operation rather

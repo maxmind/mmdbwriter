@@ -34,7 +34,7 @@ func (n *node) insert(
 	ip net.IP,
 	prefixLen int,
 	recordType recordType,
-	inserter func(DataType) DataType,
+	inserter func(value DataType) (DataType, error),
 	insertedNode *node,
 	currentDepth int,
 ) error {
@@ -60,7 +60,7 @@ func (r *record) insert(
 	ip net.IP,
 	prefixLen int,
 	recordType recordType,
-	inserter func(DataType) DataType,
+	inserter func(value DataType) (DataType, error),
 	insertedNode *node,
 	newDepth int,
 ) error {
@@ -72,7 +72,11 @@ func (r *record) insert(
 			r.node = insertedNode
 			r.recordType = recordType
 			if recordType == recordTypeData {
-				r.value = inserter(r.value)
+				var err error
+				r.value, err = inserter(r.value)
+				if err != nil {
+					return err
+				}
 				if r.value == nil {
 					r.recordType = recordTypeEmpty
 				}
