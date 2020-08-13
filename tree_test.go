@@ -7,6 +7,7 @@ import (
 	"net"
 	"testing"
 
+	"github.com/maxmind/mmdbwriter/mmdbtype"
 	"github.com/oschwald/maxminddb-golang"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -14,58 +15,58 @@ import (
 
 type testInsert struct {
 	network string
-	value   DataType
+	value   mmdbtype.DataType
 }
 
 type testInsertError struct {
 	network          string
-	value            DataType
+	value            mmdbtype.DataType
 	expectedErrorMsg string
 }
 
 type testGet struct {
 	ip                  string
 	expectedNetwork     string
-	expectedGetValue    *DataType
+	expectedGetValue    *mmdbtype.DataType
 	expectedLookupValue *interface{}
 }
 
 func TestTreeInsertAndGet(t *testing.T) {
 	bigInt := big.Int{}
 	bigInt.SetString("1329227995784915872903807060280344576", 10)
-	uint128 := Uint128(bigInt)
-	var allTypesGetSubmap DataType = Map{
-		"mapX": Map{
-			"arrayX": Slice{
-				Uint64(0x7),
-				Uint64(0x8),
-				Uint64(0x9),
+	uint128 := mmdbtype.Uint128(bigInt)
+	var allTypesGetSubmap mmdbtype.DataType = mmdbtype.Map{
+		"mapX": mmdbtype.Map{
+			"arrayX": mmdbtype.Slice{
+				mmdbtype.Uint64(0x7),
+				mmdbtype.Uint64(0x8),
+				mmdbtype.Uint64(0x9),
 			},
-			"utf8_stringX": String("hello"),
+			"utf8_stringX": mmdbtype.String("hello"),
 		},
 	}
-	var allTypesGetRecord DataType = Map{
-		"array": Slice{
-			Uint64(1),
-			Uint64(2),
-			Uint64(3),
+	var allTypesGetRecord mmdbtype.DataType = mmdbtype.Map{
+		"array": mmdbtype.Slice{
+			mmdbtype.Uint64(1),
+			mmdbtype.Uint64(2),
+			mmdbtype.Uint64(3),
 		},
-		"boolean": Bool(true),
-		"bytes": Bytes{
+		"boolean": mmdbtype.Bool(true),
+		"bytes": mmdbtype.Bytes{
 			0x0,
 			0x0,
 			0x0,
 			0x2a,
 		},
-		"double":      Float64(42.123456),
-		"float":       Float32(1.1),
-		"int32":       Int32(-268435456),
+		"double":      mmdbtype.Float64(42.123456),
+		"float":       mmdbtype.Float32(1.1),
+		"int32":       mmdbtype.Int32(-268435456),
 		"map":         allTypesGetSubmap,
 		"uint128":     &uint128,
-		"uint16":      Uint64(0x64),
-		"uint32":      Uint64(0x10000000),
-		"uint64":      Uint64(0x1000000000000000),
-		"utf8_string": String("unicode! ☯ - ♫"),
+		"uint16":      mmdbtype.Uint64(0x64),
+		"uint32":      mmdbtype.Uint64(0x10000000),
+		"uint64":      mmdbtype.Uint64(0x1000000000000000),
+		"utf8_string": mmdbtype.String("unicode! ☯ - ♫"),
 	}
 
 	var allTypesLookupSubmap interface{} = map[string]interface{}{
@@ -117,7 +118,7 @@ func TestTreeInsertAndGet(t *testing.T) {
 			inserts: []testInsert{
 				{
 					network: "::/1",
-					value:   String("string"),
+					value:   mmdbtype.String("string"),
 				},
 			},
 			gets: []testGet{
@@ -136,7 +137,7 @@ func TestTreeInsertAndGet(t *testing.T) {
 			inserts: []testInsert{
 				{
 					network: "8000::/1",
-					value:   String("string"),
+					value:   mmdbtype.String("string"),
 				},
 			},
 			gets: []testGet{
@@ -155,11 +156,11 @@ func TestTreeInsertAndGet(t *testing.T) {
 			inserts: []testInsert{
 				{
 					network: "2003:1000::/32",
-					value:   String("string"),
+					value:   mmdbtype.String("string"),
 				},
 				{
 					network: "2003::/16",
-					value:   String("new string"),
+					value:   mmdbtype.String("new string"),
 				},
 			},
 			gets: []testGet{
@@ -184,11 +185,11 @@ func TestTreeInsertAndGet(t *testing.T) {
 			inserts: []testInsert{
 				{
 					network: "2003::/16",
-					value:   String("string"),
+					value:   mmdbtype.String("string"),
 				},
 				{
 					network: "2003:1000::/32",
-					value:   String("new string"),
+					value:   mmdbtype.String("new string"),
 				},
 			},
 			gets: []testGet{
@@ -220,7 +221,7 @@ func TestTreeInsertAndGet(t *testing.T) {
 			inserts: []testInsert{
 				{
 					network: "1.1.1.1/32",
-					value:   String("string"),
+					value:   mmdbtype.String("string"),
 				},
 			},
 			gets: []testGet{
@@ -249,7 +250,7 @@ func TestTreeInsertAndGet(t *testing.T) {
 			inserts: []testInsert{
 				{
 					network: "::/1",
-					value:   String("string"),
+					value:   mmdbtype.String("string"),
 				},
 			},
 			insertErrors: []testInsertError{
@@ -321,21 +322,22 @@ func TestTreeInsertAndGet(t *testing.T) {
 			inserts: []testInsert{
 				{
 					network: "1.1.0.0/24",
-					value:   Map{"a": Slice{Uint64(1), Bytes{1, 2}}},
+					value:   mmdbtype.Map{"a": mmdbtype.Slice{mmdbtype.Uint64(1), mmdbtype.Bytes{1, 2}}},
 				},
 				{
 					network: "1.1.1.0/24",
 					// We intentionally don't use the same variable for
 					// here and above as we want them to be different instances.
-					value: Map{"a": Slice{Uint64(1), Bytes{1, 2}}},
+					value: mmdbtype.Map{"a": mmdbtype.Slice{mmdbtype.Uint64(1), mmdbtype.Bytes{1, 2}}},
 				},
 			},
 			gets: []testGet{
 				{
 					ip:              "1.1.0.0",
 					expectedNetwork: "1.1.0.0/23",
-					expectedGetValue: func() *DataType {
-						v := DataType(Map{"a": Slice{Uint64(1), Bytes{1, 2}}})
+					expectedGetValue: func() *mmdbtype.DataType {
+						v := mmdbtype.DataType(
+							mmdbtype.Map{"a": mmdbtype.Slice{mmdbtype.Uint64(1), mmdbtype.Bytes{1, 2}}})
 						return &v
 					}(),
 					expectedLookupValue: func() *interface{} {
@@ -424,7 +426,7 @@ func s2ip(v string) *interface{} {
 	return &i
 }
 
-func s2dtp(v string) *DataType {
-	ts := DataType(String(v))
+func s2dtp(v string) *mmdbtype.DataType {
+	ts := mmdbtype.DataType(mmdbtype.String(v))
 	return &ts
 }

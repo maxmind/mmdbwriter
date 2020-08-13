@@ -11,6 +11,7 @@ import (
 	"strconv"
 
 	"github.com/maxmind/mmdbwriter"
+	"github.com/maxmind/mmdbwriter/mmdbtype"
 )
 
 func main() {
@@ -58,14 +59,14 @@ func main() {
 				log.Fatal(err)
 			}
 
-			record := mmdbwriter.Map{}
+			record := mmdbtype.Map{}
 
 			if asn != 0 {
-				record["autonomous_system_number"] = mmdbwriter.Uint32(asn)
+				record["autonomous_system_number"] = mmdbtype.Uint32(asn)
 			}
 
 			if row[2] != "" {
-				record["autonomous_system_organization"] = mmdbwriter.String(row[2])
+				record["autonomous_system_organization"] = mmdbtype.String(row[2])
 			}
 
 			err = writer.Insert(network, record)

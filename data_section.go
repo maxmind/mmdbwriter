@@ -5,11 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/maxmind/mmdbwriter/mmdbtype"
 	"github.com/pkg/errors"
 )
 
 type writtenType struct {
-	pointer pointer
+	pointer mmdbtype.Pointer
 	size    int64
 }
 
@@ -25,7 +26,7 @@ func newDataWriter() *dataWriter {
 	}
 }
 
-func (dw *dataWriter) maybeWrite(t DataType) (int, error) {
+func (dw *dataWriter) maybeWrite(t mmdbtype.DataType) (int, error) {
 	key, err := key(t)
 	if err != nil {
 		return 0, err
@@ -37,13 +38,13 @@ func (dw *dataWriter) maybeWrite(t DataType) (int, error) {
 	}
 
 	offset := dw.Len()
-	size, err := t.writeTo(dw)
+	size, err := t.WriteTo(dw)
 	if err != nil {
 		return 0, err
 	}
 
 	written = writtenType{
-		pointer: pointer(offset),
+		pointer: mmdbtype.Pointer(offset),
 		size:    size,
 	}
 
@@ -52,27 +53,27 @@ func (dw *dataWriter) maybeWrite(t DataType) (int, error) {
 	return int(written.pointer), nil
 }
 
-func (dw *dataWriter) writeOrWritePointer(t DataType) (int64, error) {
+func (dw *dataWriter) WriteOrWritePointer(t mmdbtype.DataType) (int64, error) {
 	key, err := key(t)
 	if err != nil {
 		return 0, err
 	}
 
 	written, ok := dw.pointers[key]
-	if ok && written.size > written.pointer.writtenSize() {
+	if ok && written.size > written.pointer.WrittenSize() {
 		// Only use a pointer if it would take less space than writing the
 		// type again.
-		return written.pointer.writeTo(dw)
+		return written.pointer.WriteTo(dw)
 	}
 
 	offset := dw.Len()
-	size, err := t.writeTo(dw)
+	size, err := t.WriteTo(dw)
 	if err != nil || ok {
 		return size, err
 	}
 
 	dw.pointers[key] = writtenType{
-		pointer: pointer(offset),
+		pointer: mmdbtype.Pointer(offset),
 		size:    size,
 	}
 	return size, nil
@@ -80,10 +81,10 @@ func (dw *dataWriter) writeOrWritePointer(t DataType) (int64, error) {
 
 // This is just a quick hack. I am sure there is
 // something better
-func key(t DataType) (string, error) {
+func key(t mmdbtype.DataType) (string, error) {
 	bytes, err := json.Marshal(t)
 	if err != nil {
 		return "", errors.Wrap(err, "error marshalling to JSON")
 	}
-	return fmt.Sprintf("%d\x00%s", t.typeNum(), bytes), nil
+	return fmt.Sprintf("%T\x00%s", t, bytes), nil
 }

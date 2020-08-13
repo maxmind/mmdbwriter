@@ -4,6 +4,7 @@ import (
 	"net"
 	"reflect"
 
+	"github.com/maxmind/mmdbwriter/mmdbtype"
 	"github.com/pkg/errors"
 )
 
@@ -20,7 +21,7 @@ const (
 
 type record struct {
 	node       *node
-	value      DataType
+	value      mmdbtype.DataType
 	recordType recordType
 }
 
@@ -34,7 +35,7 @@ func (n *node) insert(
 	ip net.IP,
 	prefixLen int,
 	recordType recordType,
-	value DataType,
+	inserter func(value mmdbtype.DataType) (mmdbtype.DataType, error),
 	insertedNode *node,
 	currentDepth int,
 ) error {
@@ -43,24 +44,24 @@ func (n *node) insert(
 	if newDepth > prefixLen {
 		// Data already exists for the network so insert into all the children.
 		// We will prune duplicate nodes when we finalize.
-		err := n.children[0].insert(ip, prefixLen, recordType, value, insertedNode, newDepth)
+		err := n.children[0].insert(ip, prefixLen, recordType, inserter, insertedNode, newDepth)
 		if err != nil {
 			return err
 		}
-		return n.children[1].insert(ip, prefixLen, recordType, value, insertedNode, newDepth)
+		return n.children[1].insert(ip, prefixLen, recordType, inserter, insertedNode, newDepth)
 	}
 
 	// We haven't reached the network yet.
 	pos := bitAt(ip, currentDepth)
 	r := &n.children[pos]
-	return r.insert(ip, prefixLen, recordType, value, insertedNode, newDepth)
+	return r.insert(ip, prefixLen, recordType, inserter, insertedNode, newDepth)
 }
 
 func (r *record) insert(
 	ip net.IP,
 	prefixLen int,
 	recordType recordType,
-	value DataType,
+	inserter func(value mmdbtype.DataType) (mmdbtype.DataType, error),
 	insertedNode *node,
 	newDepth int,
 ) error {
@@ -70,8 +71,19 @@ func (r *record) insert(
 		// When we add record merging support, it should go here.
 		if newDepth >= prefixLen {
 			r.node = insertedNode
-			r.value = value
 			r.recordType = recordType
+			if recordType == recordTypeData {
+				var err error
+				r.value, err = inserter(r.value)
+				if err != nil {
+					return err
+				}
+				if r.value == nil {
+					r.recordType = recordTypeEmpty
+				}
+			} else {
+				r.value = nil
+			}
 			return nil
 		}
 
@@ -107,7 +119,7 @@ func (r *record) insert(
 		return errors.Errorf("inserting into record type %d not implemented!", r.recordType)
 	}
 
-	return r.node.insert(ip, prefixLen, recordType, value, insertedNode, newDepth)
+	return r.node.insert(ip, prefixLen, recordType, inserter, insertedNode, newDepth)
 }
 
 func (n *node) get(

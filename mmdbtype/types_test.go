@@ -1,6 +1,7 @@
-package mmdbwriter
+package mmdbtype
 
 import (
+	"bytes"
 	"encoding/hex"
 	"math/big"
 	"strings"
@@ -89,14 +90,14 @@ func TestMap(t *testing.T) {
 
 func TestPointers(t *testing.T) {
 	pointers := map[string]DataType{
-		"2000":       pointer(0),
-		"27ff":       pointer(pointerMaxSize0 - 1),
-		"280000":     pointer(pointerMaxSize0),
-		"2fffff":     pointer(pointerMaxSize1 - 1),
-		"30000000":   pointer(pointerMaxSize1),
-		"37ffffff":   pointer(pointerMaxSize2 - 1),
-		"3808080800": pointer(pointerMaxSize2),
-		"38ffffffff": pointer(1<<32 - 1),
+		"2000":       Pointer(0),
+		"27ff":       Pointer(pointerMaxSize0 - 1),
+		"280000":     Pointer(pointerMaxSize0),
+		"2fffff":     Pointer(pointerMaxSize1 - 1),
+		"30000000":   Pointer(pointerMaxSize1),
+		"37ffffff":   Pointer(pointerMaxSize2 - 1),
+		"3808080800": Pointer(pointerMaxSize2),
+		"38ffffffff": Pointer(1<<32 - 1),
 	}
 
 	validateEncoding(t, pointers)
@@ -224,9 +225,9 @@ func powBigInt(bi *big.Int, pow uint) *big.Int {
 
 func validateEncoding(t *testing.T, tests map[string]DataType) {
 	for expected, dt := range tests {
-		w := newDataWriter()
+		w := &dataWriter{Buffer: &bytes.Buffer{}}
 
-		numBytes, err := dt.writeTo(w)
+		numBytes, err := dt.WriteTo(w)
 		require.NoError(t, err)
 
 		assert.Equal(t, int64(len(expected)/2), numBytes, "number of bytes written")
@@ -234,4 +235,12 @@ func validateEncoding(t *testing.T, tests map[string]DataType) {
 
 		assert.Equal(t, expected, actual, "%v - size: %d", dt, dt.size())
 	}
+}
+
+type dataWriter struct {
+	*bytes.Buffer
+}
+
+func (dw *dataWriter) WriteOrWritePointer(t DataType) (int64, error) {
+	return t.WriteTo(dw)
 }
