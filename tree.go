@@ -286,15 +286,15 @@ func (t *Tree) Get(ip net.IP) (*net.IPNet, *mmdbtype.DataType) {
 	}, value
 }
 
-// Finalize prepares the tree for writing. It is not threadsafe.
-func (t *Tree) Finalize() {
+// finalize prepares the tree for writing. It is not threadsafe.
+func (t *Tree) finalize() {
 	_, t.nodeCount = t.root.finalize(0)
 }
 
 // WriteTo writes the tree to the provided Writer.
 func (t *Tree) WriteTo(w io.Writer) (int64, error) {
 	if t.nodeCount == 0 {
-		return 0, errors.New("the Tree is not finalized; run Finalize() before writing")
+		t.finalize()
 	}
 
 	buf := bufio.NewWriter(w)

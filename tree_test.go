@@ -380,7 +380,7 @@ func TestTreeInsertAndGet(t *testing.T) {
 						assert.EqualError(t, err, insert.expectedErrorMsg)
 					}
 
-					tree.Finalize()
+					tree.finalize()
 
 					for _, get := range test.gets {
 						network, value := tree.Get(net.ParseIP(get.ip))
