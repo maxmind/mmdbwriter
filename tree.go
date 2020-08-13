@@ -143,7 +143,7 @@ func (t *Tree) Insert(network *net.IPNet, value mmdbtype.DataType) error {
 }
 
 // InsertFunc will insert the output of the function passed to it. The argument
-// passed to the function is he existing value in the record. The function
+// passed to the function is the existing value in the record. The function
 // should return the mmdbtype.DataType to be inserted. In both cases, a nil value means
 // an empty record.
 //

@@ -245,8 +245,9 @@ func (t Map) WriteTo(w writer) (int64, error) {
 	return numBytes, nil
 }
 
-// Pointer is the MaxMind DB pointer type. It is not exported as it should
-// only be used internally
+// Pointer is the MaxMind DB pointer type for internal use in the writer. You
+// should not use this type in data structures that you pass to methods on
+// mmdbwriter.Tree. Doing so may result in a corrupt database.
 type Pointer uint32
 
 // Copy the value
@@ -517,7 +518,7 @@ func (t Uint64) WriteTo(w writer) (int64, error) {
 // Uint128 is the MaxMind DB unsigned 128-bit integer type
 type Uint128 big.Int
 
-// Copy make a deep copy ov the Uint128
+// Copy make a deep copy of the Uint128
 func (t *Uint128) Copy() DataType {
 	nv := big.Int{}
 	nv.Set((*big.Int)(t))
