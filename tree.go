@@ -6,10 +6,12 @@ import (
 	"bufio"
 	"io"
 	"net"
+	"strings"
 	"time"
 
 	"github.com/maxmind/mmdbwriter/inserter"
 	"github.com/maxmind/mmdbwriter/mmdbtype"
+	"github.com/oschwald/maxminddb-golang"
 	"github.com/pkg/errors"
 )
 
@@ -134,6 +136,80 @@ func New(opts Options) (*Tree, error) {
 		}
 	}
 
+	return tree, nil
+}
+
+// Load an existing database into the writer.
+func Load(path string, opts Options) (*Tree, error) {
+	db, err := maxminddb.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+
+	metadata := db.Metadata
+	if opts.DatabaseType == "" {
+		opts.DatabaseType = metadata.DatabaseType
+	}
+
+	if opts.Description == nil {
+		opts.Description = metadata.Description
+	}
+
+	if opts.IPVersion == 0 {
+		opts.IPVersion = int(metadata.IPVersion)
+	}
+
+	if opts.Languages == nil {
+		opts.Languages = metadata.Languages
+	}
+
+	if opts.RecordSize == 0 {
+		opts.RecordSize = int(metadata.RecordSize)
+	}
+
+	tree, err := New(opts)
+	if err != nil {
+		return nil, err
+	}
+
+	// This is a cache of the records so that we don't need to
+	// unmarshal them multiple times and have multiple copies in
+	// memory.
+	records := map[uintptr]mmdbtype.DataType{}
+
+	networks := db.Networks()
+	for networks.Next() {
+		offset, err := networks.Offset()
+		if err != nil {
+			return nil, err
+		}
+		var network *net.IPNet
+		record, ok := records[offset]
+		if ok {
+			network, err = networks.Network(nil)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			network, err = networks.Network(&record)
+			if err != nil {
+				return nil, err
+			}
+			records[offset] = record
+		}
+
+		err = tree.Insert(network, record)
+
+		// We should return a typed error to check here or, even better, skip
+		// iterating over those networks if aliasing is turned on.
+		if err != nil && !strings.Contains(err.Error(), "which is in an aliased network") {
+			return nil, err
+		}
+	}
+	if err := networks.Err(); err != nil {
+		return nil, err
+	}
 	return tree, nil
 }
 
