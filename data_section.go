@@ -2,11 +2,8 @@ package mmdbwriter
 
 import (
 	"bytes"
-	"encoding/json"
-	"fmt"
 
 	"github.com/maxmind/mmdbwriter/mmdbtype"
-	"github.com/pkg/errors"
 )
 
 type writtenType struct {
@@ -16,26 +13,33 @@ type writtenType struct {
 
 type dataWriter struct {
 	*bytes.Buffer
-	pointers map[string]writtenType
+	pointers  map[string]writtenType
+	keyWriter *keyWriter
 }
 
 func newDataWriter() *dataWriter {
 	return &dataWriter{
-		Buffer:   &bytes.Buffer{},
-		pointers: map[string]writtenType{},
+		Buffer:    &bytes.Buffer{},
+		pointers:  map[string]writtenType{},
+		keyWriter: &keyWriter{Buffer: &bytes.Buffer{}},
 	}
 }
 
 func (dw *dataWriter) maybeWrite(t mmdbtype.DataType) (int, error) {
-	key, err := key(t)
+	key, err := dw.key(t)
 	if err != nil {
 		return 0, err
 	}
 
-	written, ok := dw.pointers[key]
+	written, ok := dw.pointers[string(key)]
 	if ok {
 		return int(written.pointer), nil
 	}
+	// We can't use the pointers[string(key)] optimization below
+	// as the backing buffer for key may change when we call
+	// t.WriteTo. That said, this is the less common code path
+	// so it doesn't matter too much.
+	keyStr := string(key)
 
 	offset := dw.Len()
 	size, err := t.WriteTo(dw)
@@ -48,31 +52,41 @@ func (dw *dataWriter) maybeWrite(t mmdbtype.DataType) (int, error) {
 		size:    size,
 	}
 
-	dw.pointers[key] = written
+	dw.pointers[keyStr] = written
 
 	return int(written.pointer), nil
 }
 
 func (dw *dataWriter) WriteOrWritePointer(t mmdbtype.DataType) (int64, error) {
-	key, err := key(t)
+	key, err := dw.key(t)
 	if err != nil {
 		return 0, err
 	}
 
-	written, ok := dw.pointers[key]
+	written, ok := dw.pointers[string(key)]
 	if ok && written.size > written.pointer.WrittenSize() {
 		// Only use a pointer if it would take less space than writing the
 		// type again.
 		return written.pointer.WriteTo(dw)
 	}
+	// We can't use the pointers[string(key)] optimization below
+	// as the backing buffer for key may change when we call
+	// t.WriteTo. That said, this is the less common code path
+	// so it doesn't matter too much.
+	keyStr := string(key)
 
+	// TODO: A possible optimization here for simple types would be to just
+	// write key to the dataWriter. This won't necessarily work for Map and
+	// Slice though as they may have internal pointers missing from key.
+	// I briefly tested this and didn't see much difference, but it might
+	// be worth exploring more.
 	offset := dw.Len()
 	size, err := t.WriteTo(dw)
 	if err != nil || ok {
 		return size, err
 	}
 
-	dw.pointers[key] = writtenType{
+	dw.pointers[keyStr] = writtenType{
 		pointer: mmdbtype.Pointer(offset),
 		size:    size,
 	}
@@ -81,10 +95,21 @@ func (dw *dataWriter) WriteOrWritePointer(t mmdbtype.DataType) (int64, error) {
 
 // This is just a quick hack. I am sure there is
 // something better
-func key(t mmdbtype.DataType) (string, error) {
-	bytes, err := json.Marshal(t)
+func (dw *dataWriter) key(t mmdbtype.DataType) ([]byte, error) {
+	dw.keyWriter.Truncate(0)
+	_, err := t.WriteTo(dw.keyWriter)
 	if err != nil {
-		return "", errors.Wrap(err, "error marshalling to JSON")
+		return nil, err
 	}
-	return fmt.Sprintf("%T\x00%s", t, bytes), nil
+	return dw.keyWriter.Bytes(), nil
+}
+
+// keyWriter is similar to dataWriter but it will never use pointers. This
+// will produce a unique key for the type.
+type keyWriter struct {
+	*bytes.Buffer
+}
+
+func (kw *keyWriter) WriteOrWritePointer(t mmdbtype.DataType) (int64, error) {
+	return t.WriteTo(kw)
 }
