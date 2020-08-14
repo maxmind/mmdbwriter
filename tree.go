@@ -6,7 +6,6 @@ import (
 	"bufio"
 	"io"
 	"net"
-	"strings"
 	"time"
 
 	"github.com/maxmind/mmdbwriter/inserter"
@@ -203,7 +202,7 @@ func Load(path string, opts Options) (*Tree, error) {
 
 		// We should return a typed error to check here or, even better, skip
 		// iterating over those networks if aliasing is turned on.
-		if err != nil && !strings.Contains(err.Error(), "which is in an aliased network") {
+		if err != nil {
 			return nil, err
 		}
 	}
