@@ -75,7 +75,6 @@ func main() {
 			}
 		}
 	}
-	writer.Finalize()
 
 	fh, err := os.Create("out.mmdb")
 	if err != nil {
