@@ -11,14 +11,42 @@ import (
 // it public, but we should wait until the API stabilized here and in
 // maxminddb first.
 
+type stackValue struct {
+	value   mmdbtype.DataType
+	curSize int
+}
+
 type deserializer struct {
-	stack []mmdbtype.DataType
-	rv    mmdbtype.DataType
-	key   *mmdbtype.String
+	stack      []*stackValue
+	rv         mmdbtype.DataType
+	key        *mmdbtype.String
+	lastOffset uintptr
+	cache      map[uintptr]mmdbtype.DataType
+}
+
+func newDeserializer() *deserializer {
+	return &deserializer{
+		cache:      map[uintptr]mmdbtype.DataType{},
+		lastOffset: noOffset,
+	}
+}
+
+const noOffset uintptr = ^uintptr(0)
+
+func (d *deserializer) ShouldSkip(offset uintptr) (bool, error) {
+	v, ok := d.cache[offset]
+	if ok {
+		d.lastOffset = noOffset
+		return true, d.simpleAdd(v)
+	}
+	d.lastOffset = offset
+	return false, nil
 }
 
 func (d *deserializer) StartSlice(size uint) error {
-	return d.add(make(mmdbtype.Slice, 0, size))
+	// We make the slice its finalize size to avoid
+	// appending, which could interfere with the caching.
+	return d.add(make(mmdbtype.Slice, size))
 }
 
 func (d *deserializer) StartMap(size uint) error {
@@ -74,11 +102,12 @@ func (d *deserializer) Float32(v float32) error {
 	return d.add(mmdbtype.Float32(v))
 }
 
-func (d *deserializer) add(v mmdbtype.DataType) error {
+func (d *deserializer) simpleAdd(v mmdbtype.DataType) error {
 	if len(d.stack) == 0 {
 		d.rv = v
 	} else {
-		switch parent := d.stack[len(d.stack)-1].(type) {
+		top := d.stack[len(d.stack)-1]
+		switch parent := top.value.(type) {
 		case mmdbtype.Map:
 			if d.key == nil {
 				key, ok := v.(mmdbtype.String)
@@ -86,20 +115,36 @@ func (d *deserializer) add(v mmdbtype.DataType) error {
 					return errors.Errorf("expected a String Map key but received %T", v)
 				}
 				d.key = &key
-				return nil
+			} else {
+				parent[*d.key] = v
+				d.key = nil
+				top.curSize++
 			}
-			parent[*d.key] = v
-			d.key = nil
+
 		case mmdbtype.Slice:
-			d.stack[len(d.stack)-1] = append(parent, v)
+			parent[top.curSize] = v
+			top.curSize++
 		default:
 		}
+	}
+	return nil
+}
+
+func (d *deserializer) add(v mmdbtype.DataType) error {
+	err := d.simpleAdd(v)
+	if err != nil {
+		return err
 	}
 
 	switch v := v.(type) {
 	case mmdbtype.Map, mmdbtype.Slice:
-		d.stack = append(d.stack, v)
+		d.stack = append(d.stack, &stackValue{value: v})
 	default:
+	}
+
+	if d.lastOffset != noOffset {
+		d.cache[d.lastOffset] = v
+		d.lastOffset = noOffset
 	}
 	return nil
 }

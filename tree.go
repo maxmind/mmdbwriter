@@ -172,14 +172,14 @@ func Load(path string, opts Options) (*Tree, error) {
 		return nil, err
 	}
 
-	dser := deserializer{}
+	dser := newDeserializer()
 
 	networks := db.Networks(maxminddb.SkipAliasedNetworks)
 	for networks.Next() {
 		var network *net.IPNet
 
 		dser.clear()
-		network, err = networks.Network(&dser)
+		network, err = networks.Network(dser)
 		if err != nil {
 			return nil, err
 		}
