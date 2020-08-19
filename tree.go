@@ -172,36 +172,19 @@ func Load(path string, opts Options) (*Tree, error) {
 		return nil, err
 	}
 
-	// This is a cache of the records so that we don't need to
-	// unmarshal them multiple times and have multiple copies in
-	// memory.
-	records := map[uintptr]mmdbtype.DataType{}
+	dser := deserializer{}
 
-	networks := db.Networks()
+	networks := db.Networks(maxminddb.SkipAliasedNetworks)
 	for networks.Next() {
-		offset, err := networks.Offset()
+		var network *net.IPNet
+
+		dser.clear()
+		network, err = networks.Network(&dser)
 		if err != nil {
 			return nil, err
 		}
-		var network *net.IPNet
-		record, ok := records[offset]
-		if ok {
-			network, err = networks.Network(nil)
-			if err != nil {
-				return nil, err
-			}
-		} else {
-			network, err = networks.Network(&record)
-			if err != nil {
-				return nil, err
-			}
-			records[offset] = record
-		}
 
-		err = tree.Insert(network, record)
-
-		// We should return a typed error to check here or, even better, skip
-		// iterating over those networks if aliasing is turned on.
+		err = tree.Insert(network, dser.rv)
 		if err != nil {
 			return nil, err
 		}
