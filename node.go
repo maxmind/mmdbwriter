@@ -142,7 +142,7 @@ func (n *node) get(
 // sets the node number for the node. It returns a record pointer that is nil if
 // the node is not mergeable or the value of the merged record if it can be merged.
 // The second return value is the current node count, including the subtree.
-func (n *node) finalize(currentNum int) (*record, int) {
+func (n *node) finalize(currentNum int, dataWriter *dataWriter) (*record, int) {
 	n.nodeNum = currentNum
 	currentNum++
 
@@ -150,15 +150,17 @@ func (n *node) finalize(currentNum int) (*record, int) {
 		switch n.children[i].recordType {
 		case recordTypeFixedNode:
 			// We don't consider merging for fixed nodes
-			_, currentNum = n.children[i].node.finalize(currentNum)
+			_, currentNum = n.children[i].node.finalize(currentNum, dataWriter)
 		case recordTypeNode:
-			record, newCurrentNum := n.children[i].node.finalize(currentNum)
+			record, newCurrentNum := n.children[i].node.finalize(currentNum, dataWriter)
 			if record == nil {
 				// nothing to merge. Use current number from child.
 				currentNum = newCurrentNum
 			} else {
 				n.children[i] = *record
 			}
+		case recordTypeData:
+			dataWriter.maybeWrite(n.children[i].value)
 		default:
 		}
 	}

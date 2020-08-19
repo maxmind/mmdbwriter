@@ -78,8 +78,9 @@ type Tree struct {
 	recordSize   int
 	root         *node
 	treeDepth    int
-	// This is set when the tree is finalized
-	nodeCount int
+	// These are set when the tree is finalized
+	nodeCount  int
+	dataWriter *dataWriter
 }
 
 // New creates a new Tree.
@@ -226,8 +227,9 @@ func (t *Tree) insert(
 	inserter func(value mmdbtype.DataType) (mmdbtype.DataType, error),
 	node *node,
 ) error {
-	// We set this to 0 so that the tree must be finalized again.
+	// We set these to 0 and nil so that the tree must be finalized again.
 	t.nodeCount = 0
+	t.dataWriter = nil
 
 	prefixLen, _ := network.Mask.Size()
 
@@ -346,7 +348,8 @@ func (t *Tree) Get(ip net.IP) (*net.IPNet, *mmdbtype.DataType) {
 
 // finalize prepares the tree for writing. It is not threadsafe.
 func (t *Tree) finalize() {
-	_, t.nodeCount = t.root.finalize(0)
+	t.dataWriter = newDataWriter()
+	_, t.nodeCount = t.root.finalize(0, t.dataWriter)
 }
 
 // WriteTo writes the tree to the provided Writer.
@@ -362,9 +365,7 @@ func (t *Tree) WriteTo(w io.Writer) (int64, error) {
 	// WriteByte, but we should probably do some testing.
 	recordBuf := make([]byte, 2*t.recordSize/8)
 
-	dataWriter := newDataWriter()
-
-	nodeCount, numBytes, err := t.writeNode(buf, t.root, dataWriter, recordBuf)
+	nodeCount, numBytes, err := t.writeNode(buf, t.root, recordBuf)
 	if err != nil {
 		_ = buf.Flush()
 		return numBytes, err
@@ -387,7 +388,7 @@ func (t *Tree) WriteTo(w io.Writer) (int64, error) {
 		return numBytes, errors.Wrap(err, "error writing data section separator")
 	}
 
-	nb64, err := dataWriter.WriteTo(buf)
+	nb64, err := t.dataWriter.WriteTo(buf)
 	numBytes += nb64
 	if err != nil {
 		_ = buf.Flush()
@@ -426,10 +427,9 @@ func (t *Tree) WriteTo(w io.Writer) (int64, error) {
 func (t *Tree) writeNode(
 	w io.Writer,
 	n *node,
-	dataWriter *dataWriter,
 	recordBuf []byte,
 ) (int, int64, error) {
-	err := t.copyNode(recordBuf, n, dataWriter)
+	err := t.copyNode(recordBuf, n)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -450,7 +450,6 @@ func (t *Tree) writeNode(
 		addedNodes, addedBytes, err := t.writeNode(
 			w,
 			n.children[i].node,
-			dataWriter,
 			recordBuf,
 		)
 		nodesWritten += addedNodes
@@ -463,13 +462,10 @@ func (t *Tree) writeNode(
 	return nodesWritten, numBytes, nil
 }
 
-func (t *Tree) recordValue(
-	r record,
-	dataWriter *dataWriter,
-) (int, error) {
+func (t *Tree) recordValue(r record) (int, error) {
 	switch r.recordType {
 	case recordTypeData:
-		offset, err := dataWriter.maybeWrite(r.value)
+		offset, err := t.dataWriter.getOffset(r.value)
 		return t.nodeCount + len(dataSectionSeparator) + offset, err
 	case recordTypeEmpty, recordTypeReserved:
 		return t.nodeCount, nil
@@ -484,12 +480,12 @@ const (
 	maxRecord32Bit = 1 << 32
 )
 
-func (t *Tree) copyNode(buf []byte, n *node, dataWriter *dataWriter) error {
-	left, err := t.recordValue(n.children[0], dataWriter)
+func (t *Tree) copyNode(buf []byte, n *node) error {
+	left, err := t.recordValue(n.children[0])
 	if err != nil {
 		return err
 	}
-	right, err := t.recordValue(n.children[1], dataWriter)
+	right, err := t.recordValue(n.children[1])
 	if err != nil {
 		return err
 	}

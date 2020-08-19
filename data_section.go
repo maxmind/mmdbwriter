@@ -2,6 +2,7 @@ package mmdbwriter
 
 import (
 	"bytes"
+	"errors"
 
 	"github.com/maxmind/mmdbwriter/mmdbtype"
 )
@@ -55,6 +56,19 @@ func (dw *dataWriter) maybeWrite(t mmdbtype.DataType) (int, error) {
 	dw.pointers[keyStr] = written
 
 	return int(written.pointer), nil
+}
+
+func (dw *dataWriter) getOffset(t mmdbtype.DataType) (int, error) {
+	key, err := dw.key(t)
+	if err != nil {
+		return 0, err
+	}
+
+	written, ok := dw.pointers[string(key)]
+	if ok {
+		return int(written.pointer), nil
+	}
+	return 0, errors.New("did not find offset for data value")
 }
 
 func (dw *dataWriter) WriteOrWritePointer(t mmdbtype.DataType) (int64, error) {
