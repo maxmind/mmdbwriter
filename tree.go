@@ -478,6 +478,12 @@ func (t *Tree) recordValue(
 	}
 }
 
+const (
+	maxRecord24Bit = 1 << 24
+	maxRecord28Bit = 1 << 28
+	maxRecord32Bit = 1 << 32
+)
+
 func (t *Tree) copyNode(buf []byte, n *node, dataWriter *dataWriter) error {
 	left, err := t.recordValue(n.children[0], dataWriter)
 	if err != nil {
@@ -492,6 +498,13 @@ func (t *Tree) copyNode(buf []byte, n *node, dataWriter *dataWriter) error {
 
 	switch t.recordSize {
 	case 24:
+		if left >= maxRecord24Bit || right >= maxRecord24Bit {
+			return errors.Errorf(
+				"exceeded record capacity; attempted to write (%d, %d) to node with 24 bit record size",
+				left,
+				right,
+			)
+		}
 		buf[0] = byte((left >> 16) & 0xFF)
 		buf[1] = byte((left >> 8) & 0xFF)
 		buf[2] = byte(left & 0xFF)
@@ -499,6 +512,13 @@ func (t *Tree) copyNode(buf []byte, n *node, dataWriter *dataWriter) error {
 		buf[4] = byte((right >> 8) & 0xFF)
 		buf[5] = byte(right & 0xFF)
 	case 28:
+		if left >= maxRecord28Bit || right >= maxRecord28Bit {
+			return errors.Errorf(
+				"exceeded record capacity; attempted to write (%d, %d) to node with 28 bit record size",
+				left,
+				right,
+			)
+		}
 		buf[0] = byte((left >> 16) & 0xFF)
 		buf[1] = byte((left >> 8) & 0xFF)
 		buf[2] = byte(left & 0xFF)
@@ -507,6 +527,13 @@ func (t *Tree) copyNode(buf []byte, n *node, dataWriter *dataWriter) error {
 		buf[5] = byte((right >> 8) & 0xFF)
 		buf[6] = byte(right & 0xFF)
 	case 32:
+		if left >= maxRecord32Bit || right >= maxRecord32Bit {
+			return errors.Errorf(
+				"exceeded record capacity; attempted to write (%d, %d) to node with 32 bit record size",
+				left,
+				right,
+			)
+		}
 		buf[0] = byte((left >> 24) & 0xFF)
 		buf[1] = byte((left >> 16) & 0xFF)
 		buf[2] = byte((left >> 8) & 0xFF)
