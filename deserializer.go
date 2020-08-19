@@ -91,7 +91,7 @@ func (d *deserializer) add(v mmdbtype.DataType) error {
 			parent[*d.key] = v
 			d.key = nil
 		case mmdbtype.Slice:
-			parent = append(parent, v)
+			d.stack[len(d.stack)-1] = append(parent, v)
 		default:
 		}
 	}
