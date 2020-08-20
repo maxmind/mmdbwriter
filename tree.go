@@ -430,7 +430,16 @@ func (t *Tree) copyNode(buf []byte, n *node, dataWriter *dataWriter) error {
 		return err
 	}
 
-	// XXX check max size
+	maxRecord := 1 << t.recordSize
+	if left >= maxRecord || right >= maxRecord {
+		return errors.Errorf(
+			"exceeded record capacity by attempting to write (%d, %d) to node with %d bit record size; "+
+				"try increasing RecordSize or reducing the size of the database",
+			left,
+			right,
+			t.recordSize,
+		)
+	}
 
 	switch t.recordSize {
 	case 24:
