@@ -10,6 +10,7 @@ import (
 
 	"github.com/maxmind/mmdbwriter/inserter"
 	"github.com/maxmind/mmdbwriter/mmdbtype"
+	"github.com/oschwald/maxminddb-golang"
 	"github.com/pkg/errors"
 )
 
@@ -134,6 +135,63 @@ func New(opts Options) (*Tree, error) {
 		}
 	}
 
+	return tree, nil
+}
+
+// Load an existing database into the writer.
+func Load(path string, opts Options) (*Tree, error) {
+	db, err := maxminddb.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+
+	metadata := db.Metadata
+	if opts.DatabaseType == "" {
+		opts.DatabaseType = metadata.DatabaseType
+	}
+
+	if opts.Description == nil {
+		opts.Description = metadata.Description
+	}
+
+	if opts.IPVersion == 0 {
+		opts.IPVersion = int(metadata.IPVersion)
+	}
+
+	if opts.Languages == nil {
+		opts.Languages = metadata.Languages
+	}
+
+	if opts.RecordSize == 0 {
+		opts.RecordSize = int(metadata.RecordSize)
+	}
+
+	tree, err := New(opts)
+	if err != nil {
+		return nil, err
+	}
+
+	dser := newDeserializer()
+
+	networks := db.Networks(maxminddb.SkipAliasedNetworks)
+	for networks.Next() {
+		var network *net.IPNet
+
+		dser.clear()
+		network, err = networks.Network(dser)
+		if err != nil {
+			return nil, err
+		}
+
+		err = tree.Insert(network, dser.rv)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if err := networks.Err(); err != nil {
+		return nil, err
+	}
 	return tree, nil
 }
 

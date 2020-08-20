@@ -3,8 +3,10 @@ package mmdbwriter
 import (
 	"bytes"
 	"fmt"
+	"io/ioutil"
 	"math/big"
 	"net"
+	"os"
 	"testing"
 
 	"github.com/maxmind/mmdbwriter/mmdbtype"
@@ -415,6 +417,30 @@ func TestTreeInsertAndGet(t *testing.T) {
 					assert.NoError(t, reader.Verify(), "verify database format")
 
 					assert.Equal(t, int64(buf.Len()), numBytes, "number of bytes")
+
+					f, err := ioutil.TempFile("", "mmdbwriter")
+					require.NoError(t, err)
+					defer func() { require.NoError(t, os.Remove(f.Name())) }()
+
+					bufBytes := buf.Bytes()
+
+					_, err = f.Write(bufBytes)
+					require.NoError(t, err)
+					require.NoError(t, f.Close())
+
+					loadBuf := &bytes.Buffer{}
+					tree, err = Load(f.Name(),
+						Options{
+							DisableIPv4Aliasing:     test.disableIPv4Aliasing,
+							IncludeReservedNetworks: test.includeReservedNetworks,
+						},
+					)
+					require.NoError(t, err)
+
+					_, err = tree.WriteTo(loadBuf)
+					require.NoError(t, err)
+
+					assert.Equal(t, bufBytes, loadBuf.Bytes(), "Load + WriteTo generates an identical database")
 				})
 			}
 		})
