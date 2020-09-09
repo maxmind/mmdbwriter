@@ -196,6 +196,8 @@ func Load(path string, opts Options) (*Tree, error) {
 }
 
 // Insert a data value into the tree.
+//
+// This is not safe to call from multiple threads.
 func (t *Tree) Insert(network *net.IPNet, value mmdbtype.DataType) error {
 	return t.InsertFunc(network, inserter.ReplaceWith(value))
 }
@@ -213,6 +215,8 @@ func (t *Tree) Insert(network *net.IPNet, value mmdbtype.DataType) error {
 //
 // The function will be called multiple times per insert when the network
 // has multiple preexisting records associated with it.
+//
+// This is not safe to call from multiple threads.
 func (t *Tree) InsertFunc(
 	network *net.IPNet,
 	inserter func(value mmdbtype.DataType) (mmdbtype.DataType, error),
