@@ -4,7 +4,6 @@ import (
 	"bytes"
 
 	"github.com/maxmind/mmdbwriter/mmdbtype"
-	"github.com/pkg/errors"
 )
 
 type writtenType struct {
@@ -28,29 +27,14 @@ func newDataWriter(dataMap *dataMap) *dataWriter {
 	}
 }
 
-func (dw *dataWriter) maybeWrite(k dataMapKey) (int, error) {
-	t := dw.dataMap.get(k)
-	if t == nil {
-		return 0, errors.Errorf("unable to find value for %s in dataMap", k)
-	}
-
-	key, err := dw.keyWriter.key(t)
-	if err != nil {
-		return 0, err
-	}
-
+func (dw *dataWriter) maybeWrite(key dataMapKey) (int, error) {
 	written, ok := dw.pointers[string(key)]
 	if ok {
 		return int(written.pointer), nil
 	}
-	// We can't use the pointers[string(key)] optimization below
-	// as the backing buffer for key may change when we call
-	// t.WriteTo. That said, this is the less common code path
-	// so it doesn't matter too much.
-	keyStr := string(key)
 
 	offset := dw.Len()
-	size, err := t.WriteTo(dw)
+	size, err := dw.dataMap.get(key).WriteTo(dw)
 	if err != nil {
 		return 0, err
 	}
@@ -60,7 +44,7 @@ func (dw *dataWriter) maybeWrite(k dataMapKey) (int, error) {
 		size:    size,
 	}
 
-	dw.pointers[keyStr] = written
+	dw.pointers[string(key)] = written
 
 	return int(written.pointer), nil
 }
