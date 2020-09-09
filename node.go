@@ -2,7 +2,6 @@ package mmdbwriter
 
 import (
 	"net"
-	"reflect"
 
 	"github.com/maxmind/mmdbwriter/mmdbtype"
 	"github.com/pkg/errors"
@@ -21,7 +20,7 @@ const (
 
 type record struct {
 	node       *node
-	value      mmdbtype.DataType
+	valueKey   dataMapKey
 	recordType recordType
 }
 
@@ -37,6 +36,8 @@ type insertRecord struct {
 	recordType   recordType
 	inserter     func(value mmdbtype.DataType) (mmdbtype.DataType, error)
 	insertedNode *node
+
+	dataMap *dataMap
 }
 
 func (n *node) insert(iRec insertRecord, currentDepth int) error {
@@ -70,16 +71,23 @@ func (r *record) insert(
 			r.node = iRec.insertedNode
 			r.recordType = iRec.recordType
 			if iRec.recordType == recordTypeData {
-				var err error
-				r.value, err = iRec.inserter(r.value)
+				existingValue := iRec.dataMap.get(r.valueKey)
+
+				value, err := iRec.inserter(existingValue)
 				if err != nil {
 					return err
 				}
-				if r.value == nil {
+				if value == nil {
 					r.recordType = recordTypeEmpty
+				} else {
+					key, err := iRec.dataMap.store(value)
+					if err != nil {
+						return err
+					}
+					r.valueKey = key
 				}
 			} else {
-				r.value = nil
+				r.valueKey = noDataMapKey
 			}
 			return nil
 		}
@@ -87,7 +95,7 @@ func (r *record) insert(
 		// We are splitting this record so we create two duplicate child
 		// records.
 		r.node = &node{children: [2]record{*r, *r}}
-		r.value = nil
+		r.valueKey = noDataMapKey
 		r.recordType = recordTypeNode
 	case recordTypeReserved:
 		if iRec.prefixLen >= newDepth {
@@ -163,10 +171,10 @@ func (n *node) finalize(currentNum int) (*record, int) {
 	if n.children[0].recordType == n.children[1].recordType &&
 		(n.children[0].recordType == recordTypeEmpty ||
 			(n.children[0].recordType == recordTypeData &&
-				reflect.DeepEqual(n.children[0].value, n.children[1].value))) {
+				n.children[0].valueKey == n.children[1].valueKey)) {
 		return &record{
 			recordType: n.children[0].recordType,
-			value:      n.children[0].value,
+			valueKey:   n.children[0].valueKey,
 		}, currentNum
 	}
 

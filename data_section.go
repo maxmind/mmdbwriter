@@ -4,6 +4,7 @@ import (
 	"bytes"
 
 	"github.com/maxmind/mmdbwriter/mmdbtype"
+	"github.com/pkg/errors"
 )
 
 type writtenType struct {
@@ -13,19 +14,26 @@ type writtenType struct {
 
 type dataWriter struct {
 	*bytes.Buffer
+	dataMap   *dataMap
 	pointers  map[string]writtenType
 	keyWriter *keyWriter
 }
 
-func newDataWriter() *dataWriter {
+func newDataWriter(dataMap *dataMap) *dataWriter {
 	return &dataWriter{
 		Buffer:    &bytes.Buffer{},
+		dataMap:   dataMap,
 		pointers:  map[string]writtenType{},
 		keyWriter: newKeyWriter(),
 	}
 }
 
-func (dw *dataWriter) maybeWrite(t mmdbtype.DataType) (int, error) {
+func (dw *dataWriter) maybeWrite(k dataMapKey) (int, error) {
+	t := dw.dataMap.get(k)
+	if t == nil {
+		return 0, errors.Errorf("unable to find value for %s in dataMap", k)
+	}
+
 	key, err := dw.keyWriter.key(t)
 	if err != nil {
 		return 0, err

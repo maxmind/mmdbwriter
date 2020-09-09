@@ -72,6 +72,7 @@ type Options struct {
 type Tree struct {
 	buildEpoch   int64
 	databaseType string
+	dataMap      *dataMap
 	description  map[string]string
 	ipVersion    int
 	languages    []string
@@ -86,6 +87,7 @@ type Tree struct {
 func New(opts Options) (*Tree, error) {
 	tree := &Tree{
 		buildEpoch:   time.Now().Unix(),
+		dataMap:      newDataMap(),
 		databaseType: opts.DatabaseType,
 		description:  map[string]string{},
 		ipVersion:    6,
@@ -255,6 +257,8 @@ func (t *Tree) insert(
 			recordType:   recordType,
 			inserter:     inserter,
 			insertedNode: node,
+
+			dataMap: t.dataMap,
 		},
 		0,
 	)
@@ -348,7 +352,8 @@ func (t *Tree) Get(ip net.IP) (*net.IPNet, *mmdbtype.DataType) {
 
 	var value *mmdbtype.DataType
 	if r.recordType == recordTypeData {
-		value = &r.value
+		v := t.dataMap.get(r.valueKey)
+		value = &v
 	}
 
 	return &net.IPNet{
@@ -375,7 +380,7 @@ func (t *Tree) WriteTo(w io.Writer) (int64, error) {
 	// WriteByte, but we should probably do some testing.
 	recordBuf := make([]byte, 2*t.recordSize/8)
 
-	dataWriter := newDataWriter()
+	dataWriter := newDataWriter(t.dataMap)
 
 	nodeCount, numBytes, err := t.writeNode(buf, t.root, dataWriter, recordBuf)
 	if err != nil {
@@ -414,7 +419,7 @@ func (t *Tree) WriteTo(w io.Writer) (int64, error) {
 		return numBytes, errors.Wrap(err, "error writing metadata start marker")
 	}
 
-	metadataWriter := newDataWriter()
+	metadataWriter := newDataWriter(dataWriter.dataMap)
 	_, err = t.writeMetadata(metadataWriter)
 	if err != nil {
 		_ = buf.Flush()
@@ -482,7 +487,7 @@ func (t *Tree) recordValue(
 ) (int, error) {
 	switch r.recordType {
 	case recordTypeData:
-		offset, err := dataWriter.maybeWrite(r.value)
+		offset, err := dataWriter.maybeWrite(r.valueKey)
 		return t.nodeCount + len(dataSectionSeparator) + offset, err
 	case recordTypeEmpty, recordTypeReserved:
 		return t.nodeCount, nil
