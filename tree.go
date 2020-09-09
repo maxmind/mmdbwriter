@@ -322,8 +322,9 @@ func (t *Tree) insertReservedNetworks() error {
 	return nil
 }
 
-// Get the value for the given IP address from the tree.
-func (t *Tree) Get(ip net.IP) (*net.IPNet, *mmdbtype.DataType) {
+// Get the value for the given IP address from the tree. If the nil interface
+// is returned, that means the tree does not have a value for the IP.
+func (t *Tree) Get(ip net.IP) (*net.IPNet, mmdbtype.DataType) {
 	lookupIP := ip
 
 	if t.treeDepth == 128 {
@@ -350,10 +351,9 @@ func (t *Tree) Get(ip net.IP) (*net.IPNet, *mmdbtype.DataType) {
 
 	mask := net.CIDRMask(prefixLen, t.treeDepth)
 
-	var value *mmdbtype.DataType
+	var value mmdbtype.DataType
 	if r.recordType == recordTypeData {
-		v := t.dataMap.get(r.valueKey)
-		value = &v
+		value = t.dataMap.get(r.valueKey)
 	}
 
 	return &net.IPNet{

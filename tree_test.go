@@ -29,7 +29,7 @@ type testInsertError struct {
 type testGet struct {
 	ip                  string
 	expectedNetwork     string
-	expectedGetValue    *mmdbtype.DataType
+	expectedGetValue    mmdbtype.DataType
 	expectedLookupValue *interface{}
 }
 
@@ -127,7 +127,7 @@ func TestTreeInsertAndGet(t *testing.T) {
 				{
 					ip:                  "1.1.1.1",
 					expectedNetwork:     "0.0.0.0/1",
-					expectedGetValue:    s2dtp("string"),
+					expectedGetValue:    s2dp("string"),
 					expectedLookupValue: s2ip("string"),
 				},
 			},
@@ -146,7 +146,7 @@ func TestTreeInsertAndGet(t *testing.T) {
 				{
 					ip:                  "8000::",
 					expectedNetwork:     "8000::/1",
-					expectedGetValue:    s2dtp("string"),
+					expectedGetValue:    s2dp("string"),
 					expectedLookupValue: s2ip("string"),
 				},
 			},
@@ -169,13 +169,13 @@ func TestTreeInsertAndGet(t *testing.T) {
 				{
 					ip:                  "2003::",
 					expectedNetwork:     "2003::/16",
-					expectedGetValue:    s2dtp("new string"),
+					expectedGetValue:    s2dp("new string"),
 					expectedLookupValue: s2ip("new string"),
 				},
 				{
 					ip:                  "2003:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
 					expectedNetwork:     "2003::/16",
-					expectedGetValue:    s2dtp("new string"),
+					expectedGetValue:    s2dp("new string"),
 					expectedLookupValue: s2ip("new string"),
 				},
 			},
@@ -198,19 +198,19 @@ func TestTreeInsertAndGet(t *testing.T) {
 				{
 					ip:                  "2003::",
 					expectedNetwork:     "2003::/20",
-					expectedGetValue:    s2dtp("string"),
+					expectedGetValue:    s2dp("string"),
 					expectedLookupValue: s2ip("string"),
 				},
 				{
 					ip:                  "2003:1000::",
 					expectedNetwork:     "2003:1000::/32",
-					expectedGetValue:    s2dtp("new string"),
+					expectedGetValue:    s2dp("new string"),
 					expectedLookupValue: s2ip("new string"),
 				},
 				{
 					ip:                  "2003:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
 					expectedNetwork:     "2003:8000::/17",
-					expectedGetValue:    s2dtp("string"),
+					expectedGetValue:    s2dp("string"),
 					expectedLookupValue: s2ip("string"),
 				},
 			},
@@ -230,13 +230,13 @@ func TestTreeInsertAndGet(t *testing.T) {
 				{
 					ip:                  "1.1.1.1",
 					expectedNetwork:     "1.1.1.1/32",
-					expectedGetValue:    s2dtp("string"),
+					expectedGetValue:    s2dp("string"),
 					expectedLookupValue: s2ip("string"),
 				},
 				{
 					ip:                  "::1.1.1.1",
 					expectedNetwork:     "::101:101/128",
-					expectedGetValue:    s2dtp("string"),
+					expectedGetValue:    s2dp("string"),
 					expectedLookupValue: s2ip("string"),
 				},
 				{
@@ -273,7 +273,7 @@ func TestTreeInsertAndGet(t *testing.T) {
 				{
 					ip:                  "1.1.1.1",
 					expectedNetwork:     "1.0.0.0/8",
-					expectedGetValue:    s2dtp("string"),
+					expectedGetValue:    s2dp("string"),
 					expectedLookupValue: s2ip("string"),
 				},
 				{
@@ -285,7 +285,7 @@ func TestTreeInsertAndGet(t *testing.T) {
 					// This is in an aliased network
 					ip:                  "2002:100:100::",
 					expectedNetwork:     "2002:100::/24",
-					expectedGetValue:    s2dtp("string"),
+					expectedGetValue:    s2dp("string"),
 					expectedLookupValue: s2ip("string"),
 				},
 			},
@@ -307,13 +307,13 @@ func TestTreeInsertAndGet(t *testing.T) {
 				{
 					ip:                  "1.1.1.0",
 					expectedNetwork:     "1.1.1.0/24",
-					expectedGetValue:    &allTypesGetSubmap,
+					expectedGetValue:    allTypesGetSubmap,
 					expectedLookupValue: &allTypesLookupSubmap,
 				},
 				{
 					ip:                  "1.1.2.128",
 					expectedNetwork:     "1.1.2.0/24",
-					expectedGetValue:    &allTypesGetRecord,
+					expectedGetValue:    allTypesGetRecord,
 					expectedLookupValue: &allTypesLookupRecord,
 				},
 			},
@@ -335,13 +335,9 @@ func TestTreeInsertAndGet(t *testing.T) {
 			},
 			gets: []testGet{
 				{
-					ip:              "1.1.0.0",
-					expectedNetwork: "1.1.0.0/23",
-					expectedGetValue: func() *mmdbtype.DataType {
-						v := mmdbtype.DataType(
-							mmdbtype.Map{"a": mmdbtype.Slice{mmdbtype.Uint64(1), mmdbtype.Bytes{1, 2}}})
-						return &v
-					}(),
+					ip:               "1.1.0.0",
+					expectedNetwork:  "1.1.0.0/23",
+					expectedGetValue: mmdbtype.Map{"a": mmdbtype.Slice{mmdbtype.Uint64(1), mmdbtype.Bytes{1, 2}}},
 					expectedLookupValue: func() *interface{} {
 						v := interface{}(map[string]interface{}{"a": []interface{}{uint64(1), []byte{1, 2}}})
 						return &v
@@ -452,7 +448,6 @@ func s2ip(v string) *interface{} {
 	return &i
 }
 
-func s2dtp(v string) *mmdbtype.DataType {
-	ts := mmdbtype.DataType(mmdbtype.String(v))
-	return &ts
+func s2dp(v string) mmdbtype.DataType {
+	return mmdbtype.DataType(mmdbtype.String(v))
 }
