@@ -21,12 +21,12 @@ func newDataWriter() *dataWriter {
 	return &dataWriter{
 		Buffer:    &bytes.Buffer{},
 		pointers:  map[string]writtenType{},
-		keyWriter: &keyWriter{Buffer: &bytes.Buffer{}},
+		keyWriter: newKeyWriter(),
 	}
 }
 
 func (dw *dataWriter) maybeWrite(t mmdbtype.DataType) (int, error) {
-	key, err := dw.key(t)
+	key, err := dw.keyWriter.key(t)
 	if err != nil {
 		return 0, err
 	}
@@ -58,7 +58,7 @@ func (dw *dataWriter) maybeWrite(t mmdbtype.DataType) (int, error) {
 }
 
 func (dw *dataWriter) WriteOrWritePointer(t mmdbtype.DataType) (int64, error) {
-	key, err := dw.key(t)
+	key, err := dw.keyWriter.key(t)
 	if err != nil {
 		return 0, err
 	}
@@ -91,25 +91,4 @@ func (dw *dataWriter) WriteOrWritePointer(t mmdbtype.DataType) (int64, error) {
 		size:    size,
 	}
 	return size, nil
-}
-
-// This is just a quick hack. I am sure there is
-// something better
-func (dw *dataWriter) key(t mmdbtype.DataType) ([]byte, error) {
-	dw.keyWriter.Truncate(0)
-	_, err := t.WriteTo(dw.keyWriter)
-	if err != nil {
-		return nil, err
-	}
-	return dw.keyWriter.Bytes(), nil
-}
-
-// keyWriter is similar to dataWriter but it will never use pointers. This
-// will produce a unique key for the type.
-type keyWriter struct {
-	*bytes.Buffer
-}
-
-func (kw *keyWriter) WriteOrWritePointer(t mmdbtype.DataType) (int64, error) {
-	return t.WriteTo(kw)
 }
