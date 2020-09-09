@@ -31,50 +31,47 @@ type node struct {
 	nodeNum  int
 }
 
-func (n *node) insert(
-	ip net.IP,
-	prefixLen int,
-	recordType recordType,
-	inserter func(value mmdbtype.DataType) (mmdbtype.DataType, error),
-	insertedNode *node,
-	currentDepth int,
-) error {
+type insertRecord struct {
+	ip           net.IP
+	prefixLen    int
+	recordType   recordType
+	inserter     func(value mmdbtype.DataType) (mmdbtype.DataType, error)
+	insertedNode *node
+}
+
+func (n *node) insert(iRec insertRecord, currentDepth int) error {
 	newDepth := currentDepth + 1
 	// Check if we are inside the network already
-	if newDepth > prefixLen {
+	if newDepth > iRec.prefixLen {
 		// Data already exists for the network so insert into all the children.
 		// We will prune duplicate nodes when we finalize.
-		err := n.children[0].insert(ip, prefixLen, recordType, inserter, insertedNode, newDepth)
+		err := n.children[0].insert(iRec, newDepth)
 		if err != nil {
 			return err
 		}
-		return n.children[1].insert(ip, prefixLen, recordType, inserter, insertedNode, newDepth)
+		return n.children[1].insert(iRec, newDepth)
 	}
 
 	// We haven't reached the network yet.
-	pos := bitAt(ip, currentDepth)
+	pos := bitAt(iRec.ip, currentDepth)
 	r := &n.children[pos]
-	return r.insert(ip, prefixLen, recordType, inserter, insertedNode, newDepth)
+	return r.insert(iRec, newDepth)
 }
 
 func (r *record) insert(
-	ip net.IP,
-	prefixLen int,
-	recordType recordType,
-	inserter func(value mmdbtype.DataType) (mmdbtype.DataType, error),
-	insertedNode *node,
+	iRec insertRecord,
 	newDepth int,
 ) error {
 	switch r.recordType {
 	case recordTypeNode, recordTypeFixedNode:
 	case recordTypeEmpty, recordTypeData:
 		// When we add record merging support, it should go here.
-		if newDepth >= prefixLen {
-			r.node = insertedNode
-			r.recordType = recordType
-			if recordType == recordTypeData {
+		if newDepth >= iRec.prefixLen {
+			r.node = iRec.insertedNode
+			r.recordType = iRec.recordType
+			if iRec.recordType == recordTypeData {
 				var err error
-				r.value, err = inserter(r.value)
+				r.value, err = iRec.inserter(r.value)
 				if err != nil {
 					return err
 				}
@@ -93,18 +90,18 @@ func (r *record) insert(
 		r.value = nil
 		r.recordType = recordTypeNode
 	case recordTypeReserved:
-		if prefixLen >= newDepth {
+		if iRec.prefixLen >= newDepth {
 			return errors.Errorf(
 				"attempt to insert %s/%d, which is in a reserved network",
-				ip,
-				prefixLen,
+				iRec.ip,
+				iRec.prefixLen,
 			)
 		}
 		// If we are inserting a network that contains a reserved network,
 		// we silently remove the reserved network.
 		return nil
 	case recordTypeAlias:
-		if prefixLen < newDepth {
+		if iRec.prefixLen < newDepth {
 			// Do nothing. We are inserting a network that contains an aliased
 			// network. We silently ignore.
 			return nil
@@ -112,14 +109,14 @@ func (r *record) insert(
 		// attempting to insert _into_ an aliased network
 		return errors.Errorf(
 			"attempt to insert %s/%d, which is in an aliased network",
-			ip,
-			prefixLen,
+			iRec.ip,
+			iRec.prefixLen,
 		)
 	default:
 		return errors.Errorf("inserting into record type %d not implemented!", r.recordType)
 	}
 
-	return r.node.insert(ip, prefixLen, recordType, inserter, insertedNode, newDepth)
+	return r.node.insert(iRec, newDepth)
 }
 
 func (n *node) get(

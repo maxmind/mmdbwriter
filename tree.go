@@ -244,7 +244,16 @@ func (t *Tree) insert(
 		prefixLen += 96
 	}
 
-	return t.root.insert(ip, prefixLen, recordType, inserter, node, 0)
+	return t.root.insert(
+		insertRecord{
+			ip:           ip,
+			prefixLen:    prefixLen,
+			recordType:   recordType,
+			inserter:     inserter,
+			insertedNode: node,
+		},
+		0,
+	)
 }
 
 func (t *Tree) insertStringNetwork(
