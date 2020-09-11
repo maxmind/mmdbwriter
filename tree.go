@@ -72,6 +72,7 @@ type Options struct {
 type Tree struct {
 	buildEpoch   int64
 	databaseType string
+	dataMap      *dataMap
 	description  map[string]string
 	ipVersion    int
 	languages    []string
@@ -86,6 +87,7 @@ type Tree struct {
 func New(opts Options) (*Tree, error) {
 	tree := &Tree{
 		buildEpoch:   time.Now().Unix(),
+		dataMap:      newDataMap(),
 		databaseType: opts.DatabaseType,
 		description:  map[string]string{},
 		ipVersion:    6,
@@ -196,6 +198,8 @@ func Load(path string, opts Options) (*Tree, error) {
 }
 
 // Insert a data value into the tree.
+//
+// This is not safe to call from multiple threads.
 func (t *Tree) Insert(network *net.IPNet, value mmdbtype.DataType) error {
 	return t.InsertFunc(network, inserter.ReplaceWith(value))
 }
@@ -213,6 +217,8 @@ func (t *Tree) Insert(network *net.IPNet, value mmdbtype.DataType) error {
 //
 // The function will be called multiple times per insert when the network
 // has multiple preexisting records associated with it.
+//
+// This is not safe to call from multiple threads.
 func (t *Tree) InsertFunc(
 	network *net.IPNet,
 	inserter func(value mmdbtype.DataType) (mmdbtype.DataType, error),
@@ -244,7 +250,18 @@ func (t *Tree) insert(
 		prefixLen += 96
 	}
 
-	return t.root.insert(ip, prefixLen, recordType, inserter, node, 0)
+	return t.root.insert(
+		insertRecord{
+			ip:           ip,
+			prefixLen:    prefixLen,
+			recordType:   recordType,
+			inserter:     inserter,
+			insertedNode: node,
+
+			dataMap: t.dataMap,
+		},
+		0,
+	)
 }
 
 func (t *Tree) insertStringNetwork(
@@ -305,8 +322,9 @@ func (t *Tree) insertReservedNetworks() error {
 	return nil
 }
 
-// Get the value for the given IP address from the tree.
-func (t *Tree) Get(ip net.IP) (*net.IPNet, *mmdbtype.DataType) {
+// Get the value for the given IP address from the tree. If the nil interface
+// is returned, that means the tree does not have a value for the IP.
+func (t *Tree) Get(ip net.IP) (*net.IPNet, mmdbtype.DataType) {
 	lookupIP := ip
 
 	if t.treeDepth == 128 {
@@ -333,9 +351,9 @@ func (t *Tree) Get(ip net.IP) (*net.IPNet, *mmdbtype.DataType) {
 
 	mask := net.CIDRMask(prefixLen, t.treeDepth)
 
-	var value *mmdbtype.DataType
+	var value mmdbtype.DataType
 	if r.recordType == recordTypeData {
-		value = &r.value
+		value = t.dataMap.get(r.valueKey)
 	}
 
 	return &net.IPNet{
@@ -362,7 +380,7 @@ func (t *Tree) WriteTo(w io.Writer) (int64, error) {
 	// WriteByte, but we should probably do some testing.
 	recordBuf := make([]byte, 2*t.recordSize/8)
 
-	dataWriter := newDataWriter()
+	dataWriter := newDataWriter(t.dataMap)
 
 	nodeCount, numBytes, err := t.writeNode(buf, t.root, dataWriter, recordBuf)
 	if err != nil {
@@ -401,7 +419,7 @@ func (t *Tree) WriteTo(w io.Writer) (int64, error) {
 		return numBytes, errors.Wrap(err, "error writing metadata start marker")
 	}
 
-	metadataWriter := newDataWriter()
+	metadataWriter := newDataWriter(dataWriter.dataMap)
 	_, err = t.writeMetadata(metadataWriter)
 	if err != nil {
 		_ = buf.Flush()
@@ -469,7 +487,7 @@ func (t *Tree) recordValue(
 ) (int, error) {
 	switch r.recordType {
 	case recordTypeData:
-		offset, err := dataWriter.maybeWrite(r.value)
+		offset, err := dataWriter.maybeWrite(r.valueKey)
 		return t.nodeCount + len(dataSectionSeparator) + offset, err
 	case recordTypeEmpty, recordTypeReserved:
 		return t.nodeCount, nil
