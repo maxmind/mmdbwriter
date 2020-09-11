@@ -6,8 +6,7 @@ type dataMapKey string
 
 type dataMapValue struct {
 	data mmdbtype.DataType
-	// This exists to reduce allocations by interning the key. It is
-	// a bit silly given they key is already in data above.
+	// This exists to reduce allocations by interning the key.
 	key dataMapKey
 }
 
