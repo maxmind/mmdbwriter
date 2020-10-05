@@ -1,6 +1,10 @@
 name: golangci-lint
 
-on: [push, pull_request]
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: '6 15 * * SUN'
 
 jobs:
   golangci:
