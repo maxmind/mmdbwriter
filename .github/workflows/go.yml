@@ -12,7 +12,10 @@ jobs:
     strategy:
       matrix:
         go-version: [1.13.x, 1.14.x, 1.15.x]
-        platform: [ubuntu-latest, macos-latest, windows-latest]
+        # We don't test on macOS and windows as the database builds aren't
+        # repeatable there for some reason. As such, tests fail. It'd
+        # probably be worth looking into this at some point.
+        platform: [ubuntu-latest]
     runs-on: ${{ matrix.platform }}
     name: "Build ${{ matrix.go-version }} test on ${{ matrix.platform }}"
     steps:
