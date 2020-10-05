@@ -32,7 +32,7 @@ jobs:
         run: go get -v -t -d ./...
 
       - name: Build
-        run: go build -v .
+        run: go build -v ./...
 
       - name: Test
-        run: go test -v .
+        run: go test -race -v ./...
