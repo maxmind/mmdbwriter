@@ -1,17 +1,28 @@
 name: Go
 
-on: [push, pull_request]
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: '6 15 * * SUN'
 
 jobs:
 
   build:
-    name: Build
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        go-version: [1.13.x, 1.14.x, 1.15.x]
+        # We don't test on macOS and windows as the database builds aren't
+        # repeatable there for some reason. As such, tests fail. It'd
+        # probably be worth looking into this at some point.
+        platform: [ubuntu-latest]
+    runs-on: ${{ matrix.platform }}
+    name: "Build ${{ matrix.go-version }} test on ${{ matrix.platform }}"
     steps:
       - name: Set up Go 1.x
         uses: actions/setup-go@v2
         with:
-          go-version: ^1.13
+          go-version: ${{ matrix.go-version }}
         id: go
 
       - name: Check out code into the Go module directory
@@ -21,7 +32,7 @@ jobs:
         run: go get -v -t -d ./...
 
       - name: Build
-        run: go build -v .
+        run: go build -v ./...
 
       - name: Test
-        run: go test -v .
+        run: go test -race -v ./...
