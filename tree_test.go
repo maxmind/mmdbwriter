@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/maxmind/mmdbwriter/mmdbtype"
 	"github.com/oschwald/maxminddb-golang"
@@ -352,8 +353,10 @@ func TestTreeInsertAndGet(t *testing.T) {
 		t.Run(fmt.Sprintf("Record Size: %d", recordSize), func(t *testing.T) {
 			for _, test := range tests {
 				t.Run(test.name, func(t *testing.T) {
+					epoch := time.Now().Unix()
 					tree, err := New(
 						Options{
+							BuildEpoch:              epoch,
 							DatabaseType:            "mmdbwriter-test",
 							Description:             map[string]string{"en": "Test database"},
 							DisableIPv4Aliasing:     test.disableIPv4Aliasing,
@@ -427,6 +430,7 @@ func TestTreeInsertAndGet(t *testing.T) {
 					loadBuf := &bytes.Buffer{}
 					tree, err = Load(f.Name(),
 						Options{
+							BuildEpoch:              epoch,
 							DisableIPv4Aliasing:     test.disableIPv4Aliasing,
 							IncludeReservedNetworks: test.includeReservedNetworks,
 						},
