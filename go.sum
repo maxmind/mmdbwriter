@@ -1,16 +1,5 @@
 github.com/davecgh/go-spew v1.1.0 h1:ZDRjVQ15GmhC3fiQ8ni8+OwkZQO4DARzQgrnXU1Liz8=
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
-github.com/maxmind/mmdbwriter v0.0.0-20200813154840-0d62f9dbc5b4/go.mod h1:CC0q++Jsqiets4nVeAx6KaQ5J5fkmeYsECtHF4v0nFo=
-github.com/oschwald/maxminddb-golang v1.7.0 h1:JmU4Q1WBv5Q+2KZy5xJI+98aUwTIrPPxZUkd5Cwr8Zc=
-github.com/oschwald/maxminddb-golang v1.7.0/go.mod h1:RXZtst0N6+FY/3qCNmZMBApR19cdQj43/NM9VkrNAis=
-github.com/oschwald/maxminddb-golang v1.7.1-0.20200813204105-5159974818e9 h1:cOI4uDEGnzJ+RhttWMyxznWlpfpkr/weta+KrCvkBSg=
-github.com/oschwald/maxminddb-golang v1.7.1-0.20200813204105-5159974818e9/go.mod h1:+hSzAyW6CZzLYLVzq69dkwdVggJAOoCpz+x2VpOPf/Y=
-github.com/oschwald/maxminddb-golang v1.7.1-0.20200814161932-f4d6bb67024d h1:fogtlv5X7GBm536O7Dyn6hOsgeySIGgwaJfkV98txcU=
-github.com/oschwald/maxminddb-golang v1.7.1-0.20200814161932-f4d6bb67024d/go.mod h1:+hSzAyW6CZzLYLVzq69dkwdVggJAOoCpz+x2VpOPf/Y=
-github.com/oschwald/maxminddb-golang v1.7.1-0.20200818215515-20e9cfc4b6be h1:4OTpe148RZWsHurbndFMPNAMm/1NSEkwItfSmeL/VE8=
-github.com/oschwald/maxminddb-golang v1.7.1-0.20200818215515-20e9cfc4b6be/go.mod h1:RXZtst0N6+FY/3qCNmZMBApR19cdQj43/NM9VkrNAis=
-github.com/oschwald/maxminddb-golang v1.7.1-0.20200819164226-ab9cdf21f012 h1:bWXunmOHkYcVN1Qbc5GYoAjmXMXVQsN9V75hrdUhW+c=
-github.com/oschwald/maxminddb-golang v1.7.1-0.20200819164226-ab9cdf21f012/go.mod h1:RXZtst0N6+FY/3qCNmZMBApR19cdQj43/NM9VkrNAis=
 github.com/oschwald/maxminddb-golang v1.7.1-0.20200819192241-1f1e288ee3f9 h1:VA/ssbFy4lxVq8zTwwNlw2n0d9QTvKiq8uxhMVM2nl4=
 github.com/oschwald/maxminddb-golang v1.7.1-0.20200819192241-1f1e288ee3f9/go.mod h1:RXZtst0N6+FY/3qCNmZMBApR19cdQj43/NM9VkrNAis=
 github.com/pkg/errors v0.9.1 h1:FEBLx1zS214owpjy7qsBeixbURkuhQAwrK5UwLGTwt4=
@@ -18,8 +7,8 @@ github.com/pkg/errors v0.9.1/go.mod h1:bwawxfHBFNV+L2hUp1rHADufV3IMtnDRdf1r5NINE
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
 github.com/stretchr/objx v0.1.0/go.mod h1:HFkY916IF+rwdDfMAkV7OtwuqBVzrE8GR6GFx+wExME=
-github.com/stretchr/testify v1.6.1 h1:hDPOHmpOpP40lSULcqw7IrRb/u7w6RpDC9399XyoNd0=
 github.com/stretchr/testify v1.6.1/go.mod h1:6Fq8oRcR53rry900zMqJjRRixrwX3KX962/h/Wwjteg=
+github.com/stretchr/testify v1.7.0 h1:nwc3DEeHmmLAfoZucVR881uASk0Mfjw8xYJ99tb5CcY=
 github.com/stretchr/testify v1.7.0/go.mod h1:6Fq8oRcR53rry900zMqJjRRixrwX3KX962/h/Wwjteg=
 golang.org/x/sys v0.0.0-20191224085550-c709ea063b76 h1:Dho5nD6R3PcW2SH1or8vS0dszDaXRxIw55lBX7XiE5g=
 golang.org/x/sys v0.0.0-20191224085550-c709ea063b76/go.mod h1:h1NjWce9XRLGQEsW7wpKNCjG9DtNlClVuFLEZdDNbEs=
