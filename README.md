@@ -1,5 +1,7 @@
 # Go MaxMind DB Writer
 
+[![Go Reference](https://pkg.go.dev/badge/github.com/maxmind/mmdbwriter.svg)](https://pkg.go.dev/github.com/maxmind/mmdbwriter)
+
 This is a Go writer for the [MaxMind DB format](https://github.com/maxmind/MaxMind-DB).
 
 This is still a work in progress and does not support all of the features
@@ -8,7 +10,9 @@ API is subject to change.
 
 ## Examples
 
-See the `examples` folder for examples of how to use this library.
+See the `examples` folder for examples of how to use this library or our blog
+post,
+[Enriching MMDB files with your own data using Go](https://blog.maxmind.com/2020/09/01/enriching-mmdb-files-with-your-own-data-using-go/).
 
 ## Copyright and License
 
