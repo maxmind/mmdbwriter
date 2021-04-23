@@ -8,7 +8,9 @@ API is subject to change.
 
 ## Examples
 
-See the `examples` folder for examples of how to use this library.
+See the `examples` folder for examples of how to use this library or our blog
+post,
+[Enriching MMDB files with your own data using Go](https://blog.maxmind.com/2020/09/01/enriching-mmdb-files-with-your-own-data-using-go/).
 
 ## Copyright and License
 
