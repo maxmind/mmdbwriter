@@ -66,7 +66,6 @@ func (r *record) insert(
 	switch r.recordType {
 	case recordTypeNode, recordTypeFixedNode:
 	case recordTypeEmpty, recordTypeData:
-		// When we add record merging support, it should go here.
 		if newDepth >= iRec.prefixLen {
 			r.node = iRec.insertedNode
 			r.recordType = iRec.recordType
