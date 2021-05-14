@@ -78,6 +78,7 @@ func (r *record) insert(
 				}
 				if value == nil {
 					r.recordType = recordTypeEmpty
+					r.valueKey = noDataMapKey
 				} else {
 					key, err := iRec.dataMap.store(value)
 					if err != nil {
