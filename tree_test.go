@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/maxmind/mmdbwriter/inserter"
 	"github.com/maxmind/mmdbwriter/mmdbtype"
 	"github.com/oschwald/maxminddb-golang"
 	"github.com/stretchr/testify/assert"
@@ -445,6 +446,57 @@ func TestTreeInsertAndGet(t *testing.T) {
 			}
 		})
 	}
+}
+
+// This test case exists to test a bug that we experienced where a value
+// could reappear on a later insert after being removed from the record.
+// This happened as we were only changing the record type and not
+// removing the underlying data.
+func TestInsertFunc_RemovalAndLaterInsert(t *testing.T) {
+	tree, err := New(
+		Options{},
+	)
+	require.NoError(t, err)
+
+	_, network, err := net.ParseCIDR("::1.1.1.0/120")
+	require.NoError(t, err)
+
+	value := mmdbtype.String("value")
+	require.NoError(t, tree.Insert(network, value))
+
+	ip := net.ParseIP("::1.1.1.1")
+
+	recNetwork, recValue := tree.Get(ip)
+
+	assert.Equal(t, network, recNetwork)
+	assert.Equal(t, value, recValue)
+
+	_, removedNetwork, err := net.ParseCIDR("::1.1.1.1/128")
+	require.NoError(t, err)
+
+	err = tree.InsertFunc(
+		removedNetwork,
+		inserter.Remove,
+	)
+	require.NoError(t, err)
+
+	recNetwork, recValue = tree.Get(ip)
+
+	assert.Equal(t, removedNetwork, recNetwork)
+	assert.Nil(t, recValue)
+
+	err = tree.InsertFunc(
+		removedNetwork,
+		func(v mmdbtype.DataType) (mmdbtype.DataType, error) {
+			return v, nil
+		},
+	)
+	require.NoError(t, err)
+
+	recNetwork, recValue = tree.Get(ip)
+
+	assert.Equal(t, removedNetwork, recNetwork)
+	assert.Nil(t, recValue)
 }
 
 func s2ip(v string) *interface{} {
