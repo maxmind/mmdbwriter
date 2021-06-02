@@ -13,22 +13,24 @@ type writtenType struct {
 
 type dataWriter struct {
 	*bytes.Buffer
-	dataMap   *dataMap
-	pointers  map[string]writtenType
-	keyWriter *keyWriter
+	dataMap     *dataMap
+	offsets     map[string]writtenType
+	keyWriter   *keyWriter
+	usePointers bool
 }
 
-func newDataWriter(dataMap *dataMap) *dataWriter {
+func newDataWriter(dataMap *dataMap, usePointers bool) *dataWriter {
 	return &dataWriter{
-		Buffer:    &bytes.Buffer{},
-		dataMap:   dataMap,
-		pointers:  map[string]writtenType{},
-		keyWriter: newKeyWriter(),
+		Buffer:      &bytes.Buffer{},
+		dataMap:     dataMap,
+		offsets:     map[string]writtenType{},
+		keyWriter:   newKeyWriter(),
+		usePointers: usePointers,
 	}
 }
 
 func (dw *dataWriter) maybeWrite(key dataMapKey) (int, error) {
-	written, ok := dw.pointers[string(key)]
+	written, ok := dw.offsets[string(key)]
 	if ok {
 		return int(written.pointer), nil
 	}
@@ -44,7 +46,7 @@ func (dw *dataWriter) maybeWrite(key dataMapKey) (int, error) {
 		size:    size,
 	}
 
-	dw.pointers[string(key)] = written
+	dw.offsets[string(key)] = written
 
 	return int(written.pointer), nil
 }
@@ -55,11 +57,15 @@ func (dw *dataWriter) WriteOrWritePointer(t mmdbtype.DataType) (int64, error) {
 		return 0, err
 	}
 
-	written, ok := dw.pointers[string(key)]
-	if ok && written.size > written.pointer.WrittenSize() {
-		// Only use a pointer if it would take less space than writing the
-		// type again.
-		return written.pointer.WriteTo(dw)
+	var ok bool
+	if dw.usePointers {
+		var written writtenType
+		written, ok = dw.offsets[string(key)]
+		if ok && written.size > written.pointer.WrittenSize() {
+			// Only use a pointer if it would take less space than writing the
+			// type again.
+			return written.pointer.WriteTo(dw)
+		}
 	}
 	// We can't use the pointers[string(key)] optimization below
 	// as the backing buffer for key may change when we call
@@ -78,7 +84,7 @@ func (dw *dataWriter) WriteOrWritePointer(t mmdbtype.DataType) (int64, error) {
 		return size, err
 	}
 
-	dw.pointers[keyStr] = writtenType{
+	dw.offsets[keyStr] = writtenType{
 		pointer: mmdbtype.Pointer(offset),
 		size:    size,
 	}
