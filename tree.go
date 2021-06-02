@@ -66,19 +66,26 @@ type Options struct {
 	// smaller database, but it will limit the maximum size of the database.
 	// The default is 28.
 	RecordSize int
+
+	// DisableMetadataPointers prevents the use of pointers in the metadata
+	// section of the database. This option exists to avoid bugs in reader
+	// implementations that do not correctly handle metadata pointers. Its
+	// use should primarily be limited to existing database types.
+	DisableMetadataPointers bool
 }
 
 // Tree represents an MaxMind DB search tree.
 type Tree struct {
-	buildEpoch   int64
-	databaseType string
-	dataMap      *dataMap
-	description  map[string]string
-	ipVersion    int
-	languages    []string
-	recordSize   int
-	root         *node
-	treeDepth    int
+	buildEpoch              int64
+	databaseType            string
+	dataMap                 *dataMap
+	description             map[string]string
+	disableMetadataPointers bool
+	ipVersion               int
+	languages               []string
+	recordSize              int
+	root                    *node
+	treeDepth               int
 	// This is set when the tree is finalized
 	nodeCount int
 }
@@ -86,13 +93,14 @@ type Tree struct {
 // New creates a new Tree.
 func New(opts Options) (*Tree, error) {
 	tree := &Tree{
-		buildEpoch:   time.Now().Unix(),
-		dataMap:      newDataMap(),
-		databaseType: opts.DatabaseType,
-		description:  map[string]string{},
-		ipVersion:    6,
-		recordSize:   28,
-		root:         &node{},
+		buildEpoch:              time.Now().Unix(),
+		dataMap:                 newDataMap(),
+		databaseType:            opts.DatabaseType,
+		description:             map[string]string{},
+		disableMetadataPointers: opts.DisableMetadataPointers,
+		ipVersion:               6,
+		recordSize:              28,
+		root:                    &node{},
 	}
 
 	if opts.BuildEpoch != 0 {
@@ -380,7 +388,8 @@ func (t *Tree) WriteTo(w io.Writer) (int64, error) {
 	// WriteByte, but we should probably do some testing.
 	recordBuf := make([]byte, 2*t.recordSize/8)
 
-	dataWriter := newDataWriter(t.dataMap)
+	usePointers := true
+	dataWriter := newDataWriter(t.dataMap, usePointers)
 
 	nodeCount, numBytes, err := t.writeNode(buf, t.root, dataWriter, recordBuf)
 	if err != nil {
@@ -419,7 +428,7 @@ func (t *Tree) WriteTo(w io.Writer) (int64, error) {
 		return numBytes, errors.Wrap(err, "error writing metadata start marker")
 	}
 
-	metadataWriter := newDataWriter(dataWriter.dataMap)
+	metadataWriter := newDataWriter(dataWriter.dataMap, !t.disableMetadataPointers)
 	_, err = t.writeMetadata(metadataWriter)
 	if err != nil {
 		_ = buf.Flush()
