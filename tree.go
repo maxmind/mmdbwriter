@@ -184,7 +184,12 @@ func Load(path string, opts Options) (*Tree, error) {
 
 	dser := newDeserializer()
 
-	networks := db.Networks(maxminddb.SkipAliasedNetworks)
+	var networkOpts []maxminddb.NetworksOption
+	if opts.IPVersion == 6 && !opts.DisableIPv4Aliasing {
+		networkOpts = append(networkOpts, maxminddb.SkipAliasedNetworks)
+	}
+
+	networks := db.Networks(networkOpts...)
 	for networks.Next() {
 		var network *net.IPNet
 
