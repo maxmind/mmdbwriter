@@ -423,24 +423,7 @@ func TestTreeInsertAndGet(t *testing.T) {
 					numBytes, err := tree.WriteTo(buf)
 					require.NoError(t, err)
 
-					reader, err := maxminddb.FromBytes(buf.Bytes())
-					require.NoError(t, err)
-
-					for _, get := range test.gets {
-						var v interface{}
-						network, ok, err := reader.LookupNetwork(net.ParseIP(get.ip), &v)
-						require.NoError(t, err)
-
-						assert.Equal(t, get.expectedNetwork, network.String(), "network for %s in database", get.ip)
-
-						if get.expectedLookupValue == nil {
-							assert.False(t, ok, "%s is not in the database", get.ip)
-						} else {
-							assert.Equal(t, *get.expectedLookupValue, v, "value for %s in database", get.ip)
-						}
-					}
-
-					assert.NoError(t, reader.Verify(), "verify database format")
+					checkMMDB(t, buf, test.gets, "MMDB lookups on New tree")
 
 					assert.Equal(t, int64(buf.Len()), numBytes, "number of bytes")
 
@@ -467,11 +450,37 @@ func TestTreeInsertAndGet(t *testing.T) {
 					_, err = tree.WriteTo(loadBuf)
 					require.NoError(t, err)
 
+					checkMMDB(t, loadBuf, test.gets, "MMDB lookups on Load tree")
+
 					assert.Equal(t, bufBytes, loadBuf.Bytes(), "Load + WriteTo generates an identical database")
 				})
 			}
 		})
 	}
+}
+
+func checkMMDB(t *testing.T, buf *bytes.Buffer, gets []testGet, name string) {
+	t.Run(name, func(t *testing.T) {
+		reader, err := maxminddb.FromBytes(buf.Bytes())
+		require.NoError(t, err)
+
+		defer reader.Close()
+
+		for _, get := range gets {
+			var v interface{}
+			network, ok, err := reader.LookupNetwork(net.ParseIP(get.ip), &v)
+			require.NoError(t, err)
+
+			assert.Equal(t, get.expectedNetwork, network.String(), "network for %s in database", get.ip)
+
+			if get.expectedLookupValue == nil {
+				assert.False(t, ok, "%s is not in the database", get.ip)
+			} else {
+				assert.Equal(t, *get.expectedLookupValue, v, "value for %s in database", get.ip)
+			}
+		}
+		assert.NoError(t, reader.Verify(), "verify database format")
+	})
 }
 
 // This test case exists to test a bug that we experienced where a value
