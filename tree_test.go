@@ -117,6 +117,32 @@ func TestTreeInsertAndGet(t *testing.T) {
 		expectedNodeCount       int
 	}{
 		{
+			name:                    "::/0 insert",
+			disableIPv4Aliasing:     true,
+			includeReservedNetworks: true,
+			inserts: []testInsert{
+				{
+					network: "::/0",
+					value:   mmdbtype.String("string"),
+				},
+			},
+			gets: []testGet{
+				{
+					ip:                  "8.1.1.0",
+					expectedNetwork:     "::/1",
+					expectedGetValue:    mmdbtype.String("string"),
+					expectedLookupValue: s2ip("string"),
+				},
+				{
+					ip:                  "8000::",
+					expectedNetwork:     "8000::/1",
+					expectedGetValue:    mmdbtype.String("string"),
+					expectedLookupValue: s2ip("string"),
+				},
+			},
+			expectedNodeCount: 1,
+		},
+		{
 			name:                    "::/1 insert, IPv4 lookup",
 			includeReservedNetworks: true,
 			inserts: []testInsert{

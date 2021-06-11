@@ -250,13 +250,6 @@ func (t *Tree) insert(
 
 	prefixLen, _ := network.Mask.Size()
 
-	if prefixLen == 0 {
-		// It isn't possible to do this as there isn't a record for the root node.
-		// If we wanted to support this, we would have to divide it into two /1
-		// insertions, but there isn't a reason to bother supporting it.
-		return errors.New("cannot insert a value into the root node of the tree")
-	}
-
 	ip := network.IP
 	if t.treeDepth == 128 && len(ip) == 4 {
 		ip = ipV4ToV6(ip)
