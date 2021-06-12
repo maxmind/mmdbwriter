@@ -31,13 +31,15 @@ type node struct {
 }
 
 type insertRecord struct {
-	ip           net.IP
-	prefixLen    int
-	recordType   recordType
-	inserter     func(value mmdbtype.DataType) (mmdbtype.DataType, error)
+	inserter func(value mmdbtype.DataType) (mmdbtype.DataType, error)
+
+	dataMap      *dataMap
 	insertedNode *node
 
-	dataMap *dataMap
+	ip        net.IP
+	prefixLen int
+
+	recordType recordType
 }
 
 func (n *node) insert(iRec insertRecord, currentDepth int) error {
