@@ -184,7 +184,12 @@ func Load(path string, opts Options) (*Tree, error) {
 
 	dser := newDeserializer()
 
-	networks := db.Networks(maxminddb.SkipAliasedNetworks)
+	var networkOpts []maxminddb.NetworksOption
+	if opts.IPVersion == 6 && !opts.DisableIPv4Aliasing {
+		networkOpts = append(networkOpts, maxminddb.SkipAliasedNetworks)
+	}
+
+	networks := db.Networks(networkOpts...)
 	for networks.Next() {
 		var network *net.IPNet
 
@@ -244,13 +249,6 @@ func (t *Tree) insert(
 	t.nodeCount = 0
 
 	prefixLen, _ := network.Mask.Size()
-
-	if prefixLen == 0 {
-		// It isn't possible to do this as there isn't a record for the root node.
-		// If we wanted to support this, we would have to divide it into two /1
-		// insertions, but there isn't a reason to bother supporting it.
-		return errors.New("cannot insert a value into the root node of the tree")
-	}
 
 	ip := network.IP
 	if t.treeDepth == 128 && len(ip) == 4 {
