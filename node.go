@@ -75,6 +75,12 @@ func (r *record) insert(
 				var data mmdbtype.DataType
 				if r.value != nil {
 					data = r.value.data
+
+					// Potentially we could avoid this if the
+					// new value is the same, but it would likely
+					// not save us much and the code would be a
+					// bit more complicated.
+					iRec.dataMap.remove(r.value)
 				}
 				value, err := iRec.inserter(data)
 				if err != nil {

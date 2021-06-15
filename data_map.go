@@ -4,10 +4,16 @@ import "github.com/maxmind/mmdbwriter/mmdbtype"
 
 type dataMapKey string
 
+// Please note, if you change the order of these fields, please check
+// alignment as we end up storing quite a few in memory.
 type dataMapValue struct {
 	data mmdbtype.DataType
-	// This exists to reduce allocations by interning the key.
-	key dataMapKey
+	key  dataMapKey
+
+	// Alternatively, we could use a weak map for the data map, but I
+	// don't see any very good options at the moment. We should revist
+	// if something happens with https://github.com/golang/go/issues/43615
+	refCount uint32
 }
 
 // dataMap is used to deduplicate data inserted into the tree to reduce
@@ -41,5 +47,17 @@ func (dm *dataMap) store(v mmdbtype.DataType) (*dataMapValue, error) {
 		dm.data[dmKey] = dmv
 	}
 
+	dmv.refCount++
+
 	return dmv, nil
+}
+
+// remove removes a reference to the value. If the reference count
+// drops to zero, the value is removed from the dataMap.
+func (dm *dataMap) remove(v *dataMapValue) {
+	v.refCount--
+
+	if v.refCount == 0 {
+		delete(dm.data, v.key)
+	}
 }
