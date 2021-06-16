@@ -30,7 +30,9 @@ func newDataMap() *dataMap {
 	}
 }
 
-// store stores the value in the dataMap and returns a key for it.
+// store stores the value in the dataMap and returns the dataMapValue for it.
+// If the value is already in the dataMap, the reference count for it is
+// incremented.
 func (dm *dataMap) store(v mmdbtype.DataType) (*dataMapValue, error) {
 	key, err := dm.keyWriter.key(v)
 	if err != nil {

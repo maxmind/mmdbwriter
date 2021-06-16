@@ -52,7 +52,7 @@ func (dw *dataWriter) maybeWrite(value *dataMapValue) (int, error) {
 }
 
 func (dw *dataWriter) WriteOrWritePointer(t mmdbtype.DataType) (int64, error) {
-	key, err := dw.keyWriter.key(t)
+	keyBytes, err := dw.keyWriter.key(t)
 	if err != nil {
 		return 0, err
 	}
@@ -60,18 +60,18 @@ func (dw *dataWriter) WriteOrWritePointer(t mmdbtype.DataType) (int64, error) {
 	var ok bool
 	if dw.usePointers {
 		var written writtenType
-		written, ok = dw.offsets[dataMapKey(key)]
+		written, ok = dw.offsets[dataMapKey(keyBytes)]
 		if ok && written.size > written.pointer.WrittenSize() {
 			// Only use a pointer if it would take less space than writing the
 			// type again.
 			return written.pointer.WriteTo(dw)
 		}
 	}
-	// We can't use the pointers[string(key)] optimization below
-	// as the backing buffer for key may change when we call
-	// t.WriteTo. That said, this is the less common code path
+	// We can't use the pointers[dataMapKey(keyBytes)] optimization to
+	// avoid an allocation below as the backing buffer for key may change when
+	// we call t.WriteTo. That said, this is the less common code path
 	// so it doesn't matter too much.
-	keyStr := dataMapKey(key)
+	key := dataMapKey(keyBytes)
 
 	// TODO: A possible optimization here for simple types would be to just
 	// write key to the dataWriter. This won't necessarily work for Map and
@@ -84,7 +84,7 @@ func (dw *dataWriter) WriteOrWritePointer(t mmdbtype.DataType) (int64, error) {
 		return size, err
 	}
 
-	dw.offsets[keyStr] = writtenType{
+	dw.offsets[key] = writtenType{
 		pointer: mmdbtype.Pointer(offset),
 		size:    size,
 	}
