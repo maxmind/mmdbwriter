@@ -17,11 +17,11 @@ type stackValue struct {
 }
 
 type deserializer struct {
-	stack      []*stackValue
-	rv         mmdbtype.DataType
 	key        *mmdbtype.String
-	lastOffset uintptr
 	cache      map[uintptr]mmdbtype.DataType
+	rv         mmdbtype.DataType
+	stack      []*stackValue
+	lastOffset uintptr
 }
 
 func newDeserializer() *deserializer {

@@ -20,7 +20,7 @@ const (
 
 type record struct {
 	node       *node
-	valueKey   dataMapKey
+	value      *dataMapValue
 	recordType recordType
 }
 
@@ -31,13 +31,15 @@ type node struct {
 }
 
 type insertRecord struct {
-	ip           net.IP
-	prefixLen    int
-	recordType   recordType
-	inserter     func(value mmdbtype.DataType) (mmdbtype.DataType, error)
+	inserter func(value mmdbtype.DataType) (mmdbtype.DataType, error)
+
+	dataMap      *dataMap
 	insertedNode *node
 
-	dataMap *dataMap
+	ip        net.IP
+	prefixLen int
+
+	recordType recordType
 }
 
 func (n *node) insert(iRec insertRecord, currentDepth int) error {
@@ -70,24 +72,32 @@ func (r *record) insert(
 			r.node = iRec.insertedNode
 			r.recordType = iRec.recordType
 			if iRec.recordType == recordTypeData {
-				existingValue := iRec.dataMap.get(r.valueKey)
+				var data mmdbtype.DataType
+				if r.value != nil {
+					data = r.value.data
 
-				value, err := iRec.inserter(existingValue)
+					// Potentially we could avoid this if the
+					// new value is the same, but it would likely
+					// not save us much and the code would be a
+					// bit more complicated.
+					iRec.dataMap.remove(r.value)
+				}
+				value, err := iRec.inserter(data)
 				if err != nil {
 					return err
 				}
 				if value == nil {
 					r.recordType = recordTypeEmpty
-					r.valueKey = noDataMapKey
+					r.value = nil
 				} else {
-					key, err := iRec.dataMap.store(value)
+					value, err := iRec.dataMap.store(value)
 					if err != nil {
 						return err
 					}
-					r.valueKey = key
+					r.value = value
 				}
 			} else {
-				r.valueKey = noDataMapKey
+				r.value = nil
 			}
 			return nil
 		}
@@ -95,7 +105,7 @@ func (r *record) insert(
 		// We are splitting this record so we create two duplicate child
 		// records.
 		r.node = &node{children: [2]record{*r, *r}}
-		r.valueKey = noDataMapKey
+		r.value = nil
 		r.recordType = recordTypeNode
 	case recordTypeReserved:
 		if iRec.prefixLen >= newDepth {
@@ -171,10 +181,10 @@ func (n *node) finalize(currentNum int) (*record, int) {
 	if n.children[0].recordType == n.children[1].recordType &&
 		(n.children[0].recordType == recordTypeEmpty ||
 			(n.children[0].recordType == recordTypeData &&
-				n.children[0].valueKey == n.children[1].valueKey)) {
+				n.children[0].value.key == n.children[1].value.key)) {
 		return &record{
 			recordType: n.children[0].recordType,
-			valueKey:   n.children[0].valueKey,
+			value:      n.children[0].value,
 		}, currentNum
 	}
 

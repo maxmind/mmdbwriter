@@ -359,7 +359,7 @@ func (t *Tree) Get(ip net.IP) (*net.IPNet, mmdbtype.DataType) {
 
 	var value mmdbtype.DataType
 	if r.recordType == recordTypeData {
-		value = t.dataMap.get(r.valueKey)
+		value = r.value.data
 	}
 
 	return &net.IPNet{
@@ -494,7 +494,7 @@ func (t *Tree) recordValue(
 ) (int, error) {
 	switch r.recordType {
 	case recordTypeData:
-		offset, err := dataWriter.maybeWrite(r.valueKey)
+		offset, err := dataWriter.maybeWrite(r.value)
 		return t.nodeCount + len(dataSectionSeparator) + offset, err
 	case recordTypeEmpty, recordTypeReserved:
 		return t.nodeCount, nil
