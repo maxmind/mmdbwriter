@@ -72,6 +72,11 @@ type Options struct {
 	// implementations that do not correctly handle metadata pointers. Its
 	// use should primarily be limited to existing database types.
 	DisableMetadataPointers bool
+
+	// Inserter is the insert function used when calling `Insert`. It defaults
+	// to `inserter.ReplaceWith`, which replaces any conflicting old value
+	// entirely with the new.
+	Inserter inserter.InserterFuncGenerator
 }
 
 // Tree represents an MaxMind DB search tree.
@@ -87,7 +92,8 @@ type Tree struct {
 	root                    *node
 	treeDepth               int
 	// This is set when the tree is finalized
-	nodeCount int
+	nodeCount       int
+	inserterFuncGen inserter.InserterFuncGenerator
 }
 
 // New creates a new Tree.
@@ -101,6 +107,7 @@ func New(opts Options) (*Tree, error) {
 		ipVersion:               6,
 		recordSize:              28,
 		root:                    &node{},
+		inserterFuncGen:         inserter.ReplaceWith,
 	}
 
 	if opts.BuildEpoch != 0 {
@@ -121,6 +128,10 @@ func New(opts Options) (*Tree, error) {
 
 	if opts.RecordSize != 0 {
 		tree.recordSize = opts.RecordSize
+	}
+
+	if opts.Inserter != nil {
+		tree.inserterFuncGen = opts.Inserter
 	}
 
 	switch tree.ipVersion {
@@ -210,17 +221,18 @@ func Load(path string, opts Options) (*Tree, error) {
 	return tree, nil
 }
 
-// Insert a data value into the tree.
+// Insert a data value into the tree using the Tree's inserter function
+// (defaults to inserter.ReplaceWith).
 //
 // This is not safe to call from multiple threads.
 func (t *Tree) Insert(network *net.IPNet, value mmdbtype.DataType) error {
-	return t.InsertFunc(network, inserter.ReplaceWith(value))
+	return t.InsertFunc(network, t.inserterFuncGen(value))
 }
 
 // InsertFunc will insert the output of the function passed to it. The argument
-// passed to the function is the existing value in the record. The function
-// should return the mmdbtype.DataType to be inserted. In both cases, a nil value means
-// an empty record.
+// passed to the function is the existing value in the record. The inserter
+// function should return the mmdbtype.DataType to be inserted. In both cases,
+// a nil value means an empty record.
 //
 // You must never modify the argument passed to the function as the value may
 // be shared with other records. If you want a copy of the mmdbtype.DataType to modify,
@@ -234,7 +246,7 @@ func (t *Tree) Insert(network *net.IPNet, value mmdbtype.DataType) error {
 // This is not safe to call from multiple threads.
 func (t *Tree) InsertFunc(
 	network *net.IPNet,
-	inserter func(value mmdbtype.DataType) (mmdbtype.DataType, error),
+	inserter inserter.InserterFunc,
 ) error {
 	return t.insert(network, recordTypeData, inserter, nil)
 }
@@ -242,7 +254,7 @@ func (t *Tree) InsertFunc(
 func (t *Tree) insert(
 	network *net.IPNet,
 	recordType recordType,
-	inserter func(value mmdbtype.DataType) (mmdbtype.DataType, error),
+	inserter inserter.InserterFunc,
 	node *node,
 ) error {
 	// We set this to 0 so that the tree must be finalized again.
