@@ -1,11 +1,19 @@
 // Package inserter provides some common inserter functions for
-// mmdbwriter.InsertFunc.
+// mmdbwriter.Tree.
 package inserter
 
 import (
 	"github.com/maxmind/mmdbwriter/mmdbtype"
 	"github.com/pkg/errors"
 )
+
+// InserterFunc is a function that returns the data type to be inserted into an
+// mmdbwriter.Tree using some conflict resolution strategy.
+type InserterFunc func(mmdbtype.DataType) (mmdbtype.DataType, error)
+
+// InserterFuncGenerator is a function that generates an InserterFunc given a
+// value.
+type InserterFuncGenerator func(value mmdbtype.DataType) InserterFunc
 
 // Remove any records for the network being inserted.
 func Remove(value mmdbtype.DataType) (mmdbtype.DataType, error) {
@@ -14,7 +22,7 @@ func Remove(value mmdbtype.DataType) (mmdbtype.DataType, error) {
 
 // ReplaceWith generates an inserter function that replaces the existing
 // value with the new value.
-func ReplaceWith(value mmdbtype.DataType) func(mmdbtype.DataType) (mmdbtype.DataType, error) {
+func ReplaceWith(value mmdbtype.DataType) InserterFunc {
 	return func(_ mmdbtype.DataType) (mmdbtype.DataType, error) {
 		return value, nil
 	}
@@ -26,7 +34,7 @@ func ReplaceWith(value mmdbtype.DataType) func(mmdbtype.DataType) (mmdbtype.Data
 //
 // Both the new and existing value must be a Map. An error will be returned
 // otherwise.
-func TopLevelMergeWith(newValue mmdbtype.DataType) func(mmdbtype.DataType) (mmdbtype.DataType, error) {
+func TopLevelMergeWith(newValue mmdbtype.DataType) InserterFunc {
 	return func(existingValue mmdbtype.DataType) (mmdbtype.DataType, error) {
 		newMap, ok := newValue.(mmdbtype.Map)
 		if !ok {
@@ -63,7 +71,7 @@ func TopLevelMergeWith(newValue mmdbtype.DataType) func(mmdbtype.DataType) (mmdb
 // DeepMergeWith creates an inserter that will recursively update an existing
 // value. Map and Slice values will be merged recursively. Other values will
 // be replaced by the new value.
-func DeepMergeWith(newValue mmdbtype.DataType) func(mmdbtype.DataType) (mmdbtype.DataType, error) {
+func DeepMergeWith(newValue mmdbtype.DataType) InserterFunc {
 	return func(existingValue mmdbtype.DataType) (mmdbtype.DataType, error) {
 		return deepMerge(existingValue, newValue)
 	}
