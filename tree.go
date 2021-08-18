@@ -12,6 +12,7 @@ import (
 	"github.com/maxmind/mmdbwriter/mmdbtype"
 	"github.com/oschwald/maxminddb-golang"
 	"github.com/pkg/errors"
+	"inet.af/netaddr"
 )
 
 var (
@@ -280,6 +281,53 @@ func (t *Tree) insert(
 		},
 		0,
 	)
+}
+
+// InsertRange is the same as Insert, except it will insert all subnets within
+// the range of IPs specified by `[start,end]`.
+func (t *Tree) InsertRange(
+	start net.IP,
+	end net.IP,
+	value mmdbtype.DataType,
+) error {
+	return t.InsertRangeFunc(start, end, t.inserterFuncGen(value))
+}
+
+// InsertRangeFunc is the same as InsertFunc, except it will insert all subnets
+// within the range of IPs specified by `[start,end]`.
+func (t *Tree) InsertRangeFunc(
+	start net.IP,
+	end net.IP,
+	inserter inserter.InserterFunc,
+) error {
+	return t.insertRange(start, end, recordTypeData, inserter, nil)
+}
+
+func (t *Tree) insertRange(
+	start net.IP,
+	end net.IP,
+	recordType recordType,
+	inserter inserter.InserterFunc,
+	node *node,
+) error {
+	_start, ok := netaddr.FromStdIP(start)
+	if !ok {
+		return errors.New("start IP is invalid")
+	}
+	_end, ok := netaddr.FromStdIP(end)
+	if !ok {
+		return errors.New("end IP is invalid")
+	}
+
+	r := netaddr.IPRangeFrom(_start, _end)
+	subnets := r.Prefixes()
+	for _, subnet := range subnets {
+		if err := t.insert(subnet.IPNet(), recordType, inserter, node); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func (t *Tree) insertStringNetwork(
