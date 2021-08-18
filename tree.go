@@ -320,6 +320,9 @@ func (t *Tree) insertRange(
 	}
 
 	r := netaddr.IPRangeFrom(_start, _end)
+	if !r.IsValid() {
+		return errors.New("start & end IPs did not give valid range")
+	}
 	subnets := r.Prefixes()
 	for _, subnet := range subnets {
 		if err := t.insert(subnet.IPNet(), recordType, inserter, node); err != nil {

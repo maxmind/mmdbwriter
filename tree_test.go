@@ -115,6 +115,7 @@ func TestTreeInsertAndGet(t *testing.T) {
 		name                    string
 		disableIPv4Aliasing     bool
 		includeReservedNetworks bool
+		insertType              string // "net" or "range or "" for both.
 		inserts                 []testInsert
 		insertErrors            []testInsertError
 		gets                    []testGet
@@ -410,106 +411,160 @@ func TestTreeInsertAndGet(t *testing.T) {
 			},
 			expectedNodeCount: 367,
 		},
+		{
+			name:       "insertion of range with multiple subnets",
+			insertType: "range",
+			inserts: []testInsert{
+				{
+					start: "1.1.1.0",
+					end:   "1.1.1.6",
+					value: mmdbtype.String("string"),
+				},
+			},
+			gets: []testGet{
+				{
+					ip:                  "1.1.1.0",
+					expectedNetwork:     "1.1.1.0/30",
+					expectedGetValue:    mmdbtype.String("string"),
+					expectedLookupValue: s2ip("string"),
+				},
+				{
+					ip:                  "1.1.1.1",
+					expectedNetwork:     "1.1.1.0/30",
+					expectedGetValue:    mmdbtype.String("string"),
+					expectedLookupValue: s2ip("string"),
+				},
+				{
+					ip:                  "1.1.1.2",
+					expectedNetwork:     "1.1.1.0/30",
+					expectedGetValue:    mmdbtype.String("string"),
+					expectedLookupValue: s2ip("string"),
+				},
+				{
+					ip:                  "1.1.1.3",
+					expectedNetwork:     "1.1.1.0/30",
+					expectedGetValue:    mmdbtype.String("string"),
+					expectedLookupValue: s2ip("string"),
+				},
+				{
+					ip:                  "1.1.1.4",
+					expectedNetwork:     "1.1.1.4/31",
+					expectedGetValue:    mmdbtype.String("string"),
+					expectedLookupValue: s2ip("string"),
+				},
+				{
+					ip:                  "1.1.1.5",
+					expectedNetwork:     "1.1.1.4/31",
+					expectedGetValue:    mmdbtype.String("string"),
+					expectedLookupValue: s2ip("string"),
+				},
+				{
+					ip:                  "1.1.1.6",
+					expectedNetwork:     "1.1.1.6/32",
+					expectedGetValue:    mmdbtype.String("string"),
+					expectedLookupValue: s2ip("string"),
+				},
+			},
+			expectedNodeCount: 376,
+		},
 	}
 
 	for _, recordSize := range []int{24, 28, 32} {
 		t.Run(fmt.Sprintf("Record Size: %d", recordSize), func(t *testing.T) {
 			for _, test := range tests {
 				t.Run(test.name, func(t *testing.T) {
-					for _, insertType := range []string{"net", "range"} {
-						epoch := time.Now().Unix()
-						tree, err := New(
-							Options{
-								BuildEpoch:              epoch,
-								DatabaseType:            "mmdbwriter-test",
-								Description:             map[string]string{"en": "Test database"},
-								DisableIPv4Aliasing:     test.disableIPv4Aliasing,
-								IncludeReservedNetworks: test.includeReservedNetworks,
-								RecordSize:              recordSize,
-							},
-						)
-						require.NoError(t, err)
-						if insertType == "net" {
-							for _, insert := range test.inserts {
-								_, network, err := net.ParseCIDR(insert.network)
-								require.NoError(t, err)
+					epoch := time.Now().Unix()
+					tree, err := New(
+						Options{
+							BuildEpoch:              epoch,
+							DatabaseType:            "mmdbwriter-test",
+							Description:             map[string]string{"en": "Test database"},
+							DisableIPv4Aliasing:     test.disableIPv4Aliasing,
+							IncludeReservedNetworks: test.includeReservedNetworks,
+							RecordSize:              recordSize,
+						},
+					)
+					require.NoError(t, err)
+					if test.insertType == "" || test.insertType == "net" {
+						for _, insert := range test.inserts {
+							_, network, err := net.ParseCIDR(insert.network)
+							require.NoError(t, err)
 
-								require.NoError(t, tree.Insert(network, insert.value))
-							}
-							for _, insert := range test.insertErrors {
-								_, network, err := net.ParseCIDR(insert.network)
-								require.NoError(t, err)
-
-								err = tree.Insert(network, insert.value)
-
-								assert.EqualError(t, err, insert.expectedErrorMsg)
-							}
-						} else if insertType == "range" {
-							for _, insert := range test.inserts {
-								start := net.ParseIP(insert.start)
-								require.NotNil(t, start)
-								end := net.ParseIP(insert.end)
-								require.NotNil(t, end)
-
-								require.NoError(t, tree.InsertRange(start, end, insert.value))
-							}
-							for _, insert := range test.insertErrors {
-								start := net.ParseIP(insert.start)
-								require.NotNil(t, start)
-								end := net.ParseIP(insert.end)
-								require.NotNil(t, end)
-
-								err = tree.InsertRange(start, end, insert.value)
-								assert.EqualError(t, err, insert.expectedErrorMsg)
-							}
+							require.NoError(t, tree.Insert(network, insert.value))
 						}
+						for _, insert := range test.insertErrors {
+							_, network, err := net.ParseCIDR(insert.network)
+							require.NoError(t, err)
 
-						tree.finalize()
+							err = tree.Insert(network, insert.value)
 
-						for _, get := range test.gets {
-							network, value := tree.Get(net.ParseIP(get.ip))
-
-							assert.Equal(t, get.expectedNetwork, network.String(), "network for %s", get.ip)
-							assert.Equal(t, get.expectedGetValue, value, "value for %s", get.ip)
+							assert.EqualError(t, err, insert.expectedErrorMsg)
 						}
+					} else if test.insertType == "" || test.insertType == "range" {
+						for _, insert := range test.inserts {
+							start := net.ParseIP(insert.start)
+							require.NotNil(t, start)
+							end := net.ParseIP(insert.end)
+							require.NotNil(t, end)
 
-						assert.Equal(t, test.expectedNodeCount, tree.nodeCount)
+							require.NoError(t, tree.InsertRange(start, end, insert.value))
+						}
+						for _, insert := range test.insertErrors {
+							start := net.ParseIP(insert.start)
+							require.NotNil(t, start)
+							end := net.ParseIP(insert.end)
+							require.NotNil(t, end)
 
-						buf := &bytes.Buffer{}
-						numBytes, err := tree.WriteTo(buf)
-						require.NoError(t, err)
-
-						checkMMDB(t, buf, test.gets, "MMDB lookups on New tree")
-
-						assert.Equal(t, int64(buf.Len()), numBytes, "number of bytes")
-
-						f, err := ioutil.TempFile("", "mmdbwriter")
-						require.NoError(t, err)
-						defer func() { require.NoError(t, os.Remove(f.Name())) }()
-
-						bufBytes := buf.Bytes()
-
-						_, err = f.Write(bufBytes)
-						require.NoError(t, err)
-						require.NoError(t, f.Close())
-
-						loadBuf := &bytes.Buffer{}
-						tree, err = Load(f.Name(),
-							Options{
-								BuildEpoch:              epoch,
-								DisableIPv4Aliasing:     test.disableIPv4Aliasing,
-								IncludeReservedNetworks: test.includeReservedNetworks,
-							},
-						)
-						require.NoError(t, err)
-
-						_, err = tree.WriteTo(loadBuf)
-						require.NoError(t, err)
-
-						checkMMDB(t, loadBuf, test.gets, "MMDB lookups on Load tree")
-
-						assert.Equal(t, bufBytes, loadBuf.Bytes(), "Load + WriteTo generates an identical database")
+							err = tree.InsertRange(start, end, insert.value)
+							assert.EqualError(t, err, insert.expectedErrorMsg)
+						}
 					}
+
+					tree.finalize()
+
+					for _, get := range test.gets {
+						network, value := tree.Get(net.ParseIP(get.ip))
+
+						assert.Equal(t, get.expectedNetwork, network.String(), "network for %s", get.ip)
+						assert.Equal(t, get.expectedGetValue, value, "value for %s", get.ip)
+					}
+
+					assert.Equal(t, test.expectedNodeCount, tree.nodeCount)
+
+					buf := &bytes.Buffer{}
+					numBytes, err := tree.WriteTo(buf)
+					require.NoError(t, err)
+
+					checkMMDB(t, buf, test.gets, "MMDB lookups on New tree")
+
+					assert.Equal(t, int64(buf.Len()), numBytes, "number of bytes")
+
+					f, err := ioutil.TempFile("", "mmdbwriter")
+					require.NoError(t, err)
+					defer func() { require.NoError(t, os.Remove(f.Name())) }()
+
+					bufBytes := buf.Bytes()
+
+					_, err = f.Write(bufBytes)
+					require.NoError(t, err)
+					require.NoError(t, f.Close())
+
+					loadBuf := &bytes.Buffer{}
+					tree, err = Load(f.Name(),
+						Options{
+							BuildEpoch:              epoch,
+							DisableIPv4Aliasing:     test.disableIPv4Aliasing,
+							IncludeReservedNetworks: test.includeReservedNetworks,
+						},
+					)
+					require.NoError(t, err)
+
+					_, err = tree.WriteTo(loadBuf)
+					require.NoError(t, err)
+
+					checkMMDB(t, loadBuf, test.gets, "MMDB lookups on Load tree")
+
+					assert.Equal(t, bufBytes, loadBuf.Bytes(), "Load + WriteTo generates an identical database")
 				})
 			}
 		})
