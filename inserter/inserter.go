@@ -7,13 +7,13 @@ import (
 	"github.com/pkg/errors"
 )
 
-// InserterFunc is a function that returns the data type to be inserted into an
+// Func is a function that returns the data type to be inserted into an
 // mmdbwriter.Tree using some conflict resolution strategy.
-type InserterFunc func(mmdbtype.DataType) (mmdbtype.DataType, error)
+type Func func(mmdbtype.DataType) (mmdbtype.DataType, error)
 
-// InserterFuncGenerator is a function that generates an InserterFunc given a
+// FuncGenerator is a function that generates an Func given a
 // value.
-type InserterFuncGenerator func(value mmdbtype.DataType) InserterFunc
+type FuncGenerator func(value mmdbtype.DataType) Func
 
 // Remove any records for the network being inserted.
 func Remove(value mmdbtype.DataType) (mmdbtype.DataType, error) {
@@ -22,7 +22,7 @@ func Remove(value mmdbtype.DataType) (mmdbtype.DataType, error) {
 
 // ReplaceWith generates an inserter function that replaces the existing
 // value with the new value.
-func ReplaceWith(value mmdbtype.DataType) InserterFunc {
+func ReplaceWith(value mmdbtype.DataType) Func {
 	return func(_ mmdbtype.DataType) (mmdbtype.DataType, error) {
 		return value, nil
 	}
@@ -34,7 +34,7 @@ func ReplaceWith(value mmdbtype.DataType) InserterFunc {
 //
 // Both the new and existing value must be a Map. An error will be returned
 // otherwise.
-func TopLevelMergeWith(newValue mmdbtype.DataType) InserterFunc {
+func TopLevelMergeWith(newValue mmdbtype.DataType) Func {
 	return func(existingValue mmdbtype.DataType) (mmdbtype.DataType, error) {
 		newMap, ok := newValue.(mmdbtype.Map)
 		if !ok {
@@ -71,7 +71,7 @@ func TopLevelMergeWith(newValue mmdbtype.DataType) InserterFunc {
 // DeepMergeWith creates an inserter that will recursively update an existing
 // value. Map and Slice values will be merged recursively. Other values will
 // be replaced by the new value.
-func DeepMergeWith(newValue mmdbtype.DataType) InserterFunc {
+func DeepMergeWith(newValue mmdbtype.DataType) Func {
 	return func(existingValue mmdbtype.DataType) (mmdbtype.DataType, error) {
 		return deepMerge(existingValue, newValue)
 	}

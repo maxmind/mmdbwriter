@@ -12,6 +12,7 @@ import (
 	"github.com/maxmind/mmdbwriter/mmdbtype"
 	"github.com/oschwald/maxminddb-golang"
 	"github.com/pkg/errors"
+	"inet.af/netaddr"
 )
 
 var (
@@ -76,7 +77,7 @@ type Options struct {
 	// Inserter is the insert function used when calling `Insert`. It defaults
 	// to `inserter.ReplaceWith`, which replaces any conflicting old value
 	// entirely with the new.
-	Inserter inserter.InserterFuncGenerator
+	Inserter inserter.FuncGenerator
 }
 
 // Tree represents an MaxMind DB search tree.
@@ -93,7 +94,7 @@ type Tree struct {
 	treeDepth               int
 	// This is set when the tree is finalized
 	nodeCount       int
-	inserterFuncGen inserter.InserterFuncGenerator
+	inserterFuncGen inserter.FuncGenerator
 }
 
 // New creates a new Tree.
@@ -246,7 +247,7 @@ func (t *Tree) Insert(network *net.IPNet, value mmdbtype.DataType) error {
 // This is not safe to call from multiple threads.
 func (t *Tree) InsertFunc(
 	network *net.IPNet,
-	inserter inserter.InserterFunc,
+	inserter inserter.Func,
 ) error {
 	return t.insert(network, recordTypeData, inserter, nil)
 }
@@ -254,7 +255,7 @@ func (t *Tree) InsertFunc(
 func (t *Tree) insert(
 	network *net.IPNet,
 	recordType recordType,
-	inserter inserter.InserterFunc,
+	inserter inserter.Func,
 	node *node,
 ) error {
 	// We set this to 0 so that the tree must be finalized again.
@@ -280,6 +281,56 @@ func (t *Tree) insert(
 		},
 		0,
 	)
+}
+
+// InsertRange is the same as Insert, except it will insert all subnets within
+// the range of IPs specified by `[start,end]`.
+func (t *Tree) InsertRange(
+	start net.IP,
+	end net.IP,
+	value mmdbtype.DataType,
+) error {
+	return t.InsertRangeFunc(start, end, t.inserterFuncGen(value))
+}
+
+// InsertRangeFunc is the same as InsertFunc, except it will insert all subnets
+// within the range of IPs specified by `[start,end]`.
+func (t *Tree) InsertRangeFunc(
+	start net.IP,
+	end net.IP,
+	inserter inserter.Func,
+) error {
+	return t.insertRange(start, end, recordTypeData, inserter, nil)
+}
+
+func (t *Tree) insertRange(
+	start net.IP,
+	end net.IP,
+	recordType recordType,
+	inserter inserter.Func,
+	node *node,
+) error {
+	_start, ok := netaddr.FromStdIP(start)
+	if !ok {
+		return errors.New("start IP is invalid")
+	}
+	_end, ok := netaddr.FromStdIP(end)
+	if !ok {
+		return errors.New("end IP is invalid")
+	}
+
+	r := netaddr.IPRangeFrom(_start, _end)
+	if !r.IsValid() {
+		return errors.New("start & end IPs did not give valid range")
+	}
+	subnets := r.Prefixes()
+	for _, subnet := range subnets {
+		if err := t.insert(subnet.IPNet(), recordType, inserter, node); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func (t *Tree) insertStringNetwork(

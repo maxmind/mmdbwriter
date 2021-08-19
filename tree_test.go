@@ -19,11 +19,15 @@ import (
 
 type testInsert struct {
 	network string
+	start   string
+	end     string
 	value   mmdbtype.DataType
 }
 
 type testInsertError struct {
 	network          string
+	start            string
+	end              string
 	value            mmdbtype.DataType
 	expectedErrorMsg string
 }
@@ -111,6 +115,7 @@ func TestTreeInsertAndGet(t *testing.T) {
 		name                    string
 		disableIPv4Aliasing     bool
 		includeReservedNetworks bool
+		insertType              string // "net" or "range or "" for both.
 		inserts                 []testInsert
 		insertErrors            []testInsertError
 		gets                    []testGet
@@ -123,6 +128,8 @@ func TestTreeInsertAndGet(t *testing.T) {
 			inserts: []testInsert{
 				{
 					network: "::/0",
+					start:   "::",
+					end:     "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
 					value:   mmdbtype.String("string"),
 				},
 			},
@@ -148,6 +155,8 @@ func TestTreeInsertAndGet(t *testing.T) {
 			inserts: []testInsert{
 				{
 					network: "::/1",
+					start:   "::",
+					end:     "7fff:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
 					value:   mmdbtype.String("string"),
 				},
 			},
@@ -167,6 +176,8 @@ func TestTreeInsertAndGet(t *testing.T) {
 			inserts: []testInsert{
 				{
 					network: "8000::/1",
+					start:   "8000::",
+					end:     "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
 					value:   mmdbtype.String("string"),
 				},
 			},
@@ -186,10 +197,14 @@ func TestTreeInsertAndGet(t *testing.T) {
 			inserts: []testInsert{
 				{
 					network: "2003:1000::/32",
+					start:   "2003:1000::",
+					end:     "2003:1000:ffff:ffff:ffff:ffff:ffff:ffff",
 					value:   mmdbtype.String("string"),
 				},
 				{
 					network: "2003::/16",
+					start:   "2003::",
+					end:     "2003:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
 					value:   mmdbtype.String("new string"),
 				},
 			},
@@ -215,10 +230,14 @@ func TestTreeInsertAndGet(t *testing.T) {
 			inserts: []testInsert{
 				{
 					network: "2003::/16",
+					start:   "2003::",
+					end:     "2003:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
 					value:   mmdbtype.String("string"),
 				},
 				{
 					network: "2003:1000::/32",
+					start:   "2003:1000::",
+					end:     "2003:1000:ffff:ffff:ffff:ffff:ffff:ffff",
 					value:   mmdbtype.String("new string"),
 				},
 			},
@@ -251,6 +270,8 @@ func TestTreeInsertAndGet(t *testing.T) {
 			inserts: []testInsert{
 				{
 					network: "1.1.1.1/32",
+					start:   "1.1.1.1",
+					end:     "1.1.1.1",
 					value:   mmdbtype.String("string"),
 				},
 			},
@@ -280,20 +301,28 @@ func TestTreeInsertAndGet(t *testing.T) {
 			inserts: []testInsert{
 				{
 					network: "::/1",
+					start:   "::",
+					end:     "7fff:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
 					value:   mmdbtype.String("string"),
 				},
 			},
 			insertErrors: []testInsertError{
 				{
 					network:          "10.0.0.0/8",
+					start:            "10.0.0.0",
+					end:              "10.255.255.255",
 					expectedErrorMsg: "attempt to insert ::a00:0/104, which is in a reserved network",
 				},
 				{
 					network:          "10.0.0.1/32",
+					start:            "10.0.0.1",
+					end:              "10.0.0.1",
 					expectedErrorMsg: "attempt to insert ::a00:1/128, which is in a reserved network",
 				},
 				{
 					network:          "2002:100::/24",
+					start:            "2002:100::",
+					end:              "2002:1ff:ffff:ffff:ffff:ffff:ffff:ffff",
 					expectedErrorMsg: "attempt to insert 2002:100::/24, which is in an aliased network",
 				},
 			},
@@ -324,10 +353,14 @@ func TestTreeInsertAndGet(t *testing.T) {
 			inserts: []testInsert{
 				{
 					network: "1.1.1.0/24",
+					start:   "1.1.1.0",
+					end:     "1.1.1.255",
 					value:   allTypesGetSubmap,
 				},
 				{
 					network: "1.1.2.0/24",
+					start:   "1.1.2.0",
+					end:     "1.1.2.255",
 					value:   allTypesGetRecord,
 				},
 			},
@@ -352,10 +385,14 @@ func TestTreeInsertAndGet(t *testing.T) {
 			inserts: []testInsert{
 				{
 					network: "1.1.0.0/24",
+					start:   "1.1.0.0",
+					end:     "1.1.0.255",
 					value:   mmdbtype.Map{"a": mmdbtype.Slice{mmdbtype.Uint64(1), mmdbtype.Bytes{1, 2}}},
 				},
 				{
 					network: "1.1.1.0/24",
+					start:   "1.1.1.0",
+					end:     "1.1.1.255",
 					// We intentionally don't use the same variable for
 					// here and above as we want them to be different instances.
 					value: mmdbtype.Map{"a": mmdbtype.Slice{mmdbtype.Uint64(1), mmdbtype.Bytes{1, 2}}},
@@ -373,6 +410,62 @@ func TestTreeInsertAndGet(t *testing.T) {
 				},
 			},
 			expectedNodeCount: 367,
+		},
+		{
+			name:       "insertion of range with multiple subnets",
+			insertType: "range",
+			inserts: []testInsert{
+				{
+					start: "1.1.1.0",
+					end:   "1.1.1.6",
+					value: mmdbtype.String("string"),
+				},
+			},
+			gets: []testGet{
+				{
+					ip:                  "1.1.1.0",
+					expectedNetwork:     "1.1.1.0/30",
+					expectedGetValue:    mmdbtype.String("string"),
+					expectedLookupValue: s2ip("string"),
+				},
+				{
+					ip:                  "1.1.1.1",
+					expectedNetwork:     "1.1.1.0/30",
+					expectedGetValue:    mmdbtype.String("string"),
+					expectedLookupValue: s2ip("string"),
+				},
+				{
+					ip:                  "1.1.1.2",
+					expectedNetwork:     "1.1.1.0/30",
+					expectedGetValue:    mmdbtype.String("string"),
+					expectedLookupValue: s2ip("string"),
+				},
+				{
+					ip:                  "1.1.1.3",
+					expectedNetwork:     "1.1.1.0/30",
+					expectedGetValue:    mmdbtype.String("string"),
+					expectedLookupValue: s2ip("string"),
+				},
+				{
+					ip:                  "1.1.1.4",
+					expectedNetwork:     "1.1.1.4/31",
+					expectedGetValue:    mmdbtype.String("string"),
+					expectedLookupValue: s2ip("string"),
+				},
+				{
+					ip:                  "1.1.1.5",
+					expectedNetwork:     "1.1.1.4/31",
+					expectedGetValue:    mmdbtype.String("string"),
+					expectedLookupValue: s2ip("string"),
+				},
+				{
+					ip:                  "1.1.1.6",
+					expectedNetwork:     "1.1.1.6/32",
+					expectedGetValue:    mmdbtype.String("string"),
+					expectedLookupValue: s2ip("string"),
+				},
+			},
+			expectedNodeCount: 376,
 		},
 	}
 
@@ -392,20 +485,39 @@ func TestTreeInsertAndGet(t *testing.T) {
 						},
 					)
 					require.NoError(t, err)
-					for _, insert := range test.inserts {
-						_, network, err := net.ParseCIDR(insert.network)
-						require.NoError(t, err)
+					if test.insertType == "" || test.insertType == "net" {
+						for _, insert := range test.inserts {
+							_, network, err := net.ParseCIDR(insert.network)
+							require.NoError(t, err)
 
-						require.NoError(t, tree.Insert(network, insert.value))
-					}
+							require.NoError(t, tree.Insert(network, insert.value))
+						}
+						for _, insert := range test.insertErrors {
+							_, network, err := net.ParseCIDR(insert.network)
+							require.NoError(t, err)
 
-					for _, insert := range test.insertErrors {
-						_, network, err := net.ParseCIDR(insert.network)
-						require.NoError(t, err)
+							err = tree.Insert(network, insert.value)
 
-						err = tree.Insert(network, insert.value)
+							assert.EqualError(t, err, insert.expectedErrorMsg)
+						}
+					} else if test.insertType == "" || test.insertType == "range" {
+						for _, insert := range test.inserts {
+							start := net.ParseIP(insert.start)
+							require.NotNil(t, start)
+							end := net.ParseIP(insert.end)
+							require.NotNil(t, end)
 
-						assert.EqualError(t, err, insert.expectedErrorMsg)
+							require.NoError(t, tree.InsertRange(start, end, insert.value))
+						}
+						for _, insert := range test.insertErrors {
+							start := net.ParseIP(insert.start)
+							require.NotNil(t, start)
+							end := net.ParseIP(insert.end)
+							require.NotNil(t, end)
+
+							err = tree.InsertRange(start, end, insert.value)
+							assert.EqualError(t, err, insert.expectedErrorMsg)
+						}
 					}
 
 					tree.finalize()
