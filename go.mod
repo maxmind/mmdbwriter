@@ -1,6 +1,6 @@
 module github.com/maxmind/mmdbwriter
 
-go 1.18
+go 1.17
 
 require (
 	github.com/oschwald/maxminddb-golang v1.7.1-0.20200819192241-1f1e288ee3f9
