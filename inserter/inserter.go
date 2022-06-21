@@ -3,8 +3,9 @@
 package inserter
 
 import (
+	"fmt"
+
 	"github.com/maxmind/mmdbwriter/mmdbtype"
-	"github.com/pkg/errors"
 )
 
 // Func is a function that returns the data type to be inserted into an
@@ -38,7 +39,7 @@ func TopLevelMergeWith(newValue mmdbtype.DataType) Func {
 	return func(existingValue mmdbtype.DataType) (mmdbtype.DataType, error) {
 		newMap, ok := newValue.(mmdbtype.Map)
 		if !ok {
-			return nil, errors.Errorf(
+			return nil, fmt.Errorf(
 				"the new value is a %T, not a Map; TopLevelMergeWith only works if both values are Map values",
 				newValue,
 			)
@@ -52,7 +53,7 @@ func TopLevelMergeWith(newValue mmdbtype.DataType) Func {
 		// values that will be replaced.
 		existingMap, ok := existingValue.(mmdbtype.Map)
 		if !ok {
-			return nil, errors.Errorf(
+			return nil, fmt.Errorf(
 				"the existing value is a %T, not a Map; TopLevelMergeWith only works if both values are Map values",
 				existingValue,
 			)

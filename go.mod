@@ -4,7 +4,6 @@ go 1.17
 
 require (
 	github.com/oschwald/maxminddb-golang v1.9.0
-	github.com/pkg/errors v0.9.1
 	github.com/stretchr/testify v1.7.4
 	inet.af/netaddr v0.0.0-20220617031823-097006376321
 )

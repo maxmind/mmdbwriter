@@ -1,10 +1,11 @@
 package mmdbwriter
 
 import (
+	"errors"
+	"fmt"
 	"math/big"
 
 	"github.com/maxmind/mmdbwriter/mmdbtype"
-	"github.com/pkg/errors"
 )
 
 // Potentially, it would make sense to add this to mmdbtypes and make
@@ -112,7 +113,7 @@ func (d *deserializer) simpleAdd(v mmdbtype.DataType) error {
 			if d.key == nil {
 				key, ok := v.(mmdbtype.String)
 				if !ok {
-					return errors.Errorf("expected a String Map key but received %T", v)
+					return fmt.Errorf("expected a String Map key but received %T", v)
 				}
 				d.key = &key
 			} else {

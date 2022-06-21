@@ -3,12 +3,11 @@ package mmdbtype
 
 import (
 	"encoding/binary"
+	"fmt"
 	"io"
 	"math/big"
 	"math/bits"
 	"sort"
-
-	"github.com/pkg/errors"
 )
 
 type typeNum byte
@@ -99,7 +98,7 @@ func (t Bytes) WriteTo(w writer) (int64, error) {
 	written, err := w.Write(t)
 	numBytes += int64(written)
 	if err != nil {
-		return numBytes, errors.Wrapf(err, `error writing "%s" as bytes`, t)
+		return numBytes, fmt.Errorf(`writing "%s" as bytes: %w`, t, err)
 	}
 	return numBytes, nil
 }
@@ -127,7 +126,7 @@ func (t Float32) WriteTo(w writer) (int64, error) {
 
 	err = binary.Write(w, binary.BigEndian, t)
 	if err != nil {
-		return numBytes, errors.Wrapf(err, "error writing %f as float32", t)
+		return numBytes, fmt.Errorf("writing %f as float32: %w", t, err)
 	}
 	return numBytes + int64(t.size()), nil
 }
@@ -155,7 +154,7 @@ func (t Float64) WriteTo(w writer) (int64, error) {
 
 	err = binary.Write(w, binary.BigEndian, t)
 	if err != nil {
-		return numBytes, errors.Wrapf(err, "error writing %f as float64", t)
+		return numBytes, fmt.Errorf("writing %f as float64: %w", t, err)
 	}
 	return numBytes + int64(t.size()), nil
 }
@@ -186,7 +185,7 @@ func (t Int32) WriteTo(w writer) (int64, error) {
 	for i := size; i > 0; i-- {
 		err = w.WriteByte(byte((int32(t) >> (8 * (i - 1))) & 0xFF))
 		if err != nil {
-			return numBytes + int64(size-i), errors.Wrap(err, "error writing int32")
+			return numBytes + int64(size-i), fmt.Errorf("writing int32: %w", err)
 		}
 	}
 	return numBytes + int64(size), nil
@@ -289,64 +288,64 @@ func (t Pointer) WriteTo(w writer) (int64, error) {
 	case 0:
 		err := w.WriteByte(0b00100000 | byte(0b111&(t>>8)))
 		if err != nil {
-			return 0, errors.Wrap(err, "error writing pointer")
+			return 0, fmt.Errorf("writing pointer: %w", err)
 		}
 		err = w.WriteByte(byte(0xFF & t))
 		if err != nil {
-			return 1, errors.Wrap(err, "error writing pointer")
+			return 1, fmt.Errorf("writing pointer: %w", err)
 		}
 	case 1:
 		v := t - pointerMaxSize0
 		err := w.WriteByte(0b00101000 | byte(0b111&(v>>16)))
 		if err != nil {
-			return 0, errors.Wrap(err, "error writing pointer")
+			return 0, fmt.Errorf("writing pointer: %w", err)
 		}
 		err = w.WriteByte(byte(0xFF & (v >> 8)))
 		if err != nil {
-			return 1, errors.Wrap(err, "error writing pointer")
+			return 1, fmt.Errorf("writing pointer: %w", err)
 		}
 		err = w.WriteByte(byte(0xFF & v))
 		if err != nil {
-			return 2, errors.Wrap(err, "error writing pointer")
+			return 2, fmt.Errorf("writing pointer: %w", err)
 		}
 	case 2:
 		v := t - pointerMaxSize1
 		err := w.WriteByte(0b00110000 | byte(0b111&(v>>24)))
 		if err != nil {
-			return 0, errors.Wrap(err, "error writing pointer")
+			return 0, fmt.Errorf("writing pointer: %w", err)
 		}
 		err = w.WriteByte(byte(0xFF & (v >> 16)))
 		if err != nil {
-			return 1, errors.Wrap(err, "error writing pointer")
+			return 1, fmt.Errorf("writing pointer: %w", err)
 		}
 		err = w.WriteByte(byte(0xFF & (v >> 8)))
 		if err != nil {
-			return 2, errors.Wrap(err, "error writing pointer")
+			return 2, fmt.Errorf("writing pointer: %w", err)
 		}
 		err = w.WriteByte(byte(0xFF & v))
 		if err != nil {
-			return 3, errors.Wrap(err, "error writing pointer")
+			return 3, fmt.Errorf("writing pointer: %w", err)
 		}
 	case 3:
 		err := w.WriteByte(0b00111000)
 		if err != nil {
-			return 0, errors.Wrap(err, "error writing pointer")
+			return 0, fmt.Errorf("writing pointer: %w", err)
 		}
 		err = w.WriteByte(byte(0xFF & (t >> 24)))
 		if err != nil {
-			return 1, errors.Wrap(err, "error writing pointer")
+			return 1, fmt.Errorf("writing pointer: %w", err)
 		}
 		err = w.WriteByte(byte(0xFF & (t >> 16)))
 		if err != nil {
-			return 2, errors.Wrap(err, "error writing pointer")
+			return 2, fmt.Errorf("writing pointer: %w", err)
 		}
 		err = w.WriteByte(byte(0xFF & (t >> 8)))
 		if err != nil {
-			return 3, errors.Wrap(err, "error writing pointer")
+			return 3, fmt.Errorf("writing pointer: %w", err)
 		}
 		err = w.WriteByte(byte(0xFF & t))
 		if err != nil {
-			return 4, errors.Wrap(err, "error writing pointer")
+			return 4, fmt.Errorf("writing pointer: %w", err)
 		}
 	}
 	return t.WrittenSize(), nil
@@ -413,7 +412,7 @@ func (t String) WriteTo(w writer) (int64, error) {
 	written, err := w.WriteString(string(t))
 	numBytes += int64(written)
 	if err != nil {
-		return numBytes, errors.Wrapf(err, `error writing "%s" as a string`, t)
+		return numBytes, fmt.Errorf(`writing "%s" as a string: %w`, t, err)
 	}
 	return numBytes, nil
 }
@@ -444,7 +443,7 @@ func (t Uint16) WriteTo(w writer) (int64, error) {
 	for i := size; i > 0; i-- {
 		err = w.WriteByte(byte(t >> (8 * (i - 1)) & 0xFF))
 		if err != nil {
-			return numBytes + int64(size-i), errors.Wrap(err, "error writing uint16")
+			return numBytes + int64(size-i), fmt.Errorf("writing uint16: %w", err)
 		}
 	}
 	return numBytes + int64(size), nil
@@ -476,7 +475,7 @@ func (t Uint32) WriteTo(w writer) (int64, error) {
 	for i := size; i > 0; i-- {
 		err = w.WriteByte(byte(t >> (8 * (i - 1)) & 0xFF))
 		if err != nil {
-			return numBytes + int64(size-i), errors.Wrap(err, "error writing uint32")
+			return numBytes + int64(size-i), fmt.Errorf("writing uint32: %w", err)
 		}
 	}
 	return numBytes + int64(size), nil
@@ -509,7 +508,7 @@ func (t Uint64) WriteTo(w writer) (int64, error) {
 	for i := size; i > 0; i-- {
 		err = w.WriteByte(byte(t >> (8 * (i - 1)) & 0xFF))
 		if err != nil {
-			return numBytes + int64(size-i), errors.Wrap(err, "error writing uint64")
+			return numBytes + int64(size-i), fmt.Errorf("writing uint64: %w", err)
 		}
 	}
 	return numBytes + int64(size), nil
@@ -546,7 +545,7 @@ func (t *Uint128) WriteTo(w writer) (int64, error) {
 	written, err := w.Write((*big.Int)(t).Bytes())
 	numBytes += int64(written)
 	if err != nil {
-		return numBytes, errors.Wrap(err, "error writing uint128")
+		return numBytes, fmt.Errorf("writing uint128: %w", err)
 	}
 	return numBytes, nil
 }
@@ -591,7 +590,7 @@ func writeCtrlByte(w writer, t DataType) (int64, error) {
 		leftOver = size - thirdSize
 		leftOverSize = 3
 	default:
-		return 0, errors.Errorf(
+		return 0, fmt.Errorf(
 			"cannot store %d bytes; max size is %d",
 			size,
 			maxSize,
@@ -600,11 +599,11 @@ func writeCtrlByte(w writer, t DataType) (int64, error) {
 
 	err := w.WriteByte(firstByte)
 	if err != nil {
-		return 0, errors.Wrapf(
-			err,
-			"error writing first ctrl byte (type: %d, size: %d)",
+		return 0, fmt.Errorf(
+			"writing first ctrl byte (type: %d, size: %d): %w",
 			typeNum,
 			size,
+			err,
 		)
 	}
 	numBytes := int64(1)
@@ -612,11 +611,11 @@ func writeCtrlByte(w writer, t DataType) (int64, error) {
 	if secondByte != 0 {
 		err = w.WriteByte(secondByte)
 		if err != nil {
-			return numBytes, errors.Wrapf(
-				err,
-				"error writing second ctrl byte (type: %d, size: %d)",
+			return numBytes, fmt.Errorf(
+				"writing second ctrl byte (type: %d, size: %d): %w",
 				typeNum,
 				size,
+				err,
 			)
 		}
 		numBytes++
@@ -626,12 +625,12 @@ func writeCtrlByte(w writer, t DataType) (int64, error) {
 		v := byte((leftOver >> (8 * i)) & 0xFF)
 		err = w.WriteByte(v)
 		if err != nil {
-			return numBytes, errors.Wrapf(
-				err,
-				"error writing remaining ctrl bytes (type: %d, size: %d, value: %d)",
+			return numBytes, fmt.Errorf(
+				"writing remaining ctrl bytes (type: %d, size: %d, value: %d): %w",
 				typeNum,
 				size,
 				v,
+				err,
 			)
 		}
 		numBytes++
