@@ -442,6 +442,8 @@ func (t *Tree) WriteTo(w io.Writer) (int64, error) {
 	}
 
 	buf := bufio.NewWriter(w)
+	//nolint:errcheck // We check the error on flush the only place that matters.
+	defer buf.Flush()
 
 	// We create this here so that we don't have to allocate millions of these. This
 	// may no longer make sense now that we are using a bufio.Writer anyway, which has
@@ -453,11 +455,9 @@ func (t *Tree) WriteTo(w io.Writer) (int64, error) {
 
 	nodeCount, numBytes, err := t.writeNode(buf, t.root, dataWriter, recordBuf)
 	if err != nil {
-		_ = buf.Flush()
 		return numBytes, err
 	}
 	if nodeCount != t.nodeCount {
-		_ = buf.Flush()
 		// This should only happen if there is a programming bug
 		// in this library.
 		return numBytes, errors.Errorf(
@@ -470,35 +470,30 @@ func (t *Tree) WriteTo(w io.Writer) (int64, error) {
 	nb, err := buf.Write(dataSectionSeparator)
 	numBytes += int64(nb)
 	if err != nil {
-		_ = buf.Flush()
 		return numBytes, errors.Wrap(err, "error writing data section separator")
 	}
 
 	nb64, err := dataWriter.WriteTo(buf)
 	numBytes += nb64
 	if err != nil {
-		_ = buf.Flush()
 		return numBytes, err
 	}
 
 	nb, err = buf.Write(metadataStartMarker)
 	numBytes += int64(nb)
 	if err != nil {
-		_ = buf.Flush()
 		return numBytes, errors.Wrap(err, "error writing metadata start marker")
 	}
 
 	metadataWriter := newDataWriter(dataWriter.dataMap, !t.disableMetadataPointers)
 	_, err = t.writeMetadata(metadataWriter)
 	if err != nil {
-		_ = buf.Flush()
 		return numBytes, errors.Wrap(err, "error writing metadata")
 	}
 
 	nb64, err = metadataWriter.WriteTo(buf)
 	numBytes += nb64
 	if err != nil {
-		_ = buf.Flush()
 		return numBytes, errors.Wrap(err, "error writing metadata to buffer")
 	}
 
