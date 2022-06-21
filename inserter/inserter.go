@@ -16,7 +16,7 @@ type Func func(mmdbtype.DataType) (mmdbtype.DataType, error)
 type FuncGenerator func(value mmdbtype.DataType) Func
 
 // Remove any records for the network being inserted.
-func Remove(value mmdbtype.DataType) (mmdbtype.DataType, error) {
+func Remove(_ mmdbtype.DataType) (mmdbtype.DataType, error) {
 	return nil, nil
 }
 

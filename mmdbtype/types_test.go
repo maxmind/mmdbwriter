@@ -141,7 +141,8 @@ func TestString(t *testing.T) {
 func TestByte(t *testing.T) {
 	b := make(map[string]DataType)
 	for key, val := range testStrings {
-		oldCtrl, _ := hex.DecodeString(key[0:2])
+		oldCtrl, err := hex.DecodeString(key[0:2])
+		require.NoError(t, err)
 		newCtrl := []byte{oldCtrl[0] ^ 0xc0}
 		key = strings.Replace(key, hex.EncodeToString(oldCtrl), hex.EncodeToString(newCtrl), 1)
 		b[key] = Bytes([]byte(val.(String)))
@@ -214,7 +215,7 @@ func TestUint128(t *testing.T) {
 }
 
 // No pow or bit shifting for big int, apparently :-(
-// This is _not_ meant to be a comprehensive power function
+// This is _not_ meant to be a comprehensive power function.
 func powBigInt(bi *big.Int, pow uint) *big.Int {
 	newInt := big.NewInt(1)
 	for i := uint(0); i < pow; i++ {

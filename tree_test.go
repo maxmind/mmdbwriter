@@ -3,7 +3,6 @@ package mmdbwriter
 import (
 	"bytes"
 	"fmt"
-	"io/ioutil"
 	"math/big"
 	"net"
 	"os"
@@ -539,7 +538,7 @@ func TestTreeInsertAndGet(t *testing.T) {
 
 					assert.Equal(t, int64(buf.Len()), numBytes, "number of bytes")
 
-					f, err := ioutil.TempFile("", "mmdbwriter")
+					f, err := os.CreateTemp("", "mmdbwriter")
 					require.NoError(t, err)
 					defer func() { require.NoError(t, os.Remove(f.Name())) }()
 
@@ -646,7 +645,7 @@ func TestInsertFunc_RemovalAndLaterInsert(t *testing.T) {
 	assert.Nil(t, recValue)
 }
 
-func s2ip(v string) *interface{} {
+func s2ip(v string) *interface{} { //nolint:gocritic // test
 	i := interface{}(v)
 	return &i
 }

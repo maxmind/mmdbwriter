@@ -20,9 +20,8 @@ var (
 	dataSectionSeparator = []byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
 )
 
-// Options holds configuration parameters for the writer
+// Options holds configuration parameters for the writer.
 type Options struct {
-
 	// BuildEpoch is the database build timestamp as a Unix epoch value. It
 	// defaults to the epoch of when New was called.
 	BuildEpoch int64
@@ -247,15 +246,15 @@ func (t *Tree) Insert(network *net.IPNet, value mmdbtype.DataType) error {
 // This is not safe to call from multiple threads.
 func (t *Tree) InsertFunc(
 	network *net.IPNet,
-	inserter inserter.Func,
+	inserterFunc inserter.Func,
 ) error {
-	return t.insert(network, recordTypeData, inserter, nil)
+	return t.insert(network, recordTypeData, inserterFunc, nil)
 }
 
 func (t *Tree) insert(
 	network *net.IPNet,
 	recordType recordType,
-	inserter inserter.Func,
+	inserterFunc inserter.Func,
 	node *node,
 ) error {
 	// We set this to 0 so that the tree must be finalized again.
@@ -274,7 +273,7 @@ func (t *Tree) insert(
 			ip:           ip,
 			prefixLen:    prefixLen,
 			recordType:   recordType,
-			inserter:     inserter,
+			inserter:     inserterFunc,
 			insertedNode: node,
 
 			dataMap: t.dataMap,
@@ -298,16 +297,16 @@ func (t *Tree) InsertRange(
 func (t *Tree) InsertRangeFunc(
 	start net.IP,
 	end net.IP,
-	inserter inserter.Func,
+	inserterFunc inserter.Func,
 ) error {
-	return t.insertRange(start, end, recordTypeData, inserter, nil)
+	return t.insertRange(start, end, recordTypeData, inserterFunc, nil)
 }
 
 func (t *Tree) insertRange(
 	start net.IP,
 	end net.IP,
 	recordType recordType,
-	inserter inserter.Func,
+	inserterFunc inserter.Func,
 	node *node,
 ) error {
 	_start, ok := netaddr.FromStdIP(start)
@@ -325,7 +324,7 @@ func (t *Tree) insertRange(
 	}
 	subnets := r.Prefixes()
 	for _, subnet := range subnets {
-		if err := t.insert(subnet.IPNet(), recordType, inserter, node); err != nil {
+		if err := t.insert(subnet.IPNet(), recordType, inserterFunc, node); err != nil {
 			return err
 		}
 	}
@@ -336,14 +335,14 @@ func (t *Tree) insertRange(
 func (t *Tree) insertStringNetwork(
 	network string,
 	recordType recordType,
-	inserter func(value mmdbtype.DataType) (mmdbtype.DataType, error),
+	inserterFunc inserter.Func,
 	node *node,
 ) error {
 	_, ipnet, err := net.ParseCIDR(network)
 	if err != nil {
 		return errors.Wrapf(err, "error parsing network (%s)", network)
 	}
-	return t.insert(ipnet, recordType, inserter, node)
+	return t.insert(ipnet, recordType, inserterFunc, node)
 }
 
 var ipv4AliasNetworks = []string{
