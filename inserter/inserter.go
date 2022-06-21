@@ -39,7 +39,7 @@ func TopLevelMergeWith(newValue mmdbtype.DataType) Func {
 		newMap, ok := newValue.(mmdbtype.Map)
 		if !ok {
 			return nil, errors.Errorf(
-				"the new value is a %T, not a Map. TopLevelMergeWith only works if both values are Map values.",
+				"the new value is a %T, not a Map; TopLevelMergeWith only works if both values are Map values",
 				newValue,
 			)
 		}
@@ -53,7 +53,7 @@ func TopLevelMergeWith(newValue mmdbtype.DataType) Func {
 		existingMap, ok := existingValue.(mmdbtype.Map)
 		if !ok {
 			return nil, errors.Errorf(
-				"the existing value is a %T, not a Map. TopLevelMergeWith only works if both values are Map values.",
+				"the existing value is a %T, not a Map; TopLevelMergeWith only works if both values are Map values",
 				existingValue,
 			)
 		}

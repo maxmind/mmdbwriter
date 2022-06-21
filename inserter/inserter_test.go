@@ -33,22 +33,22 @@ func TestTopLevelMergeWith(t *testing.T) {
 			existing:    nil,
 			new:         nil,
 			expected:    nil,
-			expectedErr: "the new value is a <nil>, not a Map. " +
-				"TopLevelMergeWith only works if both values are Map values.",
+			expectedErr: "the new value is a <nil>, not a Map; " +
+				"TopLevelMergeWith only works if both values are Map values",
 		},
 		{
 			description: "existing slice, new map",
 			existing:    mmdbtype.Slice{},
 			new:         mmdbtype.Map{"a": mmdbtype.String("b")},
-			expectedErr: "the existing value is a mmdbtype.Slice, not a Map. " +
-				"TopLevelMergeWith only works if both values are Map values.",
+			expectedErr: "the existing value is a mmdbtype.Slice, not a Map; " +
+				"TopLevelMergeWith only works if both values are Map values",
 		},
 		{
 			description: "existing map, new slice",
 			existing:    mmdbtype.Map{"a": mmdbtype.String("b")},
 			new:         mmdbtype.Slice{},
-			expectedErr: "the new value is a mmdbtype.Slice, not a Map. " +
-				"TopLevelMergeWith only works if both values are Map values.",
+			expectedErr: "the new value is a mmdbtype.Slice, not a Map; " +
+				"TopLevelMergeWith only works if both values are Map values",
 		},
 		{
 			description: "existing nil, new map",

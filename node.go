@@ -131,7 +131,7 @@ func (r *record) insert(
 			iRec.prefixLen,
 		)
 	default:
-		return errors.Errorf("inserting into record type %d not implemented!", r.recordType)
+		return errors.Errorf("inserting into record type %d is not implemented", r.recordType)
 	}
 
 	return r.node.insert(iRec, newDepth)
