@@ -1,10 +1,10 @@
 package mmdbwriter
 
 import (
+	"fmt"
 	"net"
 
 	"github.com/maxmind/mmdbwriter/mmdbtype"
-	"github.com/pkg/errors"
 )
 
 type recordType byte
@@ -109,7 +109,7 @@ func (r *record) insert(
 		r.recordType = recordTypeNode
 	case recordTypeReserved:
 		if iRec.prefixLen >= newDepth {
-			return errors.Errorf(
+			return fmt.Errorf(
 				"attempt to insert %s/%d, which is in a reserved network",
 				iRec.ip,
 				iRec.prefixLen,
@@ -125,13 +125,13 @@ func (r *record) insert(
 			return nil
 		}
 		// attempting to insert _into_ an aliased network
-		return errors.Errorf(
+		return fmt.Errorf(
 			"attempt to insert %s/%d, which is in an aliased network",
 			iRec.ip,
 			iRec.prefixLen,
 		)
 	default:
-		return errors.Errorf("inserting into record type %d not implemented!", r.recordType)
+		return fmt.Errorf("inserting into record type %d is not implemented", r.recordType)
 	}
 
 	return r.node.insert(iRec, newDepth)

@@ -20,7 +20,7 @@ func newKeyWriter() *keyWriter {
 }
 
 // This is just a quick hack. I am sure there is
-// something better
+// something better.
 func (kw *keyWriter) key(t mmdbtype.DataType) ([]byte, error) {
 	kw.Truncate(0)
 	kw.sha256.Reset()

@@ -3,8 +3,9 @@
 package inserter
 
 import (
+	"fmt"
+
 	"github.com/maxmind/mmdbwriter/mmdbtype"
-	"github.com/pkg/errors"
 )
 
 // Func is a function that returns the data type to be inserted into an
@@ -16,7 +17,7 @@ type Func func(mmdbtype.DataType) (mmdbtype.DataType, error)
 type FuncGenerator func(value mmdbtype.DataType) Func
 
 // Remove any records for the network being inserted.
-func Remove(value mmdbtype.DataType) (mmdbtype.DataType, error) {
+func Remove(_ mmdbtype.DataType) (mmdbtype.DataType, error) {
 	return nil, nil
 }
 
@@ -38,8 +39,8 @@ func TopLevelMergeWith(newValue mmdbtype.DataType) Func {
 	return func(existingValue mmdbtype.DataType) (mmdbtype.DataType, error) {
 		newMap, ok := newValue.(mmdbtype.Map)
 		if !ok {
-			return nil, errors.Errorf(
-				"the new value is a %T, not a Map. TopLevelMergeWith only works if both values are Map values.",
+			return nil, fmt.Errorf(
+				"the new value is a %T, not a Map; TopLevelMergeWith only works if both values are Map values",
 				newValue,
 			)
 		}
@@ -52,8 +53,8 @@ func TopLevelMergeWith(newValue mmdbtype.DataType) Func {
 		// values that will be replaced.
 		existingMap, ok := existingValue.(mmdbtype.Map)
 		if !ok {
-			return nil, errors.Errorf(
-				"the existing value is a %T, not a Map. TopLevelMergeWith only works if both values are Map values.",
+			return nil, fmt.Errorf(
+				"the existing value is a %T, not a Map; TopLevelMergeWith only works if both values are Map values",
 				existingValue,
 			)
 		}

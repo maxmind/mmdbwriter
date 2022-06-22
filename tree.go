@@ -4,6 +4,8 @@ package mmdbwriter
 
 import (
 	"bufio"
+	"errors"
+	"fmt"
 	"io"
 	"net"
 	"time"
@@ -11,7 +13,6 @@ import (
 	"github.com/maxmind/mmdbwriter/inserter"
 	"github.com/maxmind/mmdbwriter/mmdbtype"
 	"github.com/oschwald/maxminddb-golang"
-	"github.com/pkg/errors"
 	"inet.af/netaddr"
 )
 
@@ -20,9 +21,8 @@ var (
 	dataSectionSeparator = []byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
 )
 
-// Options holds configuration parameters for the writer
+// Options holds configuration parameters for the writer.
 type Options struct {
-
 	// BuildEpoch is the database build timestamp as a Unix epoch value. It
 	// defaults to the epoch of when New was called.
 	BuildEpoch int64
@@ -141,7 +141,7 @@ func New(opts Options) (*Tree, error) {
 	case 4:
 		tree.treeDepth = 32
 	default:
-		return nil, errors.Errorf("unsupported IPVersion: %d", tree.ipVersion)
+		return nil, fmt.Errorf("unsupported IPVersion: %d", tree.ipVersion)
 	}
 
 	if tree.ipVersion == 6 && !opts.DisableIPv4Aliasing {
@@ -247,15 +247,15 @@ func (t *Tree) Insert(network *net.IPNet, value mmdbtype.DataType) error {
 // This is not safe to call from multiple threads.
 func (t *Tree) InsertFunc(
 	network *net.IPNet,
-	inserter inserter.Func,
+	inserterFunc inserter.Func,
 ) error {
-	return t.insert(network, recordTypeData, inserter, nil)
+	return t.insert(network, recordTypeData, inserterFunc, nil)
 }
 
 func (t *Tree) insert(
 	network *net.IPNet,
 	recordType recordType,
-	inserter inserter.Func,
+	inserterFunc inserter.Func,
 	node *node,
 ) error {
 	// We set this to 0 so that the tree must be finalized again.
@@ -274,7 +274,7 @@ func (t *Tree) insert(
 			ip:           ip,
 			prefixLen:    prefixLen,
 			recordType:   recordType,
-			inserter:     inserter,
+			inserter:     inserterFunc,
 			insertedNode: node,
 
 			dataMap: t.dataMap,
@@ -298,16 +298,16 @@ func (t *Tree) InsertRange(
 func (t *Tree) InsertRangeFunc(
 	start net.IP,
 	end net.IP,
-	inserter inserter.Func,
+	inserterFunc inserter.Func,
 ) error {
-	return t.insertRange(start, end, recordTypeData, inserter, nil)
+	return t.insertRange(start, end, recordTypeData, inserterFunc, nil)
 }
 
 func (t *Tree) insertRange(
 	start net.IP,
 	end net.IP,
 	recordType recordType,
-	inserter inserter.Func,
+	inserterFunc inserter.Func,
 	node *node,
 ) error {
 	_start, ok := netaddr.FromStdIP(start)
@@ -325,7 +325,7 @@ func (t *Tree) insertRange(
 	}
 	subnets := r.Prefixes()
 	for _, subnet := range subnets {
-		if err := t.insert(subnet.IPNet(), recordType, inserter, node); err != nil {
+		if err := t.insert(subnet.IPNet(), recordType, inserterFunc, node); err != nil {
 			return err
 		}
 	}
@@ -336,14 +336,14 @@ func (t *Tree) insertRange(
 func (t *Tree) insertStringNetwork(
 	network string,
 	recordType recordType,
-	inserter func(value mmdbtype.DataType) (mmdbtype.DataType, error),
+	inserterFunc inserter.Func,
 	node *node,
 ) error {
 	_, ipnet, err := net.ParseCIDR(network)
 	if err != nil {
-		return errors.Wrapf(err, "error parsing network (%s)", network)
+		return fmt.Errorf("parsing network (%s): %w", network, err)
 	}
-	return t.insert(ipnet, recordType, inserter, node)
+	return t.insert(ipnet, recordType, inserterFunc, node)
 }
 
 var ipv4AliasNetworks = []string{
@@ -355,7 +355,7 @@ var ipv4AliasNetworks = []string{
 func (t *Tree) insertIPv4Aliases() error {
 	_, ipv4Root, err := net.ParseCIDR("::/96")
 	if err != nil {
-		return errors.Wrap(err, "error parsing IPv4 root")
+		return fmt.Errorf("parsing IPv4 root: %w", err)
 	}
 
 	ipv4RootNode := &node{}
@@ -443,6 +443,8 @@ func (t *Tree) WriteTo(w io.Writer) (int64, error) {
 	}
 
 	buf := bufio.NewWriter(w)
+	//nolint:errcheck // We check the error on flush the only place that matters.
+	defer buf.Flush()
 
 	// We create this here so that we don't have to allocate millions of these. This
 	// may no longer make sense now that we are using a bufio.Writer anyway, which has
@@ -454,14 +456,12 @@ func (t *Tree) WriteTo(w io.Writer) (int64, error) {
 
 	nodeCount, numBytes, err := t.writeNode(buf, t.root, dataWriter, recordBuf)
 	if err != nil {
-		_ = buf.Flush()
 		return numBytes, err
 	}
 	if nodeCount != t.nodeCount {
-		_ = buf.Flush()
 		// This should only happen if there is a programming bug
 		// in this library.
-		return numBytes, errors.Errorf(
+		return numBytes, fmt.Errorf(
 			"number of nodes written (%d) doesn't match number expected (%d)",
 			nodeCount,
 			t.nodeCount,
@@ -471,41 +471,36 @@ func (t *Tree) WriteTo(w io.Writer) (int64, error) {
 	nb, err := buf.Write(dataSectionSeparator)
 	numBytes += int64(nb)
 	if err != nil {
-		_ = buf.Flush()
-		return numBytes, errors.Wrap(err, "error writing data section separator")
+		return numBytes, fmt.Errorf("writing data section separator: %w", err)
 	}
 
 	nb64, err := dataWriter.WriteTo(buf)
 	numBytes += nb64
 	if err != nil {
-		_ = buf.Flush()
 		return numBytes, err
 	}
 
 	nb, err = buf.Write(metadataStartMarker)
 	numBytes += int64(nb)
 	if err != nil {
-		_ = buf.Flush()
-		return numBytes, errors.Wrap(err, "error writing metadata start marker")
+		return numBytes, fmt.Errorf("writing metadata start marker: %w", err)
 	}
 
 	metadataWriter := newDataWriter(dataWriter.dataMap, !t.disableMetadataPointers)
 	_, err = t.writeMetadata(metadataWriter)
 	if err != nil {
-		_ = buf.Flush()
-		return numBytes, errors.Wrap(err, "error writing metadata")
+		return numBytes, fmt.Errorf("writing metadata: %w", err)
 	}
 
 	nb64, err = metadataWriter.WriteTo(buf)
 	numBytes += nb64
 	if err != nil {
-		_ = buf.Flush()
-		return numBytes, errors.Wrap(err, "error writing metadata to buffer")
+		return numBytes, fmt.Errorf("writing metadata to buffer: %w", err)
 	}
 
 	err = buf.Flush()
 	if err != nil {
-		return numBytes, errors.Wrap(err, "error flushing buffer to writer")
+		return numBytes, fmt.Errorf("flushing buffer to writer: %w", err)
 	}
 
 	return numBytes, err
@@ -527,7 +522,7 @@ func (t *Tree) writeNode(
 	numBytes += int64(nb)
 	nodesWritten := 1
 	if err != nil {
-		return nodesWritten, numBytes, errors.Wrap(err, "error writing node")
+		return nodesWritten, numBytes, fmt.Errorf("writing node: %w", err)
 	}
 
 	for i := 0; i < 2; i++ {
@@ -578,7 +573,7 @@ func (t *Tree) copyNode(buf []byte, n *node, dataWriter *dataWriter) error {
 
 	maxRecord := 1 << t.recordSize
 	if left >= maxRecord || right >= maxRecord {
-		return errors.Errorf(
+		return fmt.Errorf(
 			"exceeded record capacity by attempting to write (%d, %d) to node with %d bit record size; "+
 				"try increasing RecordSize or reducing the size of the database",
 			left,
@@ -613,7 +608,7 @@ func (t *Tree) copyNode(buf []byte, n *node, dataWriter *dataWriter) error {
 		buf[6] = byte((right >> 8) & 0xFF)
 		buf[7] = byte(right & 0xFF)
 	default:
-		return errors.Errorf("unsupported record size of %d", t.recordSize)
+		return fmt.Errorf("unsupported record size of %d", t.recordSize)
 	}
 	return nil
 }
