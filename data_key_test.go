@@ -7,7 +7,7 @@ import (
 )
 
 func BenchmarkKeyGeneration(b *testing.B) {
-	b.Run("small value", func(b *testing.B) {
+	b.Run("simple value", func(b *testing.B) {
 		value := mmdbtype.String("some test value that is not too long")
 		writer := newKeyWriter()
 
@@ -18,7 +18,7 @@ func BenchmarkKeyGeneration(b *testing.B) {
 			}
 		}
 	})
-	b.Run("large value", func(b *testing.B) {
+	b.Run("nested value", func(b *testing.B) {
 		value := mmdbtype.Map{
 			"string": mmdbtype.String("some string value"),
 			"number": mmdbtype.Uint64(123456789),
