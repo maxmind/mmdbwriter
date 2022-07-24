@@ -17,11 +17,13 @@ func TestDataMap(t *testing.T) {
 	dmv, err := dm.store(v)
 	require.NoError(t, err)
 
+	valueKey, _ := dm.keyWriter.key(v)
+
 	assert.Equal(
 		t,
 		&dataMapValue{
 			data:     v,
-			key:      123456789,
+			key:      dataMapKey(valueKey),
 			refCount: 1,
 		},
 		dmv,
