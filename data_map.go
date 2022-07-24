@@ -2,7 +2,7 @@ package mmdbwriter
 
 import "github.com/maxmind/mmdbwriter/mmdbtype"
 
-type dataMapKey string
+type dataMapKey uint64
 
 // Please note, if you change the order of these fields, please check
 // alignment as we end up storing quite a few in memory.

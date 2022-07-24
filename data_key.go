@@ -1,9 +1,7 @@
 package mmdbwriter
 
 import (
-	"bytes"
-	"crypto/sha256"
-	"hash"
+	"hash/maphash"
 
 	"github.com/maxmind/mmdbwriter/mmdbtype"
 )
@@ -11,27 +9,22 @@ import (
 // keyWriter is similar to dataWriter but it will never use pointers. This
 // will produce a unique key for the type.
 type keyWriter struct {
-	*bytes.Buffer
-	sha256 hash.Hash
+	*maphash.Hash
 }
 
 func newKeyWriter() *keyWriter {
-	return &keyWriter{Buffer: &bytes.Buffer{}, sha256: sha256.New()}
+	return &keyWriter{Hash: new(maphash.Hash)}
 }
 
 // This is just a quick hack. I am sure there is
 // something better.
-func (kw *keyWriter) key(t mmdbtype.DataType) ([]byte, error) {
-	kw.Truncate(0)
-	kw.sha256.Reset()
+func (kw *keyWriter) key(t mmdbtype.DataType) (uint64, error) {
+	kw.Reset()
 	_, err := t.WriteTo(kw)
 	if err != nil {
-		return nil, err
+		return 0, err
 	}
-	if _, err := kw.WriteTo(kw.sha256); err != nil {
-		return nil, err
-	}
-	return kw.sha256.Sum(nil), nil
+	return kw.Sum64(), nil
 }
 
 func (kw *keyWriter) WriteOrWritePointer(t mmdbtype.DataType) (int64, error) {
