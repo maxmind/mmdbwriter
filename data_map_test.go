@@ -2,6 +2,7 @@ package mmdbwriter
 
 import (
 	"testing"
+	"unsafe"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -47,4 +48,9 @@ func TestDataMap(t *testing.T) {
 	dm.remove(dmv)
 	_, ok := dm.data[dmv.key]
 	assert.False(t, ok, "map value removed when refCount drops to 0")
+}
+
+func TestMapValueAlignment(t *testing.T) {
+	t.Logf("Alignment of dataMapValue: %d", unsafe.Alignof(dataMapValue{}))
+	t.Logf("Size of dataMapValue: %d", unsafe.Sizeof(dataMapValue{}))
 }
