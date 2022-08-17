@@ -2,6 +2,7 @@
 package mmdbtype
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -43,6 +44,7 @@ type writer interface {
 // DataType represents a MaxMind DB data type.
 type DataType interface {
 	Copy() DataType
+	Equal(DataType) bool
 	size() int
 	typeNum() typeNum
 	WriteTo(writer) (int64, error)
@@ -55,6 +57,12 @@ var _ DataType = (*Bool)(nil)
 
 // Copy the value.
 func (t Bool) Copy() DataType { return t }
+
+// Equal checks for equality.
+func (t Bool) Equal(other DataType) bool {
+	otherT, ok := other.(Bool)
+	return ok && t == otherT
+}
 
 func (t Bool) size() int {
 	if t {
@@ -82,6 +90,16 @@ func (t Bytes) Copy() DataType {
 	nv := make(Bytes, len(t))
 	copy(nv, t)
 	return nv
+}
+
+// Equal checks for equality.
+func (t Bytes) Equal(other DataType) bool {
+	otherT, ok := other.(Bytes)
+	if !ok {
+		return false
+	}
+
+	return bytes.Equal(t, otherT)
 }
 
 func (t Bytes) size() int {
@@ -115,6 +133,12 @@ var _ DataType = (*Float32)(nil)
 // Copy the value.
 func (t Float32) Copy() DataType { return t }
 
+// Equal checks for equality.
+func (t Float32) Equal(other DataType) bool {
+	otherT, ok := other.(Float32)
+	return ok && t == otherT
+}
+
 func (t Float32) size() int {
 	return 4
 }
@@ -145,6 +169,12 @@ var _ DataType = (*Float64)(nil)
 // Copy the value.
 func (t Float64) Copy() DataType { return t }
 
+// Equal checks for equality.
+func (t Float64) Equal(other DataType) bool {
+	otherT, ok := other.(Float64)
+	return ok && t == otherT
+}
+
 func (t Float64) size() int {
 	return 8
 }
@@ -174,6 +204,12 @@ var _ DataType = (*Int32)(nil)
 
 // Copy the value.
 func (t Int32) Copy() DataType { return t }
+
+// Equal checks for equality.
+func (t Int32) Equal(other DataType) bool {
+	otherT, ok := other.(Int32)
+	return ok && t == otherT
+}
 
 func (t Int32) size() int {
 	return 4 - bits.LeadingZeros32(uint32(t))/8
@@ -213,6 +249,25 @@ func (t Map) Copy() DataType {
 		newMap[k] = v.Copy()
 	}
 	return newMap
+}
+
+// Equal checks for equality.
+func (t Map) Equal(other DataType) bool {
+	otherT, ok := other.(Map)
+	if !ok {
+		return false
+	}
+
+	if len(t) != len(otherT) {
+		return false
+	}
+
+	for k, v := range t {
+		if ov, ok := otherT[k]; !ok || !v.Equal(ov) {
+			return false
+		}
+	}
+	return true
 }
 
 func (t Map) size() int {
@@ -265,6 +320,12 @@ var _ DataType = (*Pointer)(nil)
 
 // Copy the value.
 func (t Pointer) Copy() DataType { return t }
+
+// Equal checks for equality.
+func (t Pointer) Equal(other DataType) bool {
+	otherT, ok := other.(Pointer)
+	return ok && t == otherT
+}
 
 const (
 	pointerMaxSize0 = 1 << 11
@@ -379,6 +440,25 @@ func (t Slice) Copy() DataType {
 	return newSlice
 }
 
+// Equal checks for equality.
+func (t Slice) Equal(other DataType) bool {
+	otherT, ok := other.(Slice)
+	if !ok {
+		return false
+	}
+
+	if len(t) != len(otherT) {
+		return false
+	}
+
+	for i, v := range t {
+		if !otherT[i].Equal(v) {
+			return false
+		}
+	}
+	return true
+}
+
 func (t Slice) size() int {
 	return len(t)
 }
@@ -412,6 +492,12 @@ var _ DataType = (*String)(nil)
 // Copy the value.
 func (t String) Copy() DataType { return t }
 
+// Equal checks for equality.
+func (t String) Equal(other DataType) bool {
+	otherT, ok := other.(String)
+	return ok && t == otherT
+}
+
 func (t String) size() int {
 	return len(t)
 }
@@ -443,6 +529,12 @@ var _ DataType = (*Uint16)(nil)
 // Copy the value.
 func (t Uint16) Copy() DataType { return t }
 
+// Equal checks for equality.
+func (t Uint16) Equal(other DataType) bool {
+	otherT, ok := other.(Uint16)
+	return ok && t == otherT
+}
+
 func (t Uint16) size() int {
 	return 2 - bits.LeadingZeros16(uint16(t))/8
 }
@@ -473,6 +565,12 @@ func (t Uint16) WriteTo(w writer) (int64, error) {
 type Uint32 uint32
 
 var _ DataType = (*Uint32)(nil)
+
+// Equal checks for equality.
+func (t Uint32) Equal(other DataType) bool {
+	otherT, ok := other.(Uint32)
+	return ok && t == otherT
+}
 
 // Copy the value.
 func (t Uint32) Copy() DataType { return t }
@@ -510,6 +608,12 @@ var _ DataType = (*Uint64)(nil)
 
 // Copy the value.
 func (t Uint64) Copy() DataType { return t }
+
+// Equal checks for equality.
+func (t Uint64) Equal(other DataType) bool {
+	otherT, ok := other.(Uint64)
+	return ok && t == otherT
+}
 
 func (t Uint64) size() int {
 	return 8 - bits.LeadingZeros64(uint64(t))/8
@@ -549,6 +653,12 @@ func (t *Uint128) Copy() DataType {
 	nv.Set((*big.Int)(t))
 	uv := Uint128(nv)
 	return &uv
+}
+
+// Equal checks for equality.
+func (t *Uint128) Equal(other DataType) bool {
+	otherT, ok := other.(*Uint128)
+	return ok && (*big.Int)(t).Cmp((*big.Int)(otherT)) == 0
 }
 
 func (t *Uint128) size() int {

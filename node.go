@@ -3,7 +3,6 @@ package mmdbwriter
 import (
 	"fmt"
 	"net"
-	"reflect"
 
 	"github.com/maxmind/mmdbwriter/mmdbtype"
 )
@@ -85,7 +84,7 @@ func (r *record) insert(
 					iRec.dataMap.remove(r.value)
 					r.recordType = recordTypeEmpty
 					r.value = nil
-				} else if !reflect.DeepEqual(oldData, newData) {
+				} else if oldData == nil || !oldData.Equal(newData) {
 					iRec.dataMap.remove(r.value)
 					value, err := iRec.dataMap.store(newData)
 					if err != nil {
