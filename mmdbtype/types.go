@@ -8,6 +8,7 @@ import (
 	"io"
 	"math/big"
 	"math/bits"
+	"reflect"
 	"sort"
 )
 
@@ -262,6 +263,10 @@ func (t Map) Equal(other DataType) bool {
 		return false
 	}
 
+	if reflect.ValueOf(t).Pointer() == reflect.ValueOf(otherT).Pointer() {
+		return true
+	}
+
 	for k, v := range t {
 		if ov, ok := otherT[k]; !ok || !v.Equal(ov) {
 			return false
@@ -449,6 +454,10 @@ func (t Slice) Equal(other DataType) bool {
 
 	if len(t) != len(otherT) {
 		return false
+	}
+
+	if reflect.ValueOf(t).Pointer() == reflect.ValueOf(otherT).Pointer() {
+		return true
 	}
 
 	for i, v := range t {
