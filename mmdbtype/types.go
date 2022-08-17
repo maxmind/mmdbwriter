@@ -51,6 +51,8 @@ type DataType interface {
 // Bool is the MaxMind DB boolean type.
 type Bool bool
 
+var _ DataType = (*Bool)(nil)
+
 // Copy the value.
 func (t Bool) Copy() DataType { return t }
 
@@ -72,6 +74,8 @@ func (t Bool) WriteTo(w writer) (int64, error) {
 
 // Bytes is the MaxMind DB bytes type.
 type Bytes []byte
+
+var _ DataType = Bytes(nil)
 
 // Copy the value.
 func (t Bytes) Copy() DataType {
@@ -106,6 +110,8 @@ func (t Bytes) WriteTo(w writer) (int64, error) {
 // Float32 is the MaxMind DB float type.
 type Float32 float32
 
+var _ DataType = (*Float32)(nil)
+
 // Copy the value.
 func (t Float32) Copy() DataType { return t }
 
@@ -134,6 +140,8 @@ func (t Float32) WriteTo(w writer) (int64, error) {
 // Float64 is the MaxMind DB double type.
 type Float64 float64
 
+var _ DataType = (*Float64)(nil)
+
 // Copy the value.
 func (t Float64) Copy() DataType { return t }
 
@@ -161,6 +169,8 @@ func (t Float64) WriteTo(w writer) (int64, error) {
 
 // Int32 is the MaxMind DB signed 32-bit integer type.
 type Int32 int32
+
+var _ DataType = (*Int32)(nil)
 
 // Copy the value.
 func (t Int32) Copy() DataType { return t }
@@ -193,6 +203,8 @@ func (t Int32) WriteTo(w writer) (int64, error) {
 
 // Map is the MaxMind DB map type.
 type Map map[String]DataType
+
+var _ DataType = Map(nil)
 
 // Copy makes a deep copy of the Map.
 func (t Map) Copy() DataType {
@@ -248,6 +260,8 @@ func (t Map) WriteTo(w writer) (int64, error) {
 // should not use this type in data structures that you pass to methods on
 // mmdbwriter.Tree. Doing so may result in a corrupt database.
 type Pointer uint32
+
+var _ DataType = (*Pointer)(nil)
 
 // Copy the value.
 func (t Pointer) Copy() DataType { return t }
@@ -354,6 +368,8 @@ func (t Pointer) WriteTo(w writer) (int64, error) {
 // Slice is the MaxMind DB array type.
 type Slice []DataType
 
+var _ DataType = Slice(nil)
+
 // Copy makes a deep copy of the Slice.
 func (t Slice) Copy() DataType {
 	newSlice := make(Slice, len(t))
@@ -391,6 +407,8 @@ func (t Slice) WriteTo(w writer) (int64, error) {
 // String is the MaxMind DB string type.
 type String string
 
+var _ DataType = (*String)(nil)
+
 // Copy the value.
 func (t String) Copy() DataType { return t }
 
@@ -419,6 +437,8 @@ func (t String) WriteTo(w writer) (int64, error) {
 
 // Uint16 is the MaxMind DB unsigned 16-bit integer type.
 type Uint16 uint16
+
+var _ DataType = (*Uint16)(nil)
 
 // Copy the value.
 func (t Uint16) Copy() DataType { return t }
@@ -452,6 +472,8 @@ func (t Uint16) WriteTo(w writer) (int64, error) {
 // Uint32 is the MaxMind DB unsigned 32-bit integer type.
 type Uint32 uint32
 
+var _ DataType = (*Uint32)(nil)
+
 // Copy the value.
 func (t Uint32) Copy() DataType { return t }
 
@@ -483,6 +505,8 @@ func (t Uint32) WriteTo(w writer) (int64, error) {
 
 // Uint64 is the MaxMind DB unsigned 64-bit integer type.
 type Uint64 uint64
+
+var _ DataType = (*Uint64)(nil)
 
 // Copy the value.
 func (t Uint64) Copy() DataType { return t }
@@ -516,6 +540,8 @@ func (t Uint64) WriteTo(w writer) (int64, error) {
 
 // Uint128 is the MaxMind DB unsigned 128-bit integer type.
 type Uint128 big.Int
+
+var _ DataType = (*Uint128)(nil)
 
 // Copy make a deep copy of the Uint128.
 func (t *Uint128) Copy() DataType {
