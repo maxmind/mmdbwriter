@@ -57,6 +57,11 @@ func (dm *dataMap) store(v mmdbtype.DataType) (*dataMapValue, error) {
 // remove removes a reference to the value. If the reference count
 // drops to zero, the value is removed from the dataMap.
 func (dm *dataMap) remove(v *dataMapValue) {
+	// This is here mostly so that we don't have to guard against it
+	// elsewhere.
+	if v == nil {
+		return
+	}
 	v.refCount--
 
 	if v.refCount == 0 {

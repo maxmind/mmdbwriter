@@ -3,6 +3,7 @@ package mmdbwriter
 import (
 	"fmt"
 	"net"
+	"reflect"
 
 	"github.com/maxmind/mmdbwriter/mmdbtype"
 )
@@ -72,25 +73,21 @@ func (r *record) insert(
 			r.node = iRec.insertedNode
 			r.recordType = iRec.recordType
 			if iRec.recordType == recordTypeData {
-				var data mmdbtype.DataType
+				var oldData mmdbtype.DataType
 				if r.value != nil {
-					data = r.value.data
-
-					// Potentially we could avoid this if the
-					// new value is the same, but it would likely
-					// not save us much and the code would be a
-					// bit more complicated.
-					iRec.dataMap.remove(r.value)
+					oldData = r.value.data
 				}
-				value, err := iRec.inserter(data)
+				newData, err := iRec.inserter(oldData)
 				if err != nil {
 					return err
 				}
-				if value == nil {
+				if newData == nil {
+					iRec.dataMap.remove(r.value)
 					r.recordType = recordTypeEmpty
 					r.value = nil
-				} else {
-					value, err := iRec.dataMap.store(value)
+				} else if !reflect.DeepEqual(oldData, newData) {
+					iRec.dataMap.remove(r.value)
+					value, err := iRec.dataMap.store(newData)
 					if err != nil {
 						return err
 					}
