@@ -433,7 +433,7 @@ func (t *Tree) Get(ip net.IP) (*net.IPNet, mmdbtype.DataType) {
 
 // finalize prepares the tree for writing. It is not threadsafe.
 func (t *Tree) finalize() {
-	_, t.nodeCount = t.root.finalize(0)
+	t.nodeCount = t.root.finalize(0)
 }
 
 // WriteTo writes the tree to the provided Writer.

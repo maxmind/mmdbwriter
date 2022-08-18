@@ -345,7 +345,7 @@ func TestTreeInsertAndGet(t *testing.T) {
 					expectedLookupValue: s2ip("string"),
 				},
 			},
-			expectedNodeCount: 352,
+			expectedNodeCount: 351,
 		},
 		{
 			name: "all types and pointers",
@@ -377,7 +377,7 @@ func TestTreeInsertAndGet(t *testing.T) {
 					expectedLookupValue: &allTypesLookupRecord,
 				},
 			},
-			expectedNodeCount: 369,
+			expectedNodeCount: 368,
 		},
 		{
 			name: "node pruning",
@@ -408,7 +408,7 @@ func TestTreeInsertAndGet(t *testing.T) {
 					}(),
 				},
 			},
-			expectedNodeCount: 367,
+			expectedNodeCount: 366,
 		},
 		{
 			name:       "insertion of range with multiple subnets",
@@ -464,7 +464,7 @@ func TestTreeInsertAndGet(t *testing.T) {
 					expectedLookupValue: s2ip("string"),
 				},
 			},
-			expectedNodeCount: 376,
+			expectedNodeCount: 375,
 		},
 	}
 
