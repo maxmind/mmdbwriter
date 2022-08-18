@@ -214,6 +214,232 @@ func TestUint128(t *testing.T) {
 	validateEncoding(t, uints)
 }
 
+func TestEqual(t *testing.T) {
+	sameMap := Map{"same": String("map")}
+	sameSlice := Slice{String("same")}
+	tests := []struct {
+		name   string
+		a      DataType
+		b      DataType
+		expect bool
+	}{
+		{
+			name:   "Bool same",
+			a:      Bool(true),
+			b:      Bool(true),
+			expect: true,
+		},
+		{
+			name:   "Bool different",
+			a:      Bool(false),
+			b:      Bool(true),
+			expect: false,
+		},
+		{
+			name:   "Bytes same",
+			a:      Bytes([]byte{1}),
+			b:      Bytes([]byte{1}),
+			expect: true,
+		},
+		{
+			name:   "Bytes different",
+			a:      Bytes([]byte{1}),
+			b:      Bytes([]byte{0}),
+			expect: false,
+		},
+		{
+			name:   "Bytes different length",
+			a:      Bytes([]byte{1, 1}),
+			b:      Bytes([]byte{1}),
+			expect: false,
+		},
+		{
+			name:   "Float32 same",
+			a:      Float32(1),
+			b:      Float32(1),
+			expect: true,
+		},
+		{
+			name:   "Float32 different",
+			a:      Float32(1),
+			b:      Float32(0),
+			expect: false,
+		},
+		{
+			name:   "Float64 same",
+			a:      Float64(1),
+			b:      Float64(1),
+			expect: true,
+		},
+		{
+			name:   "Float64 different",
+			a:      Float64(1),
+			b:      Float64(0),
+			expect: false,
+		},
+		{
+			name:   "Int32 same",
+			a:      Int32(1),
+			b:      Int32(1),
+			expect: true,
+		},
+		{
+			name:   "Int32 different",
+			a:      Int32(1),
+			b:      Int32(0),
+			expect: false,
+		},
+		{
+			name:   "Pointer same",
+			a:      Pointer(1),
+			b:      Pointer(1),
+			expect: true,
+		},
+		{
+			name:   "Pointer different",
+			a:      Pointer(1),
+			b:      Pointer(0),
+			expect: false,
+		},
+		{
+			name:   "String same",
+			a:      String("a"),
+			b:      String("a"),
+			expect: true,
+		},
+		{
+			name:   "String different",
+			a:      String("a"),
+			b:      String("b"),
+			expect: false,
+		},
+		{
+			name:   "Uint16 same",
+			a:      Uint16(1),
+			b:      Uint16(1),
+			expect: true,
+		},
+		{
+			name:   "Uint16 different",
+			a:      Uint16(1),
+			b:      Uint16(0),
+			expect: false,
+		},
+		{
+			name:   "Uint32 same",
+			a:      Uint32(1),
+			b:      Uint32(1),
+			expect: true,
+		},
+		{
+			name:   "Uint32 different",
+			a:      Uint32(1),
+			b:      Uint32(0),
+			expect: false,
+		},
+		{
+			name:   "Uint64 same",
+			a:      Uint64(1),
+			b:      Uint64(1),
+			expect: true,
+		},
+		{
+			name:   "Uint64 different",
+			a:      Uint64(1),
+			b:      Uint64(0),
+			expect: false,
+		},
+		{
+			name:   "Uint128 same",
+			a:      (*Uint128)(big.NewInt(1)),
+			b:      (*Uint128)(big.NewInt(1)),
+			expect: true,
+		},
+		{
+			name:   "Uint128 different",
+			a:      (*Uint128)(big.NewInt(1)),
+			b:      (*Uint128)(big.NewInt(0)),
+			expect: false,
+		},
+		{
+			name:   "Int32 and Uint32 with same value are not equal",
+			a:      Int32(1),
+			b:      Uint32(1),
+			expect: false,
+		},
+		{
+			name:   "Complex Slice with same values",
+			a:      Slice{Int32(-1), Map{"a": String("blah")}, Uint16(0)},
+			b:      Slice{Int32(-1), Map{"a": String("blah")}, Uint16(0)},
+			expect: true,
+		},
+		{
+			name:   "Complex Slice with first being prefix of second",
+			a:      Slice{Int32(-1), Map{"a": String("blah")}, Uint16(0)},
+			b:      Slice{Int32(-1), Map{"a": String("blah")}, Uint16(0), Uint32(10)},
+			expect: false,
+		},
+		{
+			name:   "Same underlying Slice",
+			a:      sameSlice,
+			b:      sameSlice,
+			expect: true,
+		},
+		{
+			name: "Complex Map with same values",
+			a: Map{
+				"v1": Map{
+					"i1": Slice{String("fda"), Map{}},
+				},
+
+				"v2": Uint64(3212213),
+			},
+
+			b: Map{
+				"v1": Map{
+					"i1": Slice{String("fda"), Map{}},
+				},
+				"v2": Uint64(3212213),
+			},
+			expect: true,
+		},
+		{
+			name: "Complex Map with second having extra value",
+			a: Map{
+				"v1": Map{
+					"i1": Slice{String("fda"), Map{}},
+				},
+
+				"v2": Uint64(3212213),
+			},
+			b: Map{
+				"v1": Map{
+					"i1": Slice{String("fda"), Map{}},
+				},
+				"v2": Uint64(3212213),
+				"v3": Bool(false),
+			},
+			expect: false,
+		},
+		{
+			name:   "Same underlying Map",
+			a:      sameMap,
+			b:      sameMap,
+			expect: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			assert.Equal(
+				t,
+				test.expect,
+				test.a.Equal(test.b),
+			)
+		})
+	}
+}
+
 // No pow or bit shifting for big int, apparently :-(
 // This is _not_ meant to be a comprehensive power function.
 func powBigInt(bi *big.Int, pow uint) *big.Int {
