@@ -11,7 +11,6 @@
     "bodyclose",
     "containedctx",
     "contextcheck",
-    "deadcode",
     "depguard",
     "durationcheck",
     "errcheck",
@@ -57,12 +56,7 @@
     "nosprintfhostport",
     "predeclared",
     "revive",
-    "rowserrcheck",
-    # https://github.com/golangci/golangci-lint/issues/287
-    # "safesql",
-    "sqlclosecheck",
     "staticcheck",
-    "structcheck",
     "stylecheck",
     "tenv",
     "tparallel",
@@ -70,9 +64,9 @@
     "unconvert",
     "unparam",
     "unused",
-    "varcheck",
     "vetshadow",
-    "wastedassign",
+    # Doesn't support 1.18
+    # "wastedassign",
     # We don't currently wrap external errors in this module.
     # "wrapcheck",
   ]
@@ -245,7 +239,7 @@
 
 [linters-settings.gofumpt]
     extra-rules = true
-    lang-version = "1.17"
+    lang-version = "1.18"
 
 [linters-settings.gomodguard]
   [[linters-settings.gomodguard.blocked.modules]]
@@ -398,8 +392,9 @@
     [[linters-settings.revive.rules]]
     name = "empty-block"
 
-    [[linters-settings.revive.rules]]
-    name = "empty-lines"
+    # Disabled due to https://github.com/mgechev/revive/issues/739
+    # [[linters-settings.revive.rules]]
+    # name = "empty-lines"
 
     [[linters-settings.revive.rules]]
     name = "errorf"

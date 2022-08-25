@@ -13,7 +13,7 @@ import (
 	"github.com/maxmind/mmdbwriter/inserter"
 	"github.com/maxmind/mmdbwriter/mmdbtype"
 	"github.com/oschwald/maxminddb-golang"
-	"inet.af/netaddr"
+	"go4.org/netipx"
 )
 
 var (
@@ -310,22 +310,22 @@ func (t *Tree) insertRange(
 	inserterFunc inserter.Func,
 	node *node,
 ) error {
-	_start, ok := netaddr.FromStdIP(start)
+	startNetIP, ok := netipx.FromStdIP(start)
 	if !ok {
 		return errors.New("start IP is invalid")
 	}
-	_end, ok := netaddr.FromStdIP(end)
+	endNetIP, ok := netipx.FromStdIP(end)
 	if !ok {
 		return errors.New("end IP is invalid")
 	}
 
-	r := netaddr.IPRangeFrom(_start, _end)
+	r := netipx.IPRangeFrom(startNetIP, endNetIP)
 	if !r.IsValid() {
 		return errors.New("start & end IPs did not give valid range")
 	}
 	subnets := r.Prefixes()
 	for _, subnet := range subnets {
-		if err := t.insert(subnet.IPNet(), recordType, inserterFunc, node); err != nil {
+		if err := t.insert(netipx.PrefixIPNet(subnet), recordType, inserterFunc, node); err != nil {
 			return err
 		}
 	}
