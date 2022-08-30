@@ -35,7 +35,7 @@ type testGet struct {
 	ip                  string
 	expectedNetwork     string
 	expectedGetValue    mmdbtype.DataType
-	expectedLookupValue *interface{}
+	expectedLookupValue *any
 }
 
 func TestTreeInsertAndGet(t *testing.T) {
@@ -76,9 +76,9 @@ func TestTreeInsertAndGet(t *testing.T) {
 		"utf8_string": mmdbtype.String("unicode! ☯ - ♫"),
 	}
 
-	var allTypesLookupSubmap interface{} = map[string]interface{}{
-		"mapX": map[string]interface{}{
-			"arrayX": []interface{}{
+	var allTypesLookupSubmap any = map[string]any{
+		"mapX": map[string]any{
+			"arrayX": []any{
 				uint64(0x7),
 				uint64(0x8),
 				uint64(0x9),
@@ -86,8 +86,8 @@ func TestTreeInsertAndGet(t *testing.T) {
 			"utf8_stringX": "hello",
 		},
 	}
-	var allTypesLookupRecord interface{} = map[string]interface{}{
-		"array": []interface{}{
+	var allTypesLookupRecord any = map[string]any{
+		"array": []any{
 			uint64(1),
 			uint64(2),
 			uint64(3),
@@ -402,8 +402,8 @@ func TestTreeInsertAndGet(t *testing.T) {
 					ip:               "1.1.0.0",
 					expectedNetwork:  "1.1.0.0/23",
 					expectedGetValue: mmdbtype.Map{"a": mmdbtype.Slice{mmdbtype.Uint64(1), mmdbtype.Bytes{1, 2}}},
-					expectedLookupValue: func() *interface{} {
-						v := interface{}(map[string]interface{}{"a": []interface{}{uint64(1), []byte{1, 2}}})
+					expectedLookupValue: func() *any {
+						v := any(map[string]any{"a": []any{uint64(1), []byte{1, 2}}})
 						return &v
 					}(),
 				},
@@ -578,7 +578,7 @@ func checkMMDB(t *testing.T, buf *bytes.Buffer, gets []testGet, name string) {
 		defer reader.Close()
 
 		for _, get := range gets {
-			var v interface{}
+			var v any
 			network, ok, err := reader.LookupNetwork(net.ParseIP(get.ip), &v)
 			require.NoError(t, err)
 
@@ -645,7 +645,7 @@ func TestInsertFunc_RemovalAndLaterInsert(t *testing.T) {
 	assert.Nil(t, recValue)
 }
 
-func s2ip(v string) *interface{} { //nolint:gocritic // test
-	i := interface{}(v)
+func s2ip(v string) *any { //nolint:gocritic // test
+	i := any(v)
 	return &i
 }
