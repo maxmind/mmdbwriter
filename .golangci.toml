@@ -1,17 +1,20 @@
 [run]
   deadline = "10m"
-
   tests = true
 
 [linters]
   disable-all = true
   enable = [
+    "asasalint",
     "asciicheck",
     "bidichk",
     "bodyclose",
     "containedctx",
     "contextcheck",
     "depguard",
+    # This is probably worthwhile, but there are a number of false positives
+    # that would need to be addressed.
+    # "dupword",
     "durationcheck",
     "errcheck",
     "errchkjson",
@@ -20,9 +23,12 @@
     # Causes a panic.
     # "execinquery",
     "exhaustive",
+    # We often don't initialize all of the struct fields. This is fine
+    # generally
+    # "exhaustruct",
     "exportloopref",
     "forbidigo",
-    # We tried this liner but most places we do forced type asserts are
+    # We tried this linter but most places we do forced type asserts are
     # pretty safe, e.g., an atomic.Value when everything is encapsulated
     # in a small package.
     # "forcetypeassert",
@@ -56,6 +62,11 @@
     "nosprintfhostport",
     "predeclared",
     "revive",
+    # XXX - disabled due to lack of 1.18 support.
+    # "rowserrcheck",
+    # https://github.com/golangci/golangci-lint/issues/287
+    # "safesql",
+    "sqlclosecheck",
     "staticcheck",
     "stylecheck",
     "tenv",
@@ -64,26 +75,16 @@
     "unconvert",
     "unparam",
     "unused",
+    "usestdlibvars",
     "vetshadow",
-    # Doesn't support 1.18
+    # XXX - disabled due to lack of 1.18 support.
     # "wastedassign",
     # We don't currently wrap external errors in this module.
     # "wrapcheck",
   ]
 
-# Please note that we only use depguard for stdlib as gomodguard only
-# supports modules currently. See https://github.com/ryancurrah/gomodguard/issues/12
-[linters-settings.depguard]
-  list-type = "blacklist"
-  include-go-root = true
-  packages = [
-    # ioutil is deprecated. The functions have been moved elsewhere:
-    # https://golang.org/doc/go1.16#ioutil
-    "io/ioutil",
-  ]
-
 [linters-settings.errcheck]
-    # Don't allow setting of error to the blank identifier. If there is a legtimate
+    # Don't allow setting of error to the blank identifier. If there is a legitimate
     # reason, there should be a nolint with an explanation.
     check-blank = true
 
@@ -167,6 +168,11 @@
         "flagDeref",
         "flagName",
         "hexLiteral",
+        # This seems like it could be good, but we would need to update current
+        # uses. It supports "--fix", but the fixing is a bit broken.
+        # "httpNoBody",
+        # This might be good, but we would have to revist a lot of code.
+        # "hugeParam",
         "ifElseChain",
         "importShadow",
         "indexAlloc",
@@ -206,6 +212,7 @@
         "sprintfQuotedString",
         "sqlQuery",
         "stringsCompare",
+        "stringConcatSimplify",
         "stringXbytes",
         "switchTrue",
         "syncMapLoadAndDelete",
@@ -228,12 +235,10 @@
         "unslice",
         "valSwap",
         "weakCond",
+        # Covered by nolintlint
+        # "whyNoLint"
         "wrapperFunc",
         "yodaStyleExpr",
-        # This requires explanations for "nolint" directives. This would be
-        # nice for gosec ones, but I am not sure we want it generally unless
-        # we can get the false positive rate lower.
-        # "whyNoLint"
     ]
 
 [linters-settings.gofumpt]
@@ -295,9 +300,22 @@
   [linters-settings.gomodguard.blocked.modules."io/ioutil"]
 
   [[linters-settings.gomodguard.blocked.versions]]
+  [linters-settings.gomodguard.blocked.versions."github.com/jackc/pgconn"]
+    reason = "Use github.com/jackc/pgx/v5"
+
+  [[linters-settings.gomodguard.blocked.versions]]
+  [linters-settings.gomodguard.blocked.versions."github.com/jackc/pgtype"]
+    reason = "Use github.com/jackc/pgx/v5"
+
+  [[linters-settings.gomodguard.blocked.versions]]
   [linters-settings.gomodguard.blocked.versions."github.com/jackc/pgx"]
-    version = "< 4.0.0"
-    reason = "Use github.com/jackc/pgx/v4"
+    version = "< 5.0.0"
+    reason = "Use github.com/jackc/pgx/v5"
+
+  [[linters-settings.gomodguard.blocked.modules]]
+  [linters-settings.gomodguard.blocked.modules."inet.af/netaddr"]
+    recommendations = ["go4.org/netipx"]
+    reason = "inet.af/netaddr has been deprecated."
 
 [linters-settings.gosec]
     excludes = [
@@ -306,8 +324,10 @@
 
         # G306 - "Expect WriteFile permissions to be 0600 or less".
         "G306",
-    ]
 
+        # Prohibits defer (*os.File).Close, which we allow when reading from file.
+        "G307",
+    ]
 
 [linters-settings.govet]
     "enable-all" = true
@@ -353,6 +373,13 @@
     # [[linters-settings.revive.rules]]
     # name = "cognitive-complexity"
 
+    # This interacts poorly with gofumpt, which seems to convert
+    # "//   " to "//<tab>". That is probably a bug in gofumpt, but there
+    # isn't much we can do about it right now.
+    # [[linters-settings.revive.rules]]
+    # name = "comment-spacings"
+    # arguments = ["easyjson", "nolint"]
+
     # Probably a good rule, but we have a lot of names that
     # only have case differences.
     # [[linters-settings.revive.rules]]
@@ -374,6 +401,9 @@
     # name = "cyclomatic"
 
     [[linters-settings.revive.rules]]
+    name = "datarace"
+
+    [[linters-settings.revive.rules]]
     name = "deep-exit"
 
     [[linters-settings.revive.rules]]
@@ -391,9 +421,8 @@
     [[linters-settings.revive.rules]]
     name = "empty-block"
 
-    # Disabled due to https://github.com/mgechev/revive/issues/739
-    # [[linters-settings.revive.rules]]
-    # name = "empty-lines"
+    [[linters-settings.revive.rules]]
+    name = "empty-lines"
 
     [[linters-settings.revive.rules]]
     name = "errorf"
@@ -489,6 +518,9 @@
     name = "superfluous-else"
 
     [[linters-settings.revive.rules]]
+    name = "time-equal"
+
+    [[linters-settings.revive.rules]]
     name = "time-naming"
 
     [[linters-settings.revive.rules]]
@@ -537,37 +569,21 @@
 [linters-settings.unparam]
     check-exported = true
 
-[linters-settings.wrapcheck]
-    "ignoreSigs" = [
-        ".Errorf(",
-        "errgroup.NewMultiError(",
-        "mmerrors.New(",
-        ".Wait(",
-        ".WithStack(",
-        ".Wrap(",
-        ".Wrapf(",
-        "v4.Retry(",
-        "v4.RetryNotify(",
-    ]
-
 [issues]
 exclude-use-default = false
 
+  # This goes off for MD5 usage, which we use heavily
   [[issues.exclude-rules]]
-  linters = [
-    "gocritic"
-  ]
-  # For some reason the imports stuff in ruleguard doesn't work in golangci-lint.
-  # Perhaps it has an outdated version or something
-  path = "_test.go"
-  text = "ruleguard: Prefer the alternative Context method instead"
+  text = "weak cryptographic primitive"
+  linters = ["gosec"]
 
   [[issues.exclude-rules]]
   linters = [
-    "gocritic"
+    "bodyclose"
   ]
-  ## The nolintlint linter behaves oddly with ruleguard rules
-  source = "// *no-ruleguard"
+  # This rule doesn't really make sense for tests where we don't have an open
+  # connection and we might be passing around the response for other reasons.
+  path = "_test.go"
 
   [[issues.exclude-rules]]
   linters = [
@@ -596,6 +612,27 @@ exclude-use-default = false
     "wrapcheck",
   ]
   path = "_test.go"
+
+  [[issues.exclude-rules]]
+  linters = [
+    "stylecheck",
+  ]
+  # ST1016 - methods on the same type should have the same receiver name.
+  #    easyjson doesn't interact well with this.
+  text = "ST1016"
+
+  [[issues.exclude-rules]]
+  linters = [
+    "staticcheck",
+  ]
+  # SA5008: unknown JSON option "intern" - easyjson specific option.
+  text = 'SA5008: unknown JSON option "intern"'
+
+  [[issues.exclude-rules]]
+  linters = [
+    "wrapcheck",
+  ]
+  path = "_easyjson.go"
 
   [[issues.exclude-rules]]
   linters = [
