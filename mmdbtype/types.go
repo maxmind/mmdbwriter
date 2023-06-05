@@ -9,6 +9,7 @@ import (
 	"math/big"
 	"math/bits"
 	"reflect"
+	//nolint:depguard // sort.Strings is not worth pulling in a new dep for
 	"sort"
 )
 
@@ -705,16 +706,16 @@ const (
 func writeCtrlByte(w writer, t DataType) (int64, error) {
 	size := t.size()
 
-	typeNum := t.typeNum()
+	typeN := t.typeNum()
 
 	var firstByte byte
 	var secondByte byte
 
-	if typeNum < 8 {
-		firstByte = byte(typeNum << 5)
+	if typeN < 8 {
+		firstByte = byte(typeN << 5)
 	} else {
 		firstByte = byte(typeNumExtended << 5)
-		secondByte = byte(typeNum - 7)
+		secondByte = byte(typeN - 7)
 	}
 
 	leftOver := 0
@@ -746,7 +747,7 @@ func writeCtrlByte(w writer, t DataType) (int64, error) {
 	if err != nil {
 		return 0, fmt.Errorf(
 			"writing first ctrl byte (type: %d, size: %d): %w",
-			typeNum,
+			typeN,
 			size,
 			err,
 		)
@@ -758,7 +759,7 @@ func writeCtrlByte(w writer, t DataType) (int64, error) {
 		if err != nil {
 			return numBytes, fmt.Errorf(
 				"writing second ctrl byte (type: %d, size: %d): %w",
-				typeNum,
+				typeN,
 				size,
 				err,
 			)
@@ -772,7 +773,7 @@ func writeCtrlByte(w writer, t DataType) (int64, error) {
 		if err != nil {
 			return numBytes, fmt.Errorf(
 				"writing remaining ctrl bytes (type: %d, size: %d, value: %d): %w",
-				typeNum,
+				typeN,
 				size,
 				v,
 				err,
