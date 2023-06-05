@@ -339,6 +339,7 @@ func (t *Tree) insertStringNetwork(
 	inserterFunc inserter.Func,
 	node *node,
 ) error {
+	//nolint:forbidigo // code predates netip
 	_, ipnet, err := net.ParseCIDR(network)
 	if err != nil {
 		return fmt.Errorf("parsing network (%s): %w", network, err)
@@ -353,6 +354,7 @@ var ipv4AliasNetworks = []string{
 }
 
 func (t *Tree) insertIPv4Aliases() error {
+	//nolint:forbidigo // code predates netip
 	_, ipv4Root, err := net.ParseCIDR("::/96")
 	if err != nil {
 		return fmt.Errorf("parsing IPv4 root: %w", err)

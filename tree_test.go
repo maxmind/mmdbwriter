@@ -486,12 +486,14 @@ func TestTreeInsertAndGet(t *testing.T) {
 					require.NoError(t, err)
 					if test.insertType == "" || test.insertType == "net" {
 						for _, insert := range test.inserts {
+							//nolint:forbidigo // code predates netip
 							_, network, err := net.ParseCIDR(insert.network)
 							require.NoError(t, err)
 
 							require.NoError(t, tree.Insert(network, insert.value))
 						}
 						for _, insert := range test.insertErrors {
+							//nolint:forbidigo // code predates netip
 							_, network, err := net.ParseCIDR(insert.network)
 							require.NoError(t, err)
 
@@ -501,16 +503,20 @@ func TestTreeInsertAndGet(t *testing.T) {
 						}
 					} else if test.insertType == "" || test.insertType == "range" {
 						for _, insert := range test.inserts {
+							//nolint:forbidigo // code predates netip
 							start := net.ParseIP(insert.start)
 							require.NotNil(t, start)
+							//nolint:forbidigo // code predates netip
 							end := net.ParseIP(insert.end)
 							require.NotNil(t, end)
 
 							require.NoError(t, tree.InsertRange(start, end, insert.value))
 						}
 						for _, insert := range test.insertErrors {
+							//nolint:forbidigo // code predates netip
 							start := net.ParseIP(insert.start)
 							require.NotNil(t, start)
+							//nolint:forbidigo // code predates netip
 							end := net.ParseIP(insert.end)
 							require.NotNil(t, end)
 
@@ -522,6 +528,7 @@ func TestTreeInsertAndGet(t *testing.T) {
 					tree.finalize()
 
 					for _, get := range test.gets {
+						//nolint:forbidigo // code predates netip
 						network, value := tree.Get(net.ParseIP(get.ip))
 
 						assert.Equal(t, get.expectedNetwork, network.String(), "network for %s", get.ip)
@@ -579,6 +586,7 @@ func checkMMDB(t *testing.T, buf *bytes.Buffer, gets []testGet, name string) {
 
 		for _, get := range gets {
 			var v any
+			//nolint:forbidigo // code predates netip
 			network, ok, err := reader.LookupNetwork(net.ParseIP(get.ip), &v)
 			require.NoError(t, err)
 
@@ -604,12 +612,14 @@ func TestInsertFunc_RemovalAndLaterInsert(t *testing.T) {
 	)
 	require.NoError(t, err)
 
+	//nolint:forbidigo // code predates netip
 	_, network, err := net.ParseCIDR("::1.1.1.0/120")
 	require.NoError(t, err)
 
 	value := mmdbtype.String("value")
 	require.NoError(t, tree.Insert(network, value))
 
+	//nolint:forbidigo // code predates netip
 	ip := net.ParseIP("::1.1.1.1")
 
 	recNetwork, recValue := tree.Get(ip)
@@ -617,6 +627,7 @@ func TestInsertFunc_RemovalAndLaterInsert(t *testing.T) {
 	assert.Equal(t, network, recNetwork)
 	assert.Equal(t, value, recValue)
 
+	//nolint:forbidigo // code predates netip
 	_, removedNetwork, err := net.ParseCIDR("::1.1.1.1/128")
 	require.NoError(t, err)
 
