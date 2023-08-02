@@ -380,7 +380,7 @@ func TestTreeInsertAndGet(t *testing.T) {
 			expectedNodeCount: 368,
 		},
 		{
-			name: "node pruning",
+			name: "node pruning - adjacent",
 			inserts: []testInsert{
 				{
 					network: "1.1.0.0/24",
@@ -409,6 +409,76 @@ func TestTreeInsertAndGet(t *testing.T) {
 				},
 			},
 			expectedNodeCount: 366,
+		},
+		{
+			name: "node pruning - inserting smaller duplicate into larger",
+			inserts: []testInsert{
+				{
+					network: "1.1.0.0/24",
+					start:   "1.1.0.0",
+					end:     "1.1.0.255",
+					value:   mmdbtype.Map{"a": mmdbtype.Slice{mmdbtype.Uint64(1), mmdbtype.Bytes{1, 2}}},
+				},
+				{
+					network: "1.1.0.128/26",
+					start:   "1.1.0.128",
+					end:     "1.1.0.191",
+					// We intentionally don't use the same variable for
+					// here and above as we want them to be different instances.
+					value: mmdbtype.Map{"a": mmdbtype.Slice{mmdbtype.Uint64(1), mmdbtype.Bytes{1, 2}}},
+				},
+			},
+			gets: []testGet{
+				{
+					ip:               "1.1.0.0",
+					expectedNetwork:  "1.1.0.0/24",
+					expectedGetValue: mmdbtype.Map{"a": mmdbtype.Slice{mmdbtype.Uint64(1), mmdbtype.Bytes{1, 2}}},
+					expectedLookupValue: func() *any {
+						v := any(map[string]any{"a": []any{uint64(1), []byte{1, 2}}})
+						return &v
+					}(),
+				},
+			},
+			expectedNodeCount: 367,
+		},
+		{
+			name: "node pruning - inserting smaller non-duplicate and then duplicate into larger",
+			inserts: []testInsert{
+				{
+					network: "1.1.0.0/24",
+					start:   "1.1.0.0",
+					end:     "1.1.0.255",
+					value:   mmdbtype.Map{"a": mmdbtype.Slice{mmdbtype.Uint64(1), mmdbtype.Bytes{1, 2}}},
+				},
+				{
+					network: "1.1.0.128/26",
+					start:   "1.1.0.128",
+					end:     "1.1.0.191",
+					// We intentionally don't use the same variable for
+					// here and above as we want them to be different instances.
+					value: mmdbtype.Map{"a": mmdbtype.Int32(1)},
+				},
+				{
+					network: "1.1.0.128/26",
+					start:   "1.1.0.128",
+					end:     "1.1.0.191",
+					// We intentionally don't use the same variable for
+					// here and above as we want them to be different instances.
+					value: mmdbtype.Map{"a": mmdbtype.Slice{mmdbtype.Uint64(1), mmdbtype.Bytes{1, 2}}},
+				},
+			},
+			gets: []testGet{
+				{
+					ip:               "1.1.0.0",
+					expectedNetwork:  "1.1.0.0/24",
+					expectedGetValue: mmdbtype.Map{"a": mmdbtype.Slice{mmdbtype.Uint64(1), mmdbtype.Bytes{1, 2}}},
+					expectedLookupValue: func() *any {
+						v := any(map[string]any{"a": []any{uint64(1), []byte{1, 2}}})
+						return &v
+					}(),
+				},
+			},
+			expectedNodeCount: 367,
 		},
 		{
 			name:       "insertion of range with multiple subnets",

@@ -71,36 +71,7 @@ func (r *record) insert(
 		if err != nil {
 			return err
 		}
-
-		// Check to see if the children are the same and can be merged.
-		child0 := r.node.children[0]
-		child1 := r.node.children[1]
-		if child0.recordType != child1.recordType {
-			return nil
-		}
-		switch child0.recordType {
-		// Nodes can't be merged
-		case recordTypeFixedNode,
-			recordTypeNode:
-			return nil
-		case recordTypeEmpty,
-			recordTypeReserved:
-			r.recordType = child0.recordType
-			r.node = nil
-			return nil
-		case recordTypeData:
-			if child0.value.key != child1.value.key {
-				return nil
-			}
-			// Children have same data and can be merged
-			r.recordType = recordTypeData
-			r.value = child0.value
-			iRec.dataMap.remove(child1.value)
-			r.node = nil
-			return nil
-		default:
-			return fmt.Errorf("merging record type %d is not implemented", child0.recordType)
-		}
+		return r.maybeMergeChildren(iRec)
 	case recordTypeFixedNode:
 		return r.node.insert(iRec, newDepth)
 	case recordTypeEmpty, recordTypeData:
@@ -139,7 +110,11 @@ func (r *record) insert(
 		r.node = &node{children: [2]record{*r, *r}}
 		r.value = nil
 		r.recordType = recordTypeNode
-		return r.node.insert(iRec, newDepth)
+		err := r.node.insert(iRec, newDepth)
+		if err != nil {
+			return err
+		}
+		return r.maybeMergeChildren(iRec)
 	case recordTypeReserved:
 		if iRec.prefixLen >= newDepth {
 			return fmt.Errorf(
@@ -165,6 +140,36 @@ func (r *record) insert(
 		)
 	default:
 		return fmt.Errorf("inserting into record type %d is not implemented", r.recordType)
+	}
+}
+
+func (r *record) maybeMergeChildren(iRec insertRecord) error {
+	// Check to see if the children are the same and can be merged.
+	child0 := r.node.children[0]
+	child1 := r.node.children[1]
+	if child0.recordType != child1.recordType {
+		return nil
+	}
+	switch child0.recordType {
+	// Nodes can't be merged
+	case recordTypeFixedNode, recordTypeNode:
+		return nil
+	case recordTypeEmpty, recordTypeReserved:
+		r.recordType = child0.recordType
+		r.node = nil
+		return nil
+	case recordTypeData:
+		if child0.value.key != child1.value.key {
+			return nil
+		}
+		// Children have same data and can be merged
+		r.recordType = recordTypeData
+		r.value = child0.value
+		iRec.dataMap.remove(child1.value)
+		r.node = nil
+		return nil
+	default:
+		return fmt.Errorf("merging record type %d is not implemented", child0.recordType)
 	}
 }
 
