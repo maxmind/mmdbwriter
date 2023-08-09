@@ -726,6 +726,27 @@ func TestInsertFunc_RemovalAndLaterInsert(t *testing.T) {
 	assert.Nil(t, recValue)
 }
 
+// See GitHub #62.
+func TestGet_4ByteIPIn128BitTree(t *testing.T) {
+	writer, err := New(Options{DatabaseType: "GitHub #62"})
+	require.NoError(t, err)
+
+	//nolint:forbidigo // code predates netip
+	ip, network, err := net.ParseCIDR("1.0.0.0/24")
+	require.NoError(t, err)
+
+	err = writer.Insert(network, mmdbtype.Map{"country_code": mmdbtype.String("AU")})
+	require.NoError(t, err)
+
+	getNetwork, _ := writer.Get(ip.To4())
+
+	assert.Equal(t, network.String(), getNetwork.String(), "4-byte lookup")
+
+	getNetwork, _ = writer.Get(ip.To16())
+
+	assert.Equal(t, network.String(), getNetwork.String(), "16-byte lookup")
+}
+
 func s2ip(v string) *any { //nolint:gocritic // test
 	i := any(v)
 	return &i
