@@ -408,17 +408,16 @@ func (t *Tree) Get(ip net.IP) (*net.IPNet, mmdbtype.DataType) {
 		// the MaxMind DB format has the record for 1.1.1.1 at ::1.1.1.1.
 		if ipv4 := ip.To4(); ipv4 != nil {
 			lookupIP = ipV4ToV6(ipv4)
+
+			// This simplifies the logic around creating the IPNet. If we didn't
+			// do this, we would need to specifically adjust the prefix length
+			// when creating the mask and we would also need to worry about
+			// what to do if there isn't an IPv4 tree.
+			ip = ip.To16()
 		}
 	}
 
 	prefixLen, r := t.root.get(lookupIP, 0)
-
-	// This is so that if you look up an IPv4 address in a database that has
-	// an IPv4 subtree, you will get back an IPv4 network. This matches what
-	// github.com/oschwald/maxminddb-golang does.
-	if prefixLen >= 96 && len(ip) == 4 {
-		prefixLen -= 96
-	}
 
 	mask := net.CIDRMask(prefixLen, t.treeDepth)
 
