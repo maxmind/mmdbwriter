@@ -723,15 +723,15 @@ func writeCtrlByte(w writer, t DataType) (int64, error) {
 	switch {
 	case size < firstSize:
 		firstByte |= byte(size)
-	case size <= secondSize:
+	case size < secondSize:
 		firstByte |= 29
 		leftOver = size - firstSize
 		leftOverSize = 1
-	case size <= thirdSize:
+	case size < thirdSize:
 		firstByte |= 30
 		leftOver = size - secondSize
 		leftOverSize = 2
-	case size <= maxSize:
+	case size < maxSize:
 		firstByte |= 31
 		leftOver = size - thirdSize
 		leftOverSize = 3
@@ -739,7 +739,7 @@ func writeCtrlByte(w writer, t DataType) (int64, error) {
 		return 0, fmt.Errorf(
 			"cannot store %d bytes; max size is %d",
 			size,
-			maxSize,
+			maxSize-1,
 		)
 	}
 

@@ -6,6 +6,7 @@ import (
 	"math/big"
 	"net"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -108,6 +109,36 @@ func TestTreeInsertAndGet(t *testing.T) {
 		"uint32":      uint64(0x10000000),
 		"uint64":      uint64(0x1000000000000000),
 		"utf8_string": "unicode! ☯ - ♫",
+	}
+
+	stringsGetRecord := mmdbtype.Map{
+		// firstSize
+		"size28": mmdbtype.String(strings.Repeat("*", 28)),
+		"size29": mmdbtype.String(strings.Repeat("*", 29)),
+		"size30": mmdbtype.String(strings.Repeat("*", 30)),
+		// secondSize
+		"size284": mmdbtype.String(strings.Repeat("*", 284)),
+		"size285": mmdbtype.String(strings.Repeat("*", 285)),
+		"size286": mmdbtype.String(strings.Repeat("*", 286)),
+		// thirdSize
+		"size65820": mmdbtype.String(strings.Repeat("*", 65820)),
+		"size65821": mmdbtype.String(strings.Repeat("*", 65821)),
+		"size65822": mmdbtype.String(strings.Repeat("*", 65822)),
+		// maxSize
+		"maxSizeMinus1": mmdbtype.String(strings.Repeat("*", 16843036)),
+	}
+
+	var stringsLookupRecord any = map[string]any{
+		"size28":        strings.Repeat("*", 28),
+		"size29":        strings.Repeat("*", 29),
+		"size30":        strings.Repeat("*", 30),
+		"size284":       strings.Repeat("*", 284),
+		"size285":       strings.Repeat("*", 285),
+		"size286":       strings.Repeat("*", 286),
+		"size65820":     strings.Repeat("*", 65820),
+		"size65821":     strings.Repeat("*", 65821),
+		"size65822":     strings.Repeat("*", 65822),
+		"maxSizeMinus1": strings.Repeat("*", 16843036),
 	}
 
 	tests := []struct {
@@ -532,6 +563,26 @@ func TestTreeInsertAndGet(t *testing.T) {
 					expectedNetwork:     "1.1.1.6/32",
 					expectedGetValue:    mmdbtype.String("string"),
 					expectedLookupValue: s2ip("string"),
+				},
+			},
+			expectedNodeCount: 375,
+		},
+		{
+			name: "insertion of strings at boundary control byte size",
+			inserts: []testInsert{
+				{
+					network: "1.1.1.1/32",
+					start:   "1.1.1.1",
+					end:     "1.1.1.1",
+					value:   stringsGetRecord,
+				},
+			},
+			gets: []testGet{
+				{
+					ip:                  "1.1.1.1",
+					expectedNetwork:     "1.1.1.1/32",
+					expectedGetValue:    stringsGetRecord,
+					expectedLookupValue: &stringsLookupRecord,
 				},
 			},
 			expectedNodeCount: 375,
