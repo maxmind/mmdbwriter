@@ -111,7 +111,7 @@ func TestTreeInsertAndGet(t *testing.T) {
 		"utf8_string": "unicode! ☯ - ♫",
 	}
 
-	var stringsGetRecord = mmdbtype.Map{
+	stringsGetRecord := mmdbtype.Map{
 		// firstSize
 		"size28": mmdbtype.String(strings.Repeat("*", 28)),
 		"size29": mmdbtype.String(strings.Repeat("*", 29)),
