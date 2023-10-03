@@ -78,6 +78,17 @@ type Options struct {
 	// to `inserter.ReplaceWith`, which replaces any conflicting old value
 	// entirely with the new.
 	Inserter inserter.FuncGenerator
+
+	// KeyGenerator is used to generate unique keys for the top-level record
+	// values inserted into the database. This is used to deduplicate data
+	// in memory as the tree is being created. The KeyGenerator must
+	// generate a unique key for the value. If two different values have
+	// the same key, only one will be used.
+	//
+	// The default key generator serializes the value and generates a
+	// SHA-256 hash from it. Although this is relatively safe, it can be
+	// resource intensive for large data structures.
+	KeyGenerator KeyGenerator
 }
 
 // Tree represents an MaxMind DB search tree.
@@ -101,7 +112,6 @@ type Tree struct {
 func New(opts Options) (*Tree, error) {
 	tree := &Tree{
 		buildEpoch:              time.Now().Unix(),
-		dataMap:                 newDataMap(),
 		databaseType:            opts.DatabaseType,
 		description:             map[string]string{},
 		disableMetadataPointers: opts.DisableMetadataPointers,
@@ -121,6 +131,12 @@ func New(opts Options) (*Tree, error) {
 
 	if opts.IPVersion != 0 {
 		tree.ipVersion = opts.IPVersion
+	}
+
+	if opts.KeyGenerator == nil {
+		tree.dataMap = newDataMap(newKeyWriter())
+	} else {
+		tree.dataMap = newDataMap(opts.KeyGenerator)
 	}
 
 	if opts.Languages != nil {

@@ -11,7 +11,7 @@ import (
 func TestDataMap(t *testing.T) {
 	v := mmdbtype.String("test")
 
-	dm := newDataMap()
+	dm := newDataMap(newKeyWriter())
 
 	dmv, err := dm.store(v)
 	require.NoError(t, err)
