@@ -31,6 +31,7 @@ var _ KeyGenerator = &keyWriter{}
 type keyWriter struct {
 	*bytes.Buffer
 	sha256 hash.Hash
+	key    [sha256.Size]byte
 }
 
 func newKeyWriter() *keyWriter {
@@ -49,7 +50,7 @@ func (kw *keyWriter) Key(v mmdbtype.DataType) ([]byte, error) {
 	if _, err := kw.WriteTo(kw.sha256); err != nil {
 		return nil, err
 	}
-	return kw.sha256.Sum(nil), nil
+	return kw.sha256.Sum(kw.key[:0]), nil
 }
 
 func (kw *keyWriter) WriteOrWritePointer(t mmdbtype.DataType) (int64, error) {
