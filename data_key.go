@@ -15,7 +15,7 @@ import (
 // data.
 //
 // Please be certain that any key you generate is unique. If there is a
-// collision with two different values having the same key, ones of the
+// collision with two different values having the same key, one of the
 // values will be overwritten.
 //
 // The returned byte slice is not stored. You may use the same backing
