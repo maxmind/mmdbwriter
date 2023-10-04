@@ -117,11 +117,7 @@ func (r *record) insert(
 		return r.maybeMergeChildren(iRec)
 	case recordTypeReserved:
 		if iRec.prefixLen >= newDepth {
-			return fmt.Errorf(
-				"attempt to insert %s/%d, which is in a reserved network",
-				iRec.ip,
-				iRec.prefixLen,
-			)
+			return newReservedNetworkError(iRec.ip, newDepth, iRec.prefixLen)
 		}
 		// If we are inserting a network that contains a reserved network,
 		// we silently remove the reserved network.
@@ -133,11 +129,7 @@ func (r *record) insert(
 			return nil
 		}
 		// attempting to insert _into_ an aliased network
-		return fmt.Errorf(
-			"attempt to insert %s/%d, which is in an aliased network",
-			iRec.ip,
-			iRec.prefixLen,
-		)
+		return newAliasedNetworkError(iRec.ip, newDepth, iRec.prefixLen)
 	default:
 		return fmt.Errorf("inserting into record type %d is not implemented", r.recordType)
 	}
