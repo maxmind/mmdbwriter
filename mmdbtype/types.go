@@ -9,8 +9,9 @@ import (
 	"math/big"
 	"math/bits"
 	"reflect"
-	//nolint:depguard // sort.Strings is not worth pulling in a new dep for
-	"sort"
+
+	// TODO: Once the min Go version is 1.21, switch this to "slices".
+	"golang.org/x/exp/slices"
 )
 
 type typeNum byte
@@ -299,7 +300,7 @@ func (t Map) WriteTo(w writer) (int64, error) {
 	for k := range t {
 		keys = append(keys, string(k))
 	}
-	sort.Strings(keys)
+	slices.Sort(keys)
 
 	for _, ks := range keys {
 		k := String(ks)
