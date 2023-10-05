@@ -341,19 +341,19 @@ func TestTreeInsertAndGet(t *testing.T) {
 					network:          "10.0.0.0/8",
 					start:            "10.0.0.0",
 					end:              "10.255.255.255",
-					expectedErrorMsg: "attempt to insert ::a00:0/104, which is in a reserved network",
+					expectedErrorMsg: "attempt to insert ::a00:0/104 into ::a00:0/104, which is a reserved network",
 				},
 				{
 					network:          "10.0.0.1/32",
 					start:            "10.0.0.1",
 					end:              "10.0.0.1",
-					expectedErrorMsg: "attempt to insert ::a00:1/128, which is in a reserved network",
+					expectedErrorMsg: "attempt to insert ::a00:1/128 into ::a00:0/104, which is a reserved network",
 				},
 				{
 					network:          "2002:100::/24",
 					start:            "2002:100::",
 					end:              "2002:1ff:ffff:ffff:ffff:ffff:ffff:ffff",
-					expectedErrorMsg: "attempt to insert 2002:100::/24, which is in an aliased network",
+					expectedErrorMsg: "attempt to insert 2002:100::/24 into 2002::/16, which is an aliased network",
 				},
 			},
 			gets: []testGet{
