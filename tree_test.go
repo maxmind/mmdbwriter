@@ -620,7 +620,7 @@ func TestTreeInsertAndGet(t *testing.T) {
 
 							err = tree.Insert(network, insert.value)
 
-							assert.EqualError(t, err, insert.expectedErrorMsg)
+							require.EqualError(t, err, insert.expectedErrorMsg)
 						}
 					} else if test.insertType == "" || test.insertType == "range" {
 						for _, insert := range test.inserts {
@@ -642,7 +642,7 @@ func TestTreeInsertAndGet(t *testing.T) {
 							require.NotNil(t, end)
 
 							err = tree.InsertRange(start, end, insert.value)
-							assert.EqualError(t, err, insert.expectedErrorMsg)
+							require.EqualError(t, err, insert.expectedErrorMsg)
 						}
 					}
 
@@ -719,7 +719,7 @@ func checkMMDB(t *testing.T, buf *bytes.Buffer, gets []testGet, name string) {
 				assert.Equal(t, *get.expectedLookupValue, v, "value for %s in database", get.ip)
 			}
 		}
-		assert.NoError(t, reader.Verify(), "verify database format")
+		require.NoError(t, reader.Verify(), "verify database format")
 	})
 }
 
