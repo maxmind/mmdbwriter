@@ -104,8 +104,10 @@ type Tree struct {
 	root                    *node
 	treeDepth               int
 	// This is set when the tree is finalized
-	nodeCount       int
-	inserterFuncGen inserter.FuncGenerator
+	nodeCount              int
+	treeSize               uint64
+	dataSectionStartOffset uint64
+	inserterFuncGen        inserter.FuncGenerator
 }
 
 // New creates a new Tree.
@@ -451,6 +453,8 @@ func (t *Tree) Get(ip net.IP) (*net.IPNet, mmdbtype.DataType) {
 // finalize prepares the tree for writing. It is not threadsafe.
 func (t *Tree) finalize() {
 	t.nodeCount = t.root.finalize(0)
+	t.treeSize = t.CalculateTreeSize()
+	t.dataSectionStartOffset = t.CalculateDataSectionStartOffset()
 }
 
 // WriteTo writes the tree to the provided Writer.
@@ -656,6 +660,8 @@ func (t *Tree) writeMetadata(dw *dataWriter) (int64, error) {
 		"languages":                   languages,
 		"node_count":                  mmdbtype.Uint32(t.nodeCount),
 		"record_size":                 mmdbtype.Uint16(t.recordSize),
+		"tree_size":                   mmdbtype.Uint64(t.treeSize),
+		"data_section_start_offset":   mmdbtype.Uint64(t.dataSectionStartOffset),
 	}
 	return metadata.WriteTo(dw)
 }
