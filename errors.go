@@ -1,6 +1,7 @@
 package mmdbwriter
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"net"
@@ -75,7 +76,16 @@ type ReservedNetworkError struct {
 
 var _ error = &ReservedNetworkError{}
 
+var ipv4Prefix = []byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
+
 func newReservedNetworkError(netIP net.IP, curPrefixLen, recPrefixLen int) error {
+	// Check if we are in the IPv4 subtree. If so, convert everything to IPv4.
+	if bytes.HasPrefix(netIP, ipv4Prefix) && curPrefixLen > 96 && recPrefixLen > 96 {
+		netIP = netIP[12:]
+		curPrefixLen -= 96
+		recPrefixLen -= 96
+	}
+
 	rnErr := &ReservedNetworkError{}
 	ip, ok := netip.AddrFromSlice(netIP)
 	if !ok {
