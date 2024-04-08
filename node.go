@@ -94,6 +94,7 @@ func (r *record) insert(
 				} else if oldData == nil || !oldData.Equal(newData) {
 					iRec.dataMap.remove(r.value)
 					value, err := iRec.dataMap.store(newData)
+					//nolint:revive //preexisting
 					if err != nil {
 						return err
 					}

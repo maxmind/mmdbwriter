@@ -10,10 +10,11 @@ import (
 	"net"
 	"time"
 
-	"github.com/maxmind/mmdbwriter/inserter"
-	"github.com/maxmind/mmdbwriter/mmdbtype"
 	"github.com/oschwald/maxminddb-golang"
 	"go4.org/netipx"
+
+	"github.com/maxmind/mmdbwriter/inserter"
+	"github.com/maxmind/mmdbwriter/mmdbtype"
 )
 
 var (
@@ -180,7 +181,7 @@ func New(opts Options) (*Tree, error) {
 func Load(path string, opts Options) (*Tree, error) {
 	db, err := maxminddb.Open(path)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("opening %s: %w", path, err)
 	}
 	defer db.Close()
 
@@ -224,7 +225,7 @@ func Load(path string, opts Options) (*Tree, error) {
 		dser.clear()
 		network, err = networks.Network(dser)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("unmarshaling record for network: %w", err)
 		}
 
 		err = tree.Insert(network, dser.rv)
@@ -233,7 +234,7 @@ func Load(path string, opts Options) (*Tree, error) {
 		}
 	}
 	if err := networks.Err(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("iterating over networks: %w", err)
 	}
 	return tree, nil
 }
@@ -494,7 +495,7 @@ func (t *Tree) WriteTo(w io.Writer) (int64, error) {
 	nb64, err := dataWriter.WriteTo(buf)
 	numBytes += nb64
 	if err != nil {
-		return numBytes, err
+		return numBytes, fmt.Errorf("writing data to buffer: %w", err)
 	}
 
 	nb, err = buf.Write(metadataStartMarker)
@@ -520,7 +521,7 @@ func (t *Tree) WriteTo(w io.Writer) (int64, error) {
 		return numBytes, fmt.Errorf("flushing buffer to writer: %w", err)
 	}
 
-	return numBytes, err
+	return numBytes, nil
 }
 
 func (t *Tree) writeNode(

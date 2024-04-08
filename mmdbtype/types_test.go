@@ -139,7 +139,7 @@ func TestString(t *testing.T) {
 }
 
 func TestByte(t *testing.T) {
-	b := make(map[string]DataType)
+	b := map[string]DataType{}
 	for key, val := range testStrings {
 		oldCtrl, err := hex.DecodeString(key[0:2])
 		require.NoError(t, err)
