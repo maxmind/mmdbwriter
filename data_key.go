@@ -3,6 +3,7 @@ package mmdbwriter
 import (
 	"bytes"
 	"crypto/sha256"
+	"fmt"
 	"hash"
 
 	"github.com/maxmind/mmdbwriter/mmdbtype"
@@ -48,7 +49,7 @@ func (kw *keyWriter) Key(v mmdbtype.DataType) ([]byte, error) {
 		return nil, err
 	}
 	if _, err := kw.WriteTo(kw.sha256); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("writing key to writer: %w", err)
 	}
 	return kw.sha256.Sum(kw.key[:0]), nil
 }

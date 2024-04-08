@@ -3,9 +3,10 @@ package inserter
 import (
 	"testing"
 
-	"github.com/maxmind/mmdbwriter/mmdbtype"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/maxmind/mmdbwriter/mmdbtype"
 )
 
 func TestRemove(t *testing.T) {
