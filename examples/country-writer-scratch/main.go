@@ -28,7 +28,7 @@ func main() {
 	// 54.36.84.100/22,France,Paris
 	// 142.44.196.0/25,India,Mumbai
 
-	fh1, err := os.Open("C:\\Users\\Aabhas\\Desktop\\generate\\random-cidr-country.csv")
+	fh1, err := os.Open("random-cidr-country-city.csv")
 	if err != nil {
 		log.Fatal(err)
 	}
