@@ -196,17 +196,18 @@ func TestUint64(t *testing.T) {
 
 func TestUint128(t *testing.T) {
 	ctrlByte := "03"
-	bits := uint(128)
+	bits := 128
 
 	uints := map[string]DataType{
 		"00" + ctrlByte:          (*Uint128)(big.NewInt(0)),
 		"02" + ctrlByte + "01f4": (*Uint128)(big.NewInt(500)),
 		"02" + ctrlByte + "2a78": (*Uint128)(big.NewInt(10872)),
 	}
-	for i := uint(1); i <= bits/8; i++ {
-		expected := powBigInt(big.NewInt(2), 8*i)
+	for i := 1; i <= bits/8; i++ {
+		expected := &big.Int{}
+		expected.Lsh(big.NewInt(1), 8*uint(i))
 		expected = expected.Sub(expected, big.NewInt(1))
-		input := hex.EncodeToString([]byte{byte(i)}) + ctrlByte + strings.Repeat("ff", int(i))
+		input := hex.EncodeToString([]byte{byte(i)}) + ctrlByte + strings.Repeat("ff", i)
 
 		uints[input] = (*Uint128)(expected)
 	}
@@ -438,16 +439,6 @@ func TestEqual(t *testing.T) {
 			)
 		})
 	}
-}
-
-// No pow or bit shifting for big int, apparently :-(
-// This is _not_ meant to be a comprehensive power function.
-func powBigInt(bi *big.Int, pow uint) *big.Int {
-	newInt := big.NewInt(1)
-	for i := uint(0); i < pow; i++ {
-		newInt.Mul(newInt, bi)
-	}
-	return newInt
 }
 
 func validateEncoding(t *testing.T, tests map[string]DataType) {
