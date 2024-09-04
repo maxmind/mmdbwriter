@@ -195,6 +195,7 @@ func Load(path string, opts Options) (*Tree, error) {
 	}
 
 	if opts.IPVersion == 0 {
+		//nolint:gosec // no risk. Will be 4 or 6.
 		opts.IPVersion = int(metadata.IPVersion)
 	}
 
@@ -203,6 +204,7 @@ func Load(path string, opts Options) (*Tree, error) {
 	}
 
 	if opts.RecordSize == 0 {
+		//nolint:gosec // no risk. Will be 24, 28, or 32.
 		opts.RecordSize = int(metadata.RecordSize)
 	}
 
@@ -653,10 +655,12 @@ func (t *Tree) writeMetadata(dw *dataWriter) (int64, error) {
 		"build_epoch":                 mmdbtype.Uint64(t.buildEpoch),
 		"database_type":               mmdbtype.String(t.databaseType),
 		"description":                 description,
-		"ip_version":                  mmdbtype.Uint16(t.ipVersion),
-		"languages":                   languages,
-		"node_count":                  mmdbtype.Uint32(t.nodeCount),
-		"record_size":                 mmdbtype.Uint16(t.recordSize),
+		//nolint:gosec // no risk. Will be 4 or 6.
+		"ip_version": mmdbtype.Uint16(t.ipVersion),
+		"languages":  languages,
+		"node_count": mmdbtype.Uint32(t.nodeCount),
+		//nolint:gosec // no risk. Will be 24, 28, or 32.
+		"record_size": mmdbtype.Uint16(t.recordSize),
 	}
 	return metadata.WriteTo(dw)
 }
