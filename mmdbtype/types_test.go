@@ -177,17 +177,17 @@ func TestUint32(t *testing.T) {
 
 func TestUint64(t *testing.T) {
 	ctrlByte := "02"
-	bits := uint64(64)
+	bits := 64
 
 	uints := map[string]DataType{
 		"00" + ctrlByte:          Uint64(0),
 		"02" + ctrlByte + "01f4": Uint64(500),
 		"02" + ctrlByte + "2a78": Uint64(10872),
 	}
-	for i := uint64(0); i <= bits/8; i++ {
+	for i := 0; i <= bits/8; i++ {
 		expected := uint64((1 << (8 * i)) - 1)
 
-		input := hex.EncodeToString([]byte{byte(i)}) + ctrlByte + strings.Repeat("ff", int(i))
+		input := hex.EncodeToString([]byte{byte(i)}) + ctrlByte + strings.Repeat("ff", i)
 		uints[input] = Uint64(expected)
 	}
 
