@@ -418,7 +418,9 @@ func TestTreeInsertAndGet(t *testing.T) {
 					network: "1.1.0.0/24",
 					start:   "1.1.0.0",
 					end:     "1.1.0.255",
-					value:   mmdbtype.Map{"a": mmdbtype.Slice{mmdbtype.Uint64(1), mmdbtype.Bytes{1, 2}}},
+					value: mmdbtype.Map{
+						"a": mmdbtype.Slice{mmdbtype.Uint64(1), mmdbtype.Bytes{1, 2}},
+					},
 				},
 				{
 					network: "1.1.1.0/24",
@@ -426,14 +428,18 @@ func TestTreeInsertAndGet(t *testing.T) {
 					end:     "1.1.1.255",
 					// We intentionally don't use the same variable for
 					// here and above as we want them to be different instances.
-					value: mmdbtype.Map{"a": mmdbtype.Slice{mmdbtype.Uint64(1), mmdbtype.Bytes{1, 2}}},
+					value: mmdbtype.Map{
+						"a": mmdbtype.Slice{mmdbtype.Uint64(1), mmdbtype.Bytes{1, 2}},
+					},
 				},
 			},
 			gets: []testGet{
 				{
-					ip:               "1.1.0.0",
-					expectedNetwork:  "1.1.0.0/23",
-					expectedGetValue: mmdbtype.Map{"a": mmdbtype.Slice{mmdbtype.Uint64(1), mmdbtype.Bytes{1, 2}}},
+					ip:              "1.1.0.0",
+					expectedNetwork: "1.1.0.0/23",
+					expectedGetValue: mmdbtype.Map{
+						"a": mmdbtype.Slice{mmdbtype.Uint64(1), mmdbtype.Bytes{1, 2}},
+					},
 					expectedLookupValue: func() *any {
 						v := any(map[string]any{"a": []any{uint64(1), []byte{1, 2}}})
 						return &v
@@ -449,7 +455,9 @@ func TestTreeInsertAndGet(t *testing.T) {
 					network: "1.1.0.0/24",
 					start:   "1.1.0.0",
 					end:     "1.1.0.255",
-					value:   mmdbtype.Map{"a": mmdbtype.Slice{mmdbtype.Uint64(1), mmdbtype.Bytes{1, 2}}},
+					value: mmdbtype.Map{
+						"a": mmdbtype.Slice{mmdbtype.Uint64(1), mmdbtype.Bytes{1, 2}},
+					},
 				},
 				{
 					network: "1.1.0.128/26",
@@ -457,14 +465,18 @@ func TestTreeInsertAndGet(t *testing.T) {
 					end:     "1.1.0.191",
 					// We intentionally don't use the same variable for
 					// here and above as we want them to be different instances.
-					value: mmdbtype.Map{"a": mmdbtype.Slice{mmdbtype.Uint64(1), mmdbtype.Bytes{1, 2}}},
+					value: mmdbtype.Map{
+						"a": mmdbtype.Slice{mmdbtype.Uint64(1), mmdbtype.Bytes{1, 2}},
+					},
 				},
 			},
 			gets: []testGet{
 				{
-					ip:               "1.1.0.0",
-					expectedNetwork:  "1.1.0.0/24",
-					expectedGetValue: mmdbtype.Map{"a": mmdbtype.Slice{mmdbtype.Uint64(1), mmdbtype.Bytes{1, 2}}},
+					ip:              "1.1.0.0",
+					expectedNetwork: "1.1.0.0/24",
+					expectedGetValue: mmdbtype.Map{
+						"a": mmdbtype.Slice{mmdbtype.Uint64(1), mmdbtype.Bytes{1, 2}},
+					},
 					expectedLookupValue: func() *any {
 						v := any(map[string]any{"a": []any{uint64(1), []byte{1, 2}}})
 						return &v
@@ -480,7 +492,9 @@ func TestTreeInsertAndGet(t *testing.T) {
 					network: "1.1.0.0/24",
 					start:   "1.1.0.0",
 					end:     "1.1.0.255",
-					value:   mmdbtype.Map{"a": mmdbtype.Slice{mmdbtype.Uint64(1), mmdbtype.Bytes{1, 2}}},
+					value: mmdbtype.Map{
+						"a": mmdbtype.Slice{mmdbtype.Uint64(1), mmdbtype.Bytes{1, 2}},
+					},
 				},
 				{
 					network: "1.1.0.128/26",
@@ -496,14 +510,18 @@ func TestTreeInsertAndGet(t *testing.T) {
 					end:     "1.1.0.191",
 					// We intentionally don't use the same variable for
 					// here and above as we want them to be different instances.
-					value: mmdbtype.Map{"a": mmdbtype.Slice{mmdbtype.Uint64(1), mmdbtype.Bytes{1, 2}}},
+					value: mmdbtype.Map{
+						"a": mmdbtype.Slice{mmdbtype.Uint64(1), mmdbtype.Bytes{1, 2}},
+					},
 				},
 			},
 			gets: []testGet{
 				{
-					ip:               "1.1.0.0",
-					expectedNetwork:  "1.1.0.0/24",
-					expectedGetValue: mmdbtype.Map{"a": mmdbtype.Slice{mmdbtype.Uint64(1), mmdbtype.Bytes{1, 2}}},
+					ip:              "1.1.0.0",
+					expectedNetwork: "1.1.0.0/24",
+					expectedGetValue: mmdbtype.Map{
+						"a": mmdbtype.Slice{mmdbtype.Uint64(1), mmdbtype.Bytes{1, 2}},
+					},
 					expectedLookupValue: func() *any {
 						v := any(map[string]any{"a": []any{uint64(1), []byte{1, 2}}})
 						return &v
@@ -653,7 +671,13 @@ func TestTreeInsertAndGet(t *testing.T) {
 						//nolint:forbidigo // code predates netip
 						network, value := tree.Get(net.ParseIP(get.ip))
 
-						assert.Equal(t, get.expectedNetwork, network.String(), "network for %s", get.ip)
+						assert.Equal(
+							t,
+							get.expectedNetwork,
+							network.String(),
+							"network for %s",
+							get.ip,
+						)
 						assert.Equal(t, get.expectedGetValue, value, "value for %s", get.ip)
 					}
 
@@ -692,7 +716,12 @@ func TestTreeInsertAndGet(t *testing.T) {
 
 					checkMMDB(t, loadBuf, test.gets, "MMDB lookups on Load tree")
 
-					assert.Equal(t, bufBytes, loadBuf.Bytes(), "Load + WriteTo generates an identical database")
+					assert.Equal(
+						t,
+						bufBytes,
+						loadBuf.Bytes(),
+						"Load + WriteTo generates an identical database",
+					)
 				})
 			}
 		})
@@ -712,7 +741,13 @@ func checkMMDB(t *testing.T, buf *bytes.Buffer, gets []testGet, name string) {
 			network, ok, err := reader.LookupNetwork(net.ParseIP(get.ip), &v)
 			require.NoError(t, err)
 
-			assert.Equal(t, get.expectedNetwork, network.String(), "network for %s in database", get.ip)
+			assert.Equal(
+				t,
+				get.expectedNetwork,
+				network.String(),
+				"network for %s in database",
+				get.ip,
+			)
 
 			if get.expectedLookupValue == nil {
 				assert.False(t, ok, "%s is not in the database", get.ip)

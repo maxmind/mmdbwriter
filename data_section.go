@@ -2,6 +2,8 @@ package mmdbwriter
 
 import (
 	"bytes"
+	"fmt"
+	"math"
 
 	"github.com/maxmind/mmdbwriter/mmdbtype"
 )
@@ -41,7 +43,12 @@ func (dw *dataWriter) maybeWrite(value *dataMapValue) (int, error) {
 		return 0, err
 	}
 
+	if offset > math.MaxUint32 {
+		return 0, fmt.Errorf("offset of %d exceeds maximum when writing data", offset)
+	}
+
 	written = writtenType{
+		//nolint:gosec // checked above
 		pointer: mmdbtype.Pointer(offset),
 		size:    size,
 	}
@@ -84,7 +91,12 @@ func (dw *dataWriter) WriteOrWritePointer(t mmdbtype.DataType) (int64, error) {
 		return size, err
 	}
 
+	if offset > math.MaxUint32 {
+		return 0, fmt.Errorf("offset of %d exceeds maximum when writing data", offset)
+	}
+
 	dw.offsets[key] = writtenType{
+		//nolint:gosec // checked above
 		pointer: mmdbtype.Pointer(offset),
 		size:    size,
 	}

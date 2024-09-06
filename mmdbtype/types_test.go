@@ -119,9 +119,15 @@ func makeTestStrings() map[string]DataType {
 		"40":       String(""),
 		"4131":     String("1"),
 		"43e4baba": String("人"),
-		"5b313233343536373839303132333435363738393031323334353637":       String("123456789012345678901234567"),
-		"5c31323334353637383930313233343536373839303132333435363738":     String("1234567890123456789012345678"),
-		"5d003132333435363738393031323334353637383930313233343536373839": String("12345678901234567890123456789"),
+		"5b313233343536373839303132333435363738393031323334353637": String(
+			"123456789012345678901234567",
+		),
+		"5c31323334353637383930313233343536373839303132333435363738": String(
+			"1234567890123456789012345678",
+		),
+		"5d003132333435363738393031323334353637383930313233343536373839": String(
+			"12345678901234567890123456789",
+		),
 		"5d01313233343536373839303132333435363738393031323334353637383930": String(
 			"123456789012345678901234567890"),
 	}
@@ -177,17 +183,17 @@ func TestUint32(t *testing.T) {
 
 func TestUint64(t *testing.T) {
 	ctrlByte := "02"
-	bits := uint64(64)
+	bits := 64
 
 	uints := map[string]DataType{
 		"00" + ctrlByte:          Uint64(0),
 		"02" + ctrlByte + "01f4": Uint64(500),
 		"02" + ctrlByte + "2a78": Uint64(10872),
 	}
-	for i := uint64(0); i <= bits/8; i++ {
+	for i := 0; i <= bits/8; i++ {
 		expected := uint64((1 << (8 * i)) - 1)
 
-		input := hex.EncodeToString([]byte{byte(i)}) + ctrlByte + strings.Repeat("ff", int(i))
+		input := hex.EncodeToString([]byte{byte(i)}) + ctrlByte + strings.Repeat("ff", i)
 		uints[input] = Uint64(expected)
 	}
 
@@ -196,17 +202,18 @@ func TestUint64(t *testing.T) {
 
 func TestUint128(t *testing.T) {
 	ctrlByte := "03"
-	bits := uint(128)
+	bits := 128
 
 	uints := map[string]DataType{
 		"00" + ctrlByte:          (*Uint128)(big.NewInt(0)),
 		"02" + ctrlByte + "01f4": (*Uint128)(big.NewInt(500)),
 		"02" + ctrlByte + "2a78": (*Uint128)(big.NewInt(10872)),
 	}
-	for i := uint(1); i <= bits/8; i++ {
-		expected := powBigInt(big.NewInt(2), 8*i)
+	for i := 1; i <= bits/8; i++ {
+		expected := &big.Int{}
+		expected.Lsh(big.NewInt(1), 8*uint(i))
 		expected = expected.Sub(expected, big.NewInt(1))
-		input := hex.EncodeToString([]byte{byte(i)}) + ctrlByte + strings.Repeat("ff", int(i))
+		input := hex.EncodeToString([]byte{byte(i)}) + ctrlByte + strings.Repeat("ff", i)
 
 		uints[input] = (*Uint128)(expected)
 	}
@@ -438,16 +445,6 @@ func TestEqual(t *testing.T) {
 			)
 		})
 	}
-}
-
-// No pow or bit shifting for big int, apparently :-(
-// This is _not_ meant to be a comprehensive power function.
-func powBigInt(bi *big.Int, pow uint) *big.Int {
-	newInt := big.NewInt(1)
-	for i := uint(0); i < pow; i++ {
-		newInt.Mul(newInt, bi)
-	}
-	return newInt
 }
 
 func validateEncoding(t *testing.T, tests map[string]DataType) {
