@@ -211,6 +211,8 @@ func TestUint128(t *testing.T) {
 	}
 	for i := 1; i <= bits/8; i++ {
 		expected := &big.Int{}
+
+		//nolint:gosec // i is positive.
 		expected.Lsh(big.NewInt(1), 8*uint(i))
 		expected = expected.Sub(expected, big.NewInt(1))
 		input := hex.EncodeToString([]byte{byte(i)}) + ctrlByte + strings.Repeat("ff", i)

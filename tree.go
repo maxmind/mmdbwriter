@@ -656,9 +656,13 @@ func (t *Tree) writeMetadata(dw *dataWriter) (int64, error) {
 	metadata := mmdbtype.Map{
 		"binary_format_major_version": mmdbtype.Uint16(2),
 		"binary_format_minor_version": mmdbtype.Uint16(0),
-		"build_epoch":                 mmdbtype.Uint64(t.buildEpoch),
-		"database_type":               mmdbtype.String(t.databaseType),
-		"description":                 description,
+
+		// Although it might make sense to change the type on this, there is no use
+		// case where someone would reasonably pass a negative build epoch.
+		//nolint:gosec // See above.
+		"build_epoch":   mmdbtype.Uint64(t.buildEpoch),
+		"database_type": mmdbtype.String(t.databaseType),
+		"description":   description,
 		//nolint:gosec // no risk. Will be 4 or 6.
 		"ip_version": mmdbtype.Uint16(t.ipVersion),
 		"languages":  languages,
