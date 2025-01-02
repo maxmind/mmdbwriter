@@ -691,7 +691,7 @@ func TestTreeInsertAndGet(t *testing.T) {
 
 					assert.Equal(t, int64(buf.Len()), numBytes, "number of bytes")
 
-					f, err := os.CreateTemp("", "mmdbwriter")
+					f, err := os.CreateTemp(t.TempDir(), "mmdbwriter")
 					require.NoError(t, err)
 					defer func() { require.NoError(t, os.Remove(f.Name())) }()
 

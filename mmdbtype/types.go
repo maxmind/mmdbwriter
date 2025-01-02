@@ -9,9 +9,7 @@ import (
 	"math/big"
 	"math/bits"
 	"reflect"
-
-	// TODO: Once the min Go version is 1.21, switch this to "slices".
-	"golang.org/x/exp/slices"
+	"slices"
 )
 
 type typeNum byte
