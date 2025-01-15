@@ -1,14 +1,11 @@
 module github.com/maxmind/mmdbwriter
 
-go 1.21
-
-toolchain go1.22.3
+go 1.23
 
 require (
 	github.com/oschwald/maxminddb-golang v1.13.1
 	github.com/stretchr/testify v1.10.0
 	go4.org/netipx v0.0.0-20231129151722-fdeea329fbba
-	golang.org/x/exp v0.0.0-20240531132922-fd00a4e0eefc
 )
 
 require (
