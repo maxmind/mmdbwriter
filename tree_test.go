@@ -5,12 +5,13 @@ import (
 	"fmt"
 	"math/big"
 	"net"
+	"net/netip"
 	"os"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/oschwald/maxminddb-golang"
+	"github.com/oschwald/maxminddb-golang/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -737,20 +738,21 @@ func checkMMDB(t *testing.T, buf *bytes.Buffer, gets []testGet, name string) {
 
 		for _, get := range gets {
 			var v any
-			//nolint:forbidigo // code predates netip
-			network, ok, err := reader.LookupNetwork(net.ParseIP(get.ip), &v)
+
+			res := reader.Lookup(netip.MustParseAddr(get.ip))
+			err := res.Decode(&v)
 			require.NoError(t, err)
 
 			assert.Equal(
 				t,
 				get.expectedNetwork,
-				network.String(),
+				res.Prefix().String(),
 				"network for %s in database",
 				get.ip,
 			)
 
 			if get.expectedLookupValue == nil {
-				assert.False(t, ok, "%s is not in the database", get.ip)
+				assert.False(t, res.Found(), "%s is not in the database", get.ip)
 			} else {
 				assert.Equal(t, *get.expectedLookupValue, v, "value for %s in database", get.ip)
 			}
