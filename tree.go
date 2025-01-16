@@ -11,7 +11,7 @@ import (
 	"net"
 	"time"
 
-	"github.com/oschwald/maxminddb-golang"
+	"github.com/oschwald/maxminddb-golang/v2"
 	"go4.org/netipx"
 
 	"github.com/maxmind/mmdbwriter/inserter"
@@ -217,27 +217,21 @@ func Load(path string, opts Options) (*Tree, error) {
 	dser := newDeserializer()
 
 	var networkOpts []maxminddb.NetworksOption
-	if opts.IPVersion == 6 && !opts.DisableIPv4Aliasing {
-		networkOpts = append(networkOpts, maxminddb.SkipAliasedNetworks)
+	if opts.IPVersion == 6 && opts.DisableIPv4Aliasing {
+		networkOpts = append(networkOpts, maxminddb.IncludeAliasedNetworks)
 	}
 
-	networks := db.Networks(networkOpts...)
-	for networks.Next() {
-		var network *net.IPNet
-
+	for res := range db.Networks(networkOpts...) {
 		dser.clear()
-		network, err = networks.Network(dser)
+		err := res.Decode(dser)
 		if err != nil {
 			return nil, fmt.Errorf("unmarshaling record for network: %w", err)
 		}
 
-		err = tree.Insert(network, dser.rv)
+		err = tree.Insert(netipx.PrefixIPNet(res.Prefix()), dser.rv)
 		if err != nil {
 			return nil, err
 		}
-	}
-	if err := networks.Err(); err != nil {
-		return nil, fmt.Errorf("iterating over networks: %w", err)
 	}
 	return tree, nil
 }
