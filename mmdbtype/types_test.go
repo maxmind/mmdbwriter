@@ -450,6 +450,8 @@ func TestEqual(t *testing.T) {
 }
 
 func validateEncoding(t *testing.T, tests map[string]DataType) {
+	t.Helper()
+
 	for expected, dt := range tests {
 		w := &dataWriter{Buffer: &bytes.Buffer{}}
 

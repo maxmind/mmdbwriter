@@ -730,6 +730,8 @@ func TestTreeInsertAndGet(t *testing.T) {
 }
 
 func checkMMDB(t *testing.T, buf *bytes.Buffer, gets []testGet, name string) {
+	t.Helper()
+
 	t.Run(name, func(t *testing.T) {
 		reader, err := maxminddb.FromBytes(buf.Bytes())
 		require.NoError(t, err)
@@ -836,7 +838,7 @@ func TestGet_4ByteIPIn128BitTree(t *testing.T) {
 	assert.Equal(t, network.String(), getNetwork.String(), "16-byte lookup")
 }
 
-func s2ip(v string) *any { //nolint:gocritic // test
+func s2ip(v string) *any {
 	i := any(v)
 	return &i
 }
