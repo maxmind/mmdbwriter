@@ -540,7 +540,7 @@ func (t *Tree) writeNode(
 		return nodesWritten, numBytes, fmt.Errorf("writing node: %w", err)
 	}
 
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		child := n.children[i]
 		if child.recordType != recordTypeNode && child.recordType != recordTypeFixedNode {
 			continue
