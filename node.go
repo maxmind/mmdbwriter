@@ -188,7 +188,7 @@ func (n *node) finalize(currentNum int) int {
 	n.nodeNum = currentNum
 	currentNum++
 
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		switch n.children[i].recordType {
 		case recordTypeFixedNode,
 			recordTypeNode:
