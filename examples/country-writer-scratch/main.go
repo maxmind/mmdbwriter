@@ -19,7 +19,6 @@ func main() {
 		DatabaseType: "My-Country-DB",
 	},
 	)
-
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -65,10 +64,9 @@ func main() {
 		log.Fatal(err)
 	}
 
-	//write to the mmdb file
+	// write to the mmdb file
 	_, err = writer.WriteTo(fh2)
 	if err != nil {
 		log.Fatal(err)
 	}
-
 }
