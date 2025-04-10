@@ -700,6 +700,7 @@ linters:
       - _easyjson_test\.go$
       - _xgb2code\.go$
       - _json2vector\.go$
+      - examples/
       - geoip-build/mmcsv
 
 formatters:
