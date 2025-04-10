@@ -29,8 +29,8 @@ const (
 	typeNumSlice
 	// We don't use the next two. They are placeholders. See the spec
 	// for more details.
-	typeNumContainer //nolint: deadcode, varcheck // placeholder
-	typeNumMarker    //nolint: deadcode, varcheck // placeholder
+	typeNumContainer
+	typeNumMarker
 	typeNumBool
 	typeNumFloat32
 )

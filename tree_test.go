@@ -625,7 +625,8 @@ func TestTreeInsertAndGet(t *testing.T) {
 						},
 					)
 					require.NoError(t, err)
-					if test.insertType == "" || test.insertType == "net" {
+					switch test.insertType {
+					case "", "net":
 						for _, insert := range test.inserts {
 							//nolint:forbidigo // code predates netip
 							_, network, err := net.ParseCIDR(insert.network)
@@ -642,7 +643,7 @@ func TestTreeInsertAndGet(t *testing.T) {
 
 							require.EqualError(t, err, insert.expectedErrorMsg)
 						}
-					} else if test.insertType == "" || test.insertType == "range" {
+					case "range":
 						for _, insert := range test.inserts {
 							//nolint:forbidigo // code predates netip
 							start := net.ParseIP(insert.start)
