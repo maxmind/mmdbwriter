@@ -4,6 +4,7 @@ package inserter
 
 import (
 	"fmt"
+	"maps"
 
 	"github.com/maxmind/mmdbwriter/mmdbtype"
 )
@@ -59,11 +60,9 @@ func TopLevelMergeWith(newValue mmdbtype.DataType) Func {
 			)
 		}
 
-		returnMap := existingMap.Copy().(mmdbtype.Map)
-
-		for k, v := range newMap {
-			returnMap[k] = v.Copy()
-		}
+		returnMap := make(mmdbtype.Map, len(existingMap)+len(newMap))
+		maps.Copy(returnMap, existingMap)
+		maps.Copy(returnMap, newMap)
 
 		return returnMap, nil
 	}
@@ -89,26 +88,26 @@ func deepMerge(existingValue, newValue mmdbtype.DataType) (mmdbtype.DataType, er
 	case mmdbtype.Map:
 		newMap, ok := newValue.(mmdbtype.Map)
 		if !ok {
+			// The new value is not a map. Overwrite the existing value
 			return newValue, nil
 		}
-		existingMap := existingValue.Copy().(mmdbtype.Map)
+
+		returnMap := make(mmdbtype.Map, len(existingValue)+len(newMap))
+		maps.Copy(returnMap, existingValue)
 		for k, v := range newMap {
-			nv, err := deepMerge(existingMap[k], v)
+			nv, err := deepMerge(returnMap[k], v)
 			if err != nil {
 				return nil, err
 			}
-			existingMap[k] = nv
+			returnMap[k] = nv
 		}
-		return existingMap, nil
+		return returnMap, nil
 	case mmdbtype.Slice:
 		newSlice, ok := newValue.(mmdbtype.Slice)
 		if !ok {
 			return newValue, nil
 		}
-		length := len(existingValue)
-		if len(newSlice) > length {
-			length = len(newSlice)
-		}
+		length := max(len(newSlice), len(existingValue))
 
 		rv := make(mmdbtype.Slice, length)
 		for i := range rv {
