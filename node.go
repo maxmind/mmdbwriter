@@ -2,6 +2,7 @@ package mmdbwriter
 
 import (
 	"fmt"
+	"math"
 	"net"
 
 	"github.com/maxmind/mmdbwriter/mmdbtype"
@@ -18,10 +19,12 @@ const (
 	recordTypeReserved
 )
 
+const nonExistentNode = math.MaxUint32
+
 type record struct {
-	node       *node
-	value      *dataMapValue
+	node       uint32
 	recordType recordType
+	value      *dataMapValue
 }
 
 // each node contains two records.
@@ -34,7 +37,9 @@ type insertRecord struct {
 	inserter func(value mmdbtype.DataType) (mmdbtype.DataType, error)
 
 	dataMap      *dataMap
-	insertedNode *node
+	insertedNode uint32
+
+	nodes *nodes
 
 	ip        net.IP
 	prefixLen int
@@ -66,19 +71,22 @@ func (r *record) insert(
 	newDepth int,
 ) error {
 	switch r.recordType {
-	case recordTypeNode:
-		err := r.node.insert(iRec, newDepth)
+	case recordTypeNode, recordTypeFixedNode:
+		recNode, err := iRec.nodes.get(r.node)
+		if err != nil {
+			return err
+		}
+		err = recNode.insert(iRec, newDepth)
 		if err != nil {
 			return err
 		}
 		return r.maybeMergeChildren(iRec)
-	case recordTypeFixedNode:
-		return r.node.insert(iRec, newDepth)
 	case recordTypeEmpty, recordTypeData:
 		if newDepth >= iRec.prefixLen {
 			r.node = iRec.insertedNode
 			r.recordType = iRec.recordType
-			if iRec.recordType == recordTypeData {
+			switch iRec.recordType {
+			case recordTypeData:
 				var oldData mmdbtype.DataType
 				if r.value != nil {
 					oldData = r.value.data
@@ -100,7 +108,10 @@ func (r *record) insert(
 					}
 					r.value = value
 				}
-			} else {
+			case recordTypeFixedNode:
+				_, r.node = iRec.nodes.newNode()
+				r.value = nil
+			default:
 				r.value = nil
 			}
 			return nil
@@ -108,10 +119,15 @@ func (r *record) insert(
 
 		// We are splitting this record so we create two duplicate child
 		// records.
-		r.node = &node{children: [2]record{*r, *r}}
+		var newNode *node
+		newNode, r.node = iRec.nodes.newNode()
+		for i := range 2 {
+			newNode.children[i].value = r.value
+			newNode.children[i].recordType = r.recordType
+		}
 		r.value = nil
 		r.recordType = recordTypeNode
-		err := r.node.insert(iRec, newDepth)
+		err := newNode.insert(iRec, newDepth)
 		if err != nil {
 			return err
 		}
@@ -137,9 +153,17 @@ func (r *record) insert(
 }
 
 func (r *record) maybeMergeChildren(iRec insertRecord) error {
+	if r.recordType == recordTypeFixedNode {
+		return nil
+	}
+	recNode, err := iRec.nodes.get(r.node)
+	if err != nil {
+		return err
+	}
+
 	// Check to see if the children are the same and can be merged.
-	child0 := r.node.children[0]
-	child1 := r.node.children[1]
+	child0 := recNode.children[0]
+	child1 := recNode.children[1]
 	if child0.recordType != child1.recordType {
 		return nil
 	}
@@ -149,7 +173,7 @@ func (r *record) maybeMergeChildren(iRec insertRecord) error {
 		return nil
 	case recordTypeEmpty, recordTypeReserved:
 		r.recordType = child0.recordType
-		r.node = nil
+		r.node = 0
 		return nil
 	case recordTypeData:
 		if child0.value.key != child1.value.key {
@@ -159,7 +183,7 @@ func (r *record) maybeMergeChildren(iRec insertRecord) error {
 		r.recordType = recordTypeData
 		r.value = child0.value
 		iRec.dataMap.remove(child1.value)
-		r.node = nil
+		r.node = 0
 		return nil
 	default:
 		return fmt.Errorf("merging record type %d is not implemented", child0.recordType)
@@ -168,23 +192,34 @@ func (r *record) maybeMergeChildren(iRec insertRecord) error {
 
 func (n *node) get(
 	ip net.IP,
-	depth int,
-) (int, record) {
-	r := n.children[bitAt(ip, depth)]
+	curDepth,
+	maxDepth int,
+	nodes *nodes,
+) (int, record, error) {
+	r := n.children[bitAt(ip, curDepth)]
 
-	depth++
+	curDepth++
+
+	if curDepth == maxDepth {
+		return curDepth, r, nil
+	}
 
 	switch r.recordType {
 	case recordTypeNode, recordTypeAlias, recordTypeFixedNode:
-		return r.node.get(ip, depth)
+		recNode, err := nodes.get(r.node)
+		if err != nil {
+			return 0, record{}, err
+		}
+
+		return recNode.get(ip, curDepth, maxDepth, nodes)
 	default:
-		return depth, r
+		return curDepth, r, nil
 	}
 }
 
-// finalize  sets the node number for the node. It returns the current node
+// finalize sets the node number for the node. It returns the current node
 // count, including the subtree.
-func (n *node) finalize(currentNum int) int {
+func (n *node) finalize(currentNum int, nodes *nodes) (int, error) {
 	n.nodeNum = currentNum
 	currentNum++
 
@@ -192,12 +227,20 @@ func (n *node) finalize(currentNum int) int {
 		switch n.children[i].recordType {
 		case recordTypeFixedNode,
 			recordTypeNode:
-			currentNum = n.children[i].node.finalize(currentNum)
+			recNode, err := nodes.get(n.children[i].node)
+			if err != nil {
+				return 0, err
+			}
+
+			currentNum, err = recNode.finalize(currentNum, nodes)
+			if err != nil {
+				return 0, err
+			}
 		default:
 		}
 	}
 
-	return currentNum
+	return currentNum, nil
 }
 
 func bitAt(ip net.IP, depth int) byte {
