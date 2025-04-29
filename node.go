@@ -11,7 +11,8 @@ import (
 type recordType byte
 
 const (
-	recordTypeEmpty recordType = iota
+	recordTypeUnused recordType = iota
+	recordTypeEmpty
 	recordTypeData
 	recordTypeNode
 	recordTypeAlias
@@ -109,7 +110,10 @@ func (r *record) insert(
 					r.value = value
 				}
 			case recordTypeFixedNode:
-				_, r.node = iRec.nodes.newNode()
+				var newNode *node
+				newNode, r.node = iRec.nodes.acquireNode()
+				newNode.children[0].recordType = recordTypeEmpty
+				newNode.children[1].recordType = recordTypeEmpty
 				r.value = nil
 			default:
 				r.value = nil
@@ -120,7 +124,7 @@ func (r *record) insert(
 		// We are splitting this record so we create two duplicate child
 		// records.
 		var newNode *node
-		newNode, r.node = iRec.nodes.newNode()
+		newNode, r.node = iRec.nodes.acquireNode()
 		for i := range 2 {
 			newNode.children[i].value = r.value
 			newNode.children[i].recordType = r.recordType
@@ -148,7 +152,7 @@ func (r *record) insert(
 		// attempting to insert _into_ an aliased network
 		return newAliasedNetworkError(iRec.ip, newDepth, iRec.prefixLen)
 	default:
-		return fmt.Errorf("inserting into record type %d is not implemented", r.recordType)
+		return fmt.Errorf("inserting into record type %d for node %d is not implemented", r.recordType, r.node)
 	}
 }
 
@@ -173,7 +177,11 @@ func (r *record) maybeMergeChildren(iRec insertRecord) error {
 		return nil
 	case recordTypeEmpty, recordTypeReserved:
 		r.recordType = child0.recordType
-		r.node = 0
+		err := iRec.nodes.returnNode(r.node)
+		if err != nil {
+			return err
+		}
+		r.node = nonExistentNode
 		return nil
 	case recordTypeData:
 		if child0.value.key != child1.value.key {
@@ -183,7 +191,11 @@ func (r *record) maybeMergeChildren(iRec insertRecord) error {
 		r.recordType = recordTypeData
 		r.value = child0.value
 		iRec.dataMap.remove(child1.value)
-		r.node = 0
+		err := iRec.nodes.returnNode(r.node)
+		if err != nil {
+			return err
+		}
+		r.node = nonExistentNode
 		return nil
 	default:
 		return fmt.Errorf("merging record type %d is not implemented", child0.recordType)
@@ -241,6 +253,15 @@ func (n *node) finalize(currentNum int, nodes *nodes) (int, error) {
 	}
 
 	return currentNum, nil
+}
+
+func (n *node) reset() {
+	// This is done to make bugs easier to track down. If we leave it at zero, it
+	// tends to get confused with the root node
+	n.children[0].node = nonExistentNode
+	n.children[0].recordType = recordTypeUnused
+	n.children[1].node = nonExistentNode
+	n.children[1].recordType = recordTypeUnused
 }
 
 func bitAt(ip net.IP, depth int) byte {
