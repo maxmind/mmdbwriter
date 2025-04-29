@@ -667,7 +667,8 @@ func TestTreeInsertAndGet(t *testing.T) {
 						}
 					}
 
-					tree.finalize()
+					// XXX
+					tree.nodeCount = int(tree.nodes.next)
 
 					for _, get := range test.gets {
 						//nolint:forbidigo // code predates netip

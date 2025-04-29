@@ -31,7 +31,6 @@ type record struct {
 // each node contains two records.
 type node struct {
 	children [2]record
-	nodeNum  int
 }
 
 type insertRecord struct {
@@ -227,32 +226,6 @@ func (n *node) get(
 	default:
 		return curDepth, r, nil
 	}
-}
-
-// finalize sets the node number for the node. It returns the current node
-// count, including the subtree.
-func (n *node) finalize(currentNum int, nodes *nodes) (int, error) {
-	n.nodeNum = currentNum
-	currentNum++
-
-	for i := range 2 {
-		switch n.children[i].recordType {
-		case recordTypeFixedNode,
-			recordTypeNode:
-			recNode, err := nodes.get(n.children[i].node)
-			if err != nil {
-				return 0, err
-			}
-
-			currentNum, err = recNode.finalize(currentNum, nodes)
-			if err != nil {
-				return 0, err
-			}
-		default:
-		}
-	}
-
-	return currentNum, nil
 }
 
 func (n *node) reset() {

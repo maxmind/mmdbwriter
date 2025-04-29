@@ -455,21 +455,10 @@ func (t *Tree) Get(ip net.IP) (*net.IPNet, mmdbtype.DataType) {
 	}, value
 }
 
-// finalize prepares the tree for writing. It is not threadsafe.
-func (t *Tree) finalize() error {
-	var err error
-	t.nodeCount, err = t.nodes.root().finalize(0, t.nodes)
-	return err
-}
-
 // WriteTo writes the tree to the provided Writer.
 func (t *Tree) WriteTo(w io.Writer) (int64, error) {
-	if t.nodeCount == 0 {
-		err := t.finalize()
-		if err != nil {
-			return 0, err
-		}
-	}
+	// Maybe compact nodes
+	t.nodeCount = int(t.nodes.next)
 
 	buf := bufio.NewWriter(w)
 	//nolint:errcheck // We check the error on flush the only place that matters.
@@ -483,18 +472,13 @@ func (t *Tree) WriteTo(w io.Writer) (int64, error) {
 	usePointers := true
 	dataWriter := newDataWriter(t.dataMap, usePointers)
 
-	nodeCount, numBytes, err := t.writeNode(buf, 0, dataWriter, recordBuf)
-	if err != nil {
-		return numBytes, err
-	}
-	if nodeCount != t.nodeCount {
-		// This should only happen if there is a programming bug
-		// in this library.
-		return numBytes, fmt.Errorf(
-			"number of nodes written (%d) doesn't match number expected (%d)",
-			nodeCount,
-			t.nodeCount,
-		)
+	numBytes := int64(0)
+	for n := range t.nodeCount {
+		curNumBytes, err := t.writeNode(buf, uint32(n), dataWriter, recordBuf)
+		if err != nil {
+			return numBytes, err
+		}
+		numBytes += curNumBytes
 	}
 
 	nb, err := buf.Write(dataSectionSeparator)
@@ -540,44 +524,25 @@ func (t *Tree) writeNode(
 	n uint32,
 	dataWriter *dataWriter,
 	recordBuf []byte,
-) (int, int64, error) {
+) (int64, error) {
 	recNode, err := t.nodes.get(n)
 	if err != nil {
-		return 0, 0, err
+		return 0, err
 	}
 
 	err = t.copyNode(recordBuf, recNode, dataWriter)
 	if err != nil {
-		return 0, 0, err
+		return 0, err
 	}
 
 	numBytes := int64(0)
 	nb, err := w.Write(recordBuf)
 	numBytes += int64(nb)
-	nodesWritten := 1
 	if err != nil {
-		return nodesWritten, numBytes, fmt.Errorf("writing node: %w", err)
+		return numBytes, fmt.Errorf("writing node: %w", err)
 	}
 
-	for i := range 2 {
-		child := recNode.children[i]
-		if child.recordType != recordTypeNode && child.recordType != recordTypeFixedNode {
-			continue
-		}
-		addedNodes, addedBytes, err := t.writeNode(
-			w,
-			recNode.children[i].node,
-			dataWriter,
-			recordBuf,
-		)
-		nodesWritten += addedNodes
-		numBytes += addedBytes
-		if err != nil {
-			return nodesWritten, numBytes, err
-		}
-	}
-
-	return nodesWritten, numBytes, nil
+	return numBytes, nil
 }
 
 func (t *Tree) recordValue(
@@ -598,7 +563,7 @@ func (t *Tree) recordValue(
 		if recNode == nil {
 			fmt.Println(r.recordType)
 		}
-		return recNode.nodeNum, nil
+		return int(r.node), nil
 	}
 }
 
