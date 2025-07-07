@@ -4,6 +4,7 @@ package main
 
 import (
 	"encoding/csv"
+	"errors"
 	"io"
 	"log"
 	"net"
@@ -38,7 +39,7 @@ func main() {
 
 		for {
 			row, err := r.Read()
-			if err == io.EOF {
+			if errors.Is(err, io.EOF) {
 				break
 			}
 			if err != nil {

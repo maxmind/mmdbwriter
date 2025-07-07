@@ -31,6 +31,7 @@ var _ KeyGenerator = &keyWriter{}
 // will produce a unique key for the type.
 type keyWriter struct {
 	*bytes.Buffer
+
 	sha256 hash.Hash
 	key    [sha256.Size]byte
 }

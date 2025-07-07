@@ -15,6 +15,7 @@ type writtenType struct {
 
 type dataWriter struct {
 	*bytes.Buffer
+
 	dataMap     *dataMap
 	offsets     map[dataMapKey]writtenType
 	keyWriter   *keyWriter
