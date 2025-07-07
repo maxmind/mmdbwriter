@@ -104,7 +104,7 @@ func TestTreeInsertAndGet(t *testing.T) {
 		},
 		"double":      42.123456,
 		"float":       float32(1.1),
-		"int32":       -268435456,
+		"int32":       int32(-268435456),
 		"map":         allTypesLookupSubmap,
 		"uint128":     &bigInt,
 		"uint16":      uint64(0x64),
