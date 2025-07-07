@@ -5,6 +5,7 @@ package main
 
 import (
 	"encoding/csv"
+	"errors"
 	"io"
 	"log"
 	"net"
@@ -37,7 +38,7 @@ func main() {
 	// Reading the file line by line
 	for {
 		row, err := r.Read()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 
