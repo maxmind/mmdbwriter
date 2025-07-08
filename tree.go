@@ -214,21 +214,21 @@ func Load(path string, opts Options) (*Tree, error) {
 		return nil, err
 	}
 
-	dser := newDeserializer()
+	unmarshaler := mmdbtype.NewUnmarshaler()
 
 	var networkOpts []maxminddb.NetworksOption
 	if opts.IPVersion == 6 && opts.DisableIPv4Aliasing {
-		networkOpts = append(networkOpts, maxminddb.IncludeAliasedNetworks)
+		networkOpts = append(networkOpts, maxminddb.IncludeAliasedNetworks())
 	}
 
 	for res := range db.Networks(networkOpts...) {
-		dser.clear()
-		err := res.Decode(dser)
+		unmarshaler.Clear()
+		err := res.Decode(unmarshaler)
 		if err != nil {
 			return nil, fmt.Errorf("unmarshaling record for network: %w", err)
 		}
 
-		err = tree.Insert(netipx.PrefixIPNet(res.Prefix()), dser.rv)
+		err = tree.Insert(netipx.PrefixIPNet(res.Prefix()), unmarshaler.Result())
 		if err != nil {
 			return nil, err
 		}

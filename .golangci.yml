@@ -455,6 +455,12 @@ linters:
         - misspell
       allow-unused: false
 
+    recvcheck:
+      exclusions:
+        # We need a pointer here to follow interface and to modify
+        # value.
+        - "*.UnmarshalMaxMindDB"
+
     revive:
       severity: warning
       enable-all-rules: true

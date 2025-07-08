@@ -10,6 +10,8 @@ import (
 	"math/bits"
 	"reflect"
 	"slices"
+
+	"github.com/oschwald/maxminddb-golang/v2/mmdbdata"
 )
 
 type typeNum byte
@@ -76,6 +78,16 @@ func (t Bool) typeNum() typeNum {
 	return typeNumBool
 }
 
+// UnmarshalMaxMindDB implements the mmdbdata.Unmarshaler interface.
+func (t *Bool) UnmarshalMaxMindDB(decoder *mmdbdata.Decoder) error {
+	value, err := decoder.ReadBool()
+	if err != nil {
+		return fmt.Errorf("reading Bool: %w", err)
+	}
+	*t = Bool(value)
+	return nil
+}
+
 // WriteTo writes the value to w.
 func (t Bool) WriteTo(w writer) (int64, error) {
 	return writeCtrlByte(w, t)
@@ -109,6 +121,19 @@ func (t Bytes) size() int {
 
 func (t Bytes) typeNum() typeNum {
 	return typeNumBytes
+}
+
+// UnmarshalMaxMindDB implements the mmdbdata.Unmarshaler interface.
+func (t *Bytes) UnmarshalMaxMindDB(decoder *mmdbdata.Decoder) error {
+	value, err := decoder.ReadBytes()
+	if err != nil {
+		return fmt.Errorf("reading Bytes: %w", err)
+	}
+	// ReadBytes returns a slice pointing to the underlying mmap.
+	copied := make([]byte, len(value))
+	copy(copied, value)
+	*t = Bytes(copied)
+	return nil
 }
 
 // WriteTo writes the value to w.
@@ -148,6 +173,16 @@ func (t Float32) typeNum() typeNum {
 	return typeNumFloat32
 }
 
+// UnmarshalMaxMindDB implements the mmdbdata.Unmarshaler interface.
+func (t *Float32) UnmarshalMaxMindDB(decoder *mmdbdata.Decoder) error {
+	value, err := decoder.ReadFloat32()
+	if err != nil {
+		return fmt.Errorf("reading Float32: %w", err)
+	}
+	*t = Float32(value)
+	return nil
+}
+
 // WriteTo writes the value to w.
 func (t Float32) WriteTo(w writer) (int64, error) {
 	numBytes, err := writeCtrlByte(w, t)
@@ -182,6 +217,16 @@ func (t Float64) size() int {
 
 func (t Float64) typeNum() typeNum {
 	return typeNumFloat64
+}
+
+// UnmarshalMaxMindDB implements the mmdbdata.Unmarshaler interface.
+func (t *Float64) UnmarshalMaxMindDB(decoder *mmdbdata.Decoder) error {
+	value, err := decoder.ReadFloat64()
+	if err != nil {
+		return fmt.Errorf("reading Float64: %w", err)
+	}
+	*t = Float64(value)
+	return nil
 }
 
 // WriteTo writes the value to w.
@@ -219,6 +264,16 @@ func (t Int32) size() int {
 
 func (t Int32) typeNum() typeNum {
 	return typeNumInt32
+}
+
+// UnmarshalMaxMindDB implements the mmdbdata.Unmarshaler interface.
+func (t *Int32) UnmarshalMaxMindDB(decoder *mmdbdata.Decoder) error {
+	value, err := decoder.ReadInt32()
+	if err != nil {
+		return fmt.Errorf("reading Int32: %w", err)
+	}
+	*t = Int32(value)
+	return nil
 }
 
 // WriteTo writes the value to w.
@@ -282,6 +337,29 @@ func (t Map) size() int {
 
 func (t Map) typeNum() typeNum {
 	return typeNumMap
+}
+
+// UnmarshalMaxMindDB implements the mmdbdata.Unmarshaler interface.
+func (t *Map) UnmarshalMaxMindDB(decoder *mmdbdata.Decoder) error {
+	iter, size, err := decoder.ReadMap()
+	if err != nil {
+		return fmt.Errorf("reading Map: %w", err)
+	}
+
+	*t = make(Map, size)
+	for key, iterErr := range iter {
+		if iterErr != nil {
+			return iterErr
+		}
+
+		value, err := decodeDataTypeValue(decoder)
+		if err != nil {
+			return err
+		}
+
+		(*t)[String(key)] = value
+	}
+	return nil
 }
 
 // WriteTo writes the value to w.
@@ -477,6 +555,29 @@ func (t Slice) typeNum() typeNum {
 	return typeNumSlice
 }
 
+// UnmarshalMaxMindDB implements the mmdbdata.Unmarshaler interface.
+func (t *Slice) UnmarshalMaxMindDB(decoder *mmdbdata.Decoder) error {
+	iter, size, err := decoder.ReadSlice()
+	if err != nil {
+		return fmt.Errorf("reading Slice: %w", err)
+	}
+
+	*t = make(Slice, 0, size)
+	for iterErr := range iter {
+		if iterErr != nil {
+			return iterErr
+		}
+
+		value, err := decodeDataTypeValue(decoder)
+		if err != nil {
+			return err
+		}
+
+		*t = append(*t, value)
+	}
+	return nil
+}
+
 // WriteTo writes the value to w.
 func (t Slice) WriteTo(w writer) (int64, error) {
 	numBytes, err := writeCtrlByte(w, t)
@@ -516,6 +617,16 @@ func (t String) typeNum() typeNum {
 	return typeNumString
 }
 
+// UnmarshalMaxMindDB implements the mmdbdata.Unmarshaler interface.
+func (t *String) UnmarshalMaxMindDB(decoder *mmdbdata.Decoder) error {
+	value, err := decoder.ReadString()
+	if err != nil {
+		return fmt.Errorf("reading String: %w", err)
+	}
+	*t = String(value)
+	return nil
+}
+
 // WriteTo writes the value to w.
 func (t String) WriteTo(w writer) (int64, error) {
 	numBytes, err := writeCtrlByte(w, t)
@@ -551,6 +662,16 @@ func (t Uint16) size() int {
 
 func (t Uint16) typeNum() typeNum {
 	return typeNumUint16
+}
+
+// UnmarshalMaxMindDB implements the mmdbdata.Unmarshaler interface.
+func (t *Uint16) UnmarshalMaxMindDB(decoder *mmdbdata.Decoder) error {
+	value, err := decoder.ReadUint16()
+	if err != nil {
+		return fmt.Errorf("reading Uint16: %w", err)
+	}
+	*t = Uint16(value)
+	return nil
 }
 
 // WriteTo writes the value to w.
@@ -593,6 +714,16 @@ func (t Uint32) typeNum() typeNum {
 	return typeNumUint32
 }
 
+// UnmarshalMaxMindDB implements the mmdbdata.Unmarshaler interface.
+func (t *Uint32) UnmarshalMaxMindDB(decoder *mmdbdata.Decoder) error {
+	value, err := decoder.ReadUint32()
+	if err != nil {
+		return fmt.Errorf("reading Uint32: %w", err)
+	}
+	*t = Uint32(value)
+	return nil
+}
+
 // WriteTo writes the value to w.
 func (t Uint32) WriteTo(w writer) (int64, error) {
 	numBytes, err := writeCtrlByte(w, t)
@@ -631,6 +762,16 @@ func (t Uint64) size() int {
 
 func (t Uint64) typeNum() typeNum {
 	return typeNumUint64
+}
+
+// UnmarshalMaxMindDB implements the mmdbdata.Unmarshaler interface.
+func (t *Uint64) UnmarshalMaxMindDB(decoder *mmdbdata.Decoder) error {
+	value, err := decoder.ReadUint64()
+	if err != nil {
+		return fmt.Errorf("reading Uint64: %w", err)
+	}
+	*t = Uint64(value)
+	return nil
 }
 
 // WriteTo writes the value to w.
@@ -679,6 +820,20 @@ func (t *Uint128) size() int {
 
 func (t *Uint128) typeNum() typeNum {
 	return typeNumUint128
+}
+
+// UnmarshalMaxMindDB implements the mmdbdata.Unmarshaler interface.
+func (t *Uint128) UnmarshalMaxMindDB(decoder *mmdbdata.Decoder) error {
+	hi, lo, err := decoder.ReadUint128()
+	if err != nil {
+		return fmt.Errorf("reading Uint128: %w", err)
+	}
+	v := new(big.Int)
+	v.SetUint64(hi)
+	v.Lsh(v, 64)
+	v.Add(v, new(big.Int).SetUint64(lo))
+	*t = Uint128(*v)
+	return nil
 }
 
 // WriteTo writes the value to w.
@@ -782,4 +937,65 @@ func writeCtrlByte(w writer, t DataType) (int64, error) {
 		numBytes++
 	}
 	return numBytes, nil
+}
+
+// decodeDataTypeValue decodes a value from the decoder and returns the appropriate DataType.
+func decodeDataTypeValue(decoder *mmdbdata.Decoder) (DataType, error) {
+	kind, err := decoder.PeekKind()
+	if err != nil {
+		return nil, fmt.Errorf("peeking kind: %w", err)
+	}
+
+	switch kind {
+	case mmdbdata.KindString:
+		var value String
+		err := value.UnmarshalMaxMindDB(decoder)
+		return value, err
+	case mmdbdata.KindFloat64:
+		var value Float64
+		err := value.UnmarshalMaxMindDB(decoder)
+		return value, err
+	case mmdbdata.KindBytes:
+		var value Bytes
+		err := value.UnmarshalMaxMindDB(decoder)
+		return value, err
+	case mmdbdata.KindUint16:
+		var value Uint16
+		err := value.UnmarshalMaxMindDB(decoder)
+		return value, err
+	case mmdbdata.KindUint32:
+		var value Uint32
+		err := value.UnmarshalMaxMindDB(decoder)
+		return value, err
+	case mmdbdata.KindInt32:
+		var value Int32
+		err := value.UnmarshalMaxMindDB(decoder)
+		return value, err
+	case mmdbdata.KindUint64:
+		var value Uint64
+		err := value.UnmarshalMaxMindDB(decoder)
+		return value, err
+	case mmdbdata.KindUint128:
+		var value Uint128
+		err := value.UnmarshalMaxMindDB(decoder)
+		return &value, err // Return pointer for Uint128
+	case mmdbdata.KindBool:
+		var value Bool
+		err := value.UnmarshalMaxMindDB(decoder)
+		return value, err
+	case mmdbdata.KindFloat32:
+		var value Float32
+		err := value.UnmarshalMaxMindDB(decoder)
+		return value, err
+	case mmdbdata.KindMap:
+		var value Map
+		err := value.UnmarshalMaxMindDB(decoder)
+		return value, err
+	case mmdbdata.KindSlice:
+		var value Slice
+		err := value.UnmarshalMaxMindDB(decoder)
+		return value, err
+	default:
+		return nil, fmt.Errorf("unsupported data type: %v", kind)
+	}
 }
