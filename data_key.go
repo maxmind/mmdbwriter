@@ -40,6 +40,8 @@ func newKeyWriter() *keyWriter {
 	return &keyWriter{Buffer: &bytes.Buffer{}, sha256: sha256.New()}
 }
 
+// Key generates a unique key for the data structure v.
+//
 // This is just a quick hack. I am sure there is
 // something better.
 func (kw *keyWriter) Key(v mmdbtype.DataType) ([]byte, error) {
