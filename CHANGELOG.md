@@ -1,6 +1,6 @@
 # CHANGELOG
 
-## 1.1.0
+## 1.1.0 (2025-10-08)
 
 * Removed unnecessary deep copies in inserter. GitHub #119.
 * Converted to IPv4 in reserved network errors when inserting IPv4 into an
