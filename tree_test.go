@@ -734,7 +734,7 @@ func checkMMDB(t *testing.T, buf *bytes.Buffer, gets []testGet, name string) {
 	t.Helper()
 
 	t.Run(name, func(t *testing.T) {
-		reader, err := maxminddb.FromBytes(buf.Bytes())
+		reader, err := maxminddb.OpenBytes(buf.Bytes())
 		require.NoError(t, err)
 
 		defer reader.Close()
