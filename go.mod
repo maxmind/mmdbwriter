@@ -3,7 +3,7 @@ module github.com/maxmind/mmdbwriter
 go 1.24.0
 
 require (
-	github.com/oschwald/maxminddb-golang/v2 v2.0.0
+	github.com/oschwald/maxminddb-golang/v2 v2.1.0
 	github.com/stretchr/testify v1.11.1
 	go4.org/netipx v0.0.0-20231129151722-fdeea329fbba
 )
