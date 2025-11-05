@@ -44,7 +44,6 @@ func TestZeroUnmarshaler(t *testing.T) {
 	_, err := testData.WriteTo(dw)
 	require.NoError(t, err)
 
-	// Test 1: Use zero value Unmarshaler directly
 	var zeroUnmarshaler Unmarshaler
 	decoder := mmdbdata.NewDecoder(buf.Bytes(), 0)
 	err = zeroUnmarshaler.UnmarshalMaxMindDB(decoder)
