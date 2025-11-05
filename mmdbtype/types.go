@@ -972,8 +972,9 @@ func decodeDataTypeValue(decoder *mmdbdata.Decoder, cache map[uint]DataType) (Da
 
 	// Only check cache if provided and the type is worth caching
 	// This avoids unnecessary map lookups for scalar types in tight loops
+	useCache := cache != nil && isCacheableKind(kind)
 	var offset uint
-	if cache != nil && isCacheableKind(kind) {
+	if useCache {
 		offset = decoder.Offset()
 		if cached, ok := cache[offset]; ok {
 			return cached, nil
@@ -1038,9 +1039,8 @@ func decodeDataTypeValue(decoder *mmdbdata.Decoder, cache map[uint]DataType) (Da
 		return nil, err
 	}
 
-	// Store in cache if provided the offset was captured earlier
-	// when we checked the cache
-	if offset != 0 {
+	// Store the decoded value in cache.
+	if useCache {
 		cache[offset] = value
 	}
 
