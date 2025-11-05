@@ -953,11 +953,13 @@ func writeCtrlByte(w writer, t DataType) (int64, error) {
 	return numBytes, nil
 }
 
-// isCacheableKind returns true if the given kind is worth caching.
-// Only heap-allocated complex types (Map, Slice, Uint128) are cacheable.
-// Simple scalar types are cheap to decode and caching them wastes memory and CPU cycles.
+// isCacheableKind returns true if the given kind is worth caching. Currently,
+// we have primarily found a benefit with containers, not scalar values.
+// Potentially, longer strings may also benefit from caching, although it
+// may be even better to just intern them, either here or directly in
+// the maxminddb reader.
 func isCacheableKind(kind mmdbdata.Kind) bool {
-	return kind == mmdbdata.KindMap || kind == mmdbdata.KindSlice || kind == mmdbdata.KindUint128
+	return kind == mmdbdata.KindMap || kind == mmdbdata.KindSlice
 }
 
 // decodeDataTypeValue decodes a value from the decoder and returns the appropriate DataType.
