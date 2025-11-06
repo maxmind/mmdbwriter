@@ -964,7 +964,7 @@ func isCacheableKind(kind mmdbdata.Kind) bool {
 
 // decodeDataTypeValue decodes a value from the decoder and returns the appropriate DataType.
 // If cache is provided (non-nil), it will check for cached values at the current decoder offset
-// and store newly decoded complex types (Map, Slice, Uint128) in the cache. Simple scalar types
+// and store newly decoded container types (Map, Slice) in the cache. Simple scalar types
 // are not cached as they are cheap to decode and caching them would waste memory.
 func decodeDataTypeValue(decoder *mmdbdata.Decoder, cache map[uint]DataType) (DataType, error) {
 	kind, err := decoder.PeekKind()
