@@ -1,5 +1,14 @@
 # CHANGELOG
 
+## 1.2.0
+
+* The `mmdbtype.Unmarshaler` now caches nested structures, maps and slices,
+  in addition to top-level values. This improves performance when loading
+  databases with shared nested data structures.
+* The zero value of `mmdbtype.Unmarshaler` is now documented as safe to use
+  for unmarshaling without caching enabled. Use `NewUnmarshaler()` when you
+  want caching.
+
 ## 1.1.0 (2025-10-08)
 
 * Removed unnecessary deep copies in inserter. GitHub #119.

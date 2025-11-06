@@ -295,6 +295,8 @@ func (t Int32) WriteTo(w writer) (int64, error) {
 }
 
 // Map is the MaxMind DB map type.
+//
+//nolint:recvcheck // preexisting/interface
 type Map map[String]DataType
 
 var _ DataType = Map(nil)
@@ -341,6 +343,11 @@ func (t Map) typeNum() typeNum {
 
 // UnmarshalMaxMindDB implements the mmdbdata.Unmarshaler interface.
 func (t *Map) UnmarshalMaxMindDB(decoder *mmdbdata.Decoder) error {
+	return t.unmarshalMaxMindDB(decoder, nil)
+}
+
+// unmarshalMaxMindDB is the internal implementation that supports caching.
+func (t *Map) unmarshalMaxMindDB(decoder *mmdbdata.Decoder, cache map[uint]DataType) error {
 	iter, size, err := decoder.ReadMap()
 	if err != nil {
 		return fmt.Errorf("reading Map: %w", err)
@@ -352,7 +359,7 @@ func (t *Map) UnmarshalMaxMindDB(decoder *mmdbdata.Decoder) error {
 			return iterErr
 		}
 
-		value, err := decodeDataTypeValue(decoder)
+		value, err := decodeDataTypeValue(decoder, cache)
 		if err != nil {
 			return err
 		}
@@ -511,6 +518,8 @@ func (t Pointer) WriteTo(w writer) (int64, error) {
 }
 
 // Slice is the MaxMind DB array type.
+//
+//nolint:recvcheck // preexisting/interface
 type Slice []DataType
 
 var _ DataType = Slice(nil)
@@ -557,6 +566,11 @@ func (t Slice) typeNum() typeNum {
 
 // UnmarshalMaxMindDB implements the mmdbdata.Unmarshaler interface.
 func (t *Slice) UnmarshalMaxMindDB(decoder *mmdbdata.Decoder) error {
+	return t.unmarshalMaxMindDB(decoder, nil)
+}
+
+// unmarshalMaxMindDB is the internal implementation that supports caching.
+func (t *Slice) unmarshalMaxMindDB(decoder *mmdbdata.Decoder, cache map[uint]DataType) error {
 	iter, size, err := decoder.ReadSlice()
 	if err != nil {
 		return fmt.Errorf("reading Slice: %w", err)
@@ -568,7 +582,7 @@ func (t *Slice) UnmarshalMaxMindDB(decoder *mmdbdata.Decoder) error {
 			return iterErr
 		}
 
-		value, err := decodeDataTypeValue(decoder)
+		value, err := decodeDataTypeValue(decoder, cache)
 		if err != nil {
 			return err
 		}
@@ -939,63 +953,98 @@ func writeCtrlByte(w writer, t DataType) (int64, error) {
 	return numBytes, nil
 }
 
+// isCacheableKind returns true if the given kind is worth caching. Currently,
+// we have primarily found a benefit with containers, not scalar values.
+// Potentially, longer strings may also benefit from caching, although it
+// may be even better to just intern them, either here or directly in
+// the maxminddb reader.
+func isCacheableKind(kind mmdbdata.Kind) bool {
+	return kind == mmdbdata.KindMap || kind == mmdbdata.KindSlice
+}
+
 // decodeDataTypeValue decodes a value from the decoder and returns the appropriate DataType.
-func decodeDataTypeValue(decoder *mmdbdata.Decoder) (DataType, error) {
+// If cache is provided (non-nil), it will check for cached values at the current decoder offset
+// and store newly decoded container types (Map, Slice) in the cache. Simple scalar types
+// are not cached as they are cheap to decode and caching them would waste memory.
+func decodeDataTypeValue(decoder *mmdbdata.Decoder, cache map[uint]DataType) (DataType, error) {
 	kind, err := decoder.PeekKind()
 	if err != nil {
 		return nil, fmt.Errorf("peeking kind: %w", err)
 	}
 
+	// Only check cache if provided and the type is worth caching
+	// This avoids unnecessary map lookups for scalar types in tight loops
+	useCache := cache != nil && isCacheableKind(kind)
+	var offset uint
+	if useCache {
+		offset = decoder.Offset()
+		if cached, ok := cache[offset]; ok {
+			return cached, nil
+		}
+	}
+
+	var value DataType
 	switch kind {
 	case mmdbdata.KindString:
-		var value String
-		err := value.UnmarshalMaxMindDB(decoder)
-		return value, err
+		var v String
+		err = v.UnmarshalMaxMindDB(decoder)
+		value = v
 	case mmdbdata.KindFloat64:
-		var value Float64
-		err := value.UnmarshalMaxMindDB(decoder)
-		return value, err
+		var v Float64
+		err = v.UnmarshalMaxMindDB(decoder)
+		value = v
 	case mmdbdata.KindBytes:
-		var value Bytes
-		err := value.UnmarshalMaxMindDB(decoder)
-		return value, err
+		var v Bytes
+		err = v.UnmarshalMaxMindDB(decoder)
+		value = v
 	case mmdbdata.KindUint16:
-		var value Uint16
-		err := value.UnmarshalMaxMindDB(decoder)
-		return value, err
+		var v Uint16
+		err = v.UnmarshalMaxMindDB(decoder)
+		value = v
 	case mmdbdata.KindUint32:
-		var value Uint32
-		err := value.UnmarshalMaxMindDB(decoder)
-		return value, err
+		var v Uint32
+		err = v.UnmarshalMaxMindDB(decoder)
+		value = v
 	case mmdbdata.KindInt32:
-		var value Int32
-		err := value.UnmarshalMaxMindDB(decoder)
-		return value, err
+		var v Int32
+		err = v.UnmarshalMaxMindDB(decoder)
+		value = v
 	case mmdbdata.KindUint64:
-		var value Uint64
-		err := value.UnmarshalMaxMindDB(decoder)
-		return value, err
+		var v Uint64
+		err = v.UnmarshalMaxMindDB(decoder)
+		value = v
 	case mmdbdata.KindUint128:
-		var value Uint128
-		err := value.UnmarshalMaxMindDB(decoder)
-		return &value, err // Return pointer for Uint128
+		var v Uint128
+		err = v.UnmarshalMaxMindDB(decoder)
+		value = &v // Return pointer for Uint128
 	case mmdbdata.KindBool:
-		var value Bool
-		err := value.UnmarshalMaxMindDB(decoder)
-		return value, err
+		var v Bool
+		err = v.UnmarshalMaxMindDB(decoder)
+		value = v
 	case mmdbdata.KindFloat32:
-		var value Float32
-		err := value.UnmarshalMaxMindDB(decoder)
-		return value, err
+		var v Float32
+		err = v.UnmarshalMaxMindDB(decoder)
+		value = v
 	case mmdbdata.KindMap:
-		var value Map
-		err := value.UnmarshalMaxMindDB(decoder)
-		return value, err
+		var v Map
+		err = v.unmarshalMaxMindDB(decoder, cache)
+		value = v
 	case mmdbdata.KindSlice:
-		var value Slice
-		err := value.UnmarshalMaxMindDB(decoder)
-		return value, err
+		var v Slice
+		err = v.unmarshalMaxMindDB(decoder, cache)
+		value = v
 	default:
 		return nil, fmt.Errorf("unsupported data type: %v", kind)
 	}
+
+	if err != nil {
+		return nil, err
+	}
+
+	// Store the decoded value in cache.
+	if useCache {
+		cache[offset] = value
+	}
+
+	return value, nil
 }
