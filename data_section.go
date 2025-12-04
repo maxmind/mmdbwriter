@@ -49,7 +49,6 @@ func (dw *dataWriter) maybeWrite(value *dataMapValue) (int, error) {
 	}
 
 	written = writtenType{
-		//nolint:gosec // checked above
 		pointer: mmdbtype.Pointer(offset),
 		size:    size,
 	}
@@ -97,7 +96,6 @@ func (dw *dataWriter) WriteOrWritePointer(t mmdbtype.DataType) (int64, error) {
 	}
 
 	dw.offsets[key] = writtenType{
-		//nolint:gosec // checked above
 		pointer: mmdbtype.Pointer(offset),
 		size:    size,
 	}
