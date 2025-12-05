@@ -258,7 +258,6 @@ func (t Int32) Equal(other DataType) bool {
 }
 
 func (t Int32) size() int {
-	//nolint:gosec // this is correct.
 	return 4 - bits.LeadingZeros32(uint32(t))/8
 }
 
