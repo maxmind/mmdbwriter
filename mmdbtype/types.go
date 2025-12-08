@@ -258,6 +258,7 @@ func (t Int32) Equal(other DataType) bool {
 }
 
 func (t Int32) size() int {
+	//nolint:gosec // we want the bit pattern, not the numeric value
 	return 4 - bits.LeadingZeros32(uint32(t))/8
 }
 

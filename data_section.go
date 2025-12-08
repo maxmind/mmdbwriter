@@ -48,6 +48,7 @@ func (dw *dataWriter) maybeWrite(value *dataMapValue) (int, error) {
 		return 0, fmt.Errorf("offset of %d exceeds maximum when writing data", offset)
 	}
 
+	//nolint:gosec // we check for overflow above
 	written = writtenType{
 		pointer: mmdbtype.Pointer(offset),
 		size:    size,
@@ -95,6 +96,7 @@ func (dw *dataWriter) WriteOrWritePointer(t mmdbtype.DataType) (int64, error) {
 		return 0, fmt.Errorf("offset of %d exceeds maximum when writing data", offset)
 	}
 
+	//nolint:gosec // we check for overflow above
 	dw.offsets[key] = writtenType{
 		pointer: mmdbtype.Pointer(offset),
 		size:    size,

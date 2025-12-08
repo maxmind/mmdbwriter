@@ -196,6 +196,7 @@ func Load(path string, opts Options) (*Tree, error) {
 	}
 
 	if opts.IPVersion == 0 {
+		//nolint:gosec // IPVersion is always 4 or 6
 		opts.IPVersion = int(metadata.IPVersion)
 	}
 
@@ -204,6 +205,7 @@ func Load(path string, opts Options) (*Tree, error) {
 	}
 
 	if opts.RecordSize == 0 {
+		//nolint:gosec // RecordSize is always 24, 28, or 32
 		opts.RecordSize = int(metadata.RecordSize)
 	}
 
@@ -651,13 +653,17 @@ func (t *Tree) writeMetadata(dw *dataWriter) (int64, error) {
 
 		// Although it might make sense to change the type on this, there is no use
 		// case where someone would reasonably pass a negative build epoch.
+		//nolint:gosec // buildEpoch is validated to be non-negative
 		"build_epoch":   mmdbtype.Uint64(t.buildEpoch),
 		"database_type": mmdbtype.String(t.databaseType),
 		"description":   description,
-		"ip_version":    mmdbtype.Uint16(t.ipVersion),
-		"languages":     languages,
-		"node_count":    mmdbtype.Uint32(t.nodeCount),
-		"record_size":   mmdbtype.Uint16(t.recordSize),
+		//nolint:gosec // ipVersion is always 4 or 6
+		"ip_version": mmdbtype.Uint16(t.ipVersion),
+		"languages":  languages,
+		//nolint:gosec // nodeCount is validated above
+		"node_count": mmdbtype.Uint32(t.nodeCount),
+		//nolint:gosec // recordSize is always 24, 28, or 32
+		"record_size": mmdbtype.Uint16(t.recordSize),
 	}
 	return metadata.WriteTo(dw)
 }
