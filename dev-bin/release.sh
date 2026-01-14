@@ -2,6 +2,15 @@
 
 set -eu -o pipefail
 
+check_command() {
+    if ! command -v "$1" &>/dev/null; then
+        echo "Error: $1 is not installed or not in PATH"
+        exit 1
+    fi
+}
+
+check_command gh
+
 changelog=$(cat CHANGELOG.md)
 
 regex='
