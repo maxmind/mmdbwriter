@@ -2,6 +2,8 @@
 
 set -eu -o pipefail
 
+cd "$(git rev-parse --show-toplevel)"
+
 check_command() {
     if ! command -v "$1" &>/dev/null; then
         echo "Error: $1 is not installed or not in PATH"
