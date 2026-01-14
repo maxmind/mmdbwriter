@@ -49,9 +49,9 @@ echo "$version"
 echo $'\nRelease notes:'
 echo "$notes"
 
-read -e -p "Push to origin? " should_push
+read -e -p "Push to origin? [y/N] " should_push
 
-if [ "$should_push" != "y" ]; then
+if ! [[ "$should_push" =~ ^[Yy]$ ]]; then
     echo "Aborting"
     exit 1
 fi
