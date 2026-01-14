@@ -58,4 +58,8 @@ fi
 
 git push
 
-gh release create --target "$(git branch --show-current)" -t "$version" -n "$notes" "$tag"
+notes_file=$(mktemp)
+trap 'rm -f "$notes_file"' EXIT
+echo "$notes" > "$notes_file"
+
+gh release create --target "$(git branch --show-current)" -t "$version" -F "$notes_file" "$tag"
