@@ -1,6 +1,6 @@
 # CHANGELOG
 
-## 1.2.0
+## 1.2.0 (2026-01-14)
 
 * The `mmdbtype.Unmarshaler` now caches nested structures, maps and slices,
   in addition to top-level values. This improves performance when loading
