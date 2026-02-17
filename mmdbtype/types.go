@@ -891,7 +891,7 @@ func writeCtrlByte(w writer, t DataType) (int64, error) {
 	leftOverSize := 0
 	switch {
 	case size < firstSize:
-		firstByte |= byte(size)
+		firstByte |= byte(size & 0xFF)
 	case size < secondSize:
 		firstByte |= 29
 		leftOver = size - firstSize

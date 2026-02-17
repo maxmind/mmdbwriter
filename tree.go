@@ -609,7 +609,7 @@ func (t *Tree) copyNode(buf []byte, n *node, dataWriter *dataWriter) error {
 		buf[0] = byte((left >> 16) & 0xFF)
 		buf[1] = byte((left >> 8) & 0xFF)
 		buf[2] = byte(left & 0xFF)
-		buf[3] = byte((((left >> 24) & 0x0F) << 4) | (right >> 24 & 0x0F))
+		buf[3] = byte(((((left >> 24) & 0x0F) << 4) | (right >> 24 & 0x0F)) & 0xFF)
 		buf[4] = byte((right >> 16) & 0xFF)
 		buf[5] = byte((right >> 8) & 0xFF)
 		buf[6] = byte(right & 0xFF)
