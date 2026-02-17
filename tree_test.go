@@ -695,7 +695,7 @@ func TestTreeInsertAndGet(t *testing.T) {
 
 					f, err := os.CreateTemp(t.TempDir(), "mmdbwriter")
 					require.NoError(t, err)
-					defer func() { require.NoError(t, os.Remove(f.Name())) }()
+					defer func() { require.NoError(t, os.Remove(f.Name())) }() //nolint:gosec // path from os.CreateTemp
 
 					bufBytes := buf.Bytes()
 
