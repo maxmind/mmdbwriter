@@ -613,10 +613,10 @@ func TestTreeInsertAndGet(t *testing.T) {
 		t.Run(fmt.Sprintf("Record Size: %d", recordSize), func(t *testing.T) {
 			for _, test := range tests {
 				t.Run(test.name, func(t *testing.T) {
-					epoch := time.Now().Unix()
+					epochSec := time.Now().Unix()
 					tree, err := New(
 						Options{
-							BuildEpoch:              epoch,
+							BuildEpoch:              epochSec,
 							DatabaseType:            "mmdbwriter-test",
 							Description:             map[string]string{"en": "Test database"},
 							DisableIPv4Aliasing:     test.disableIPv4Aliasing,
@@ -695,7 +695,7 @@ func TestTreeInsertAndGet(t *testing.T) {
 
 					f, err := os.CreateTemp(t.TempDir(), "mmdbwriter")
 					require.NoError(t, err)
-					defer func() { require.NoError(t, os.Remove(f.Name())) }() //nolint:gosec // path from os.CreateTemp
+					defer func() { require.NoError(t, os.Remove(f.Name())) }()
 
 					bufBytes := buf.Bytes()
 
@@ -706,7 +706,7 @@ func TestTreeInsertAndGet(t *testing.T) {
 					loadBuf := &bytes.Buffer{}
 					tree, err = Load(f.Name(),
 						Options{
-							BuildEpoch:              epoch,
+							BuildEpoch:              epochSec,
 							DisableIPv4Aliasing:     test.disableIPv4Aliasing,
 							IncludeReservedNetworks: test.includeReservedNetworks,
 						},
