@@ -3,6 +3,7 @@ package mmdbtype
 import (
 	"bytes"
 	"encoding/hex"
+	"fmt"
 	"math/big"
 	"strings"
 	"testing"
@@ -10,6 +11,38 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// TestMapLargeKeyCount exercises the heap-allocated fallback path in
+// Map.WriteTo for maps with more keys than fit in the stack-allocated
+// sort buffer. It pins down the load-bearing property that the
+// optimization could break (deterministic, sorted output) without
+// coupling the test to every byte of the encoding.
+func TestMapLargeKeyCount(t *testing.T) {
+	const n = 20
+	m := Map{}
+	for i := range n {
+		m[String(fmt.Sprintf("k%02d", i))] = Uint16(uint16(i))
+	}
+
+	buf1 := &bytes.Buffer{}
+	buf2 := &bytes.Buffer{}
+	_, err := m.WriteTo(&dataWriter{Buffer: buf1})
+	require.NoError(t, err)
+	_, err = m.WriteTo(&dataWriter{Buffer: buf2})
+	require.NoError(t, err)
+
+	// Determinism: map iteration order is randomized, so two encodings
+	// matching byte-for-byte proves sort.Strings ran.
+	assert.Equal(t, buf1.Bytes(), buf2.Bytes(), "Map encoding must be deterministic")
+
+	// Control byte: top 3 bits = map type (7), low 5 bits = size for
+	// size < 29. 20 = 10100b, so the first byte is 11110100 = 0xf4.
+	require.Equal(t, byte(0xf4), buf1.Bytes()[0], "control byte must encode %d-entry map", n)
+
+	// The first sorted key is "k00", a length-3 String:
+	// String type (010) + size 3 = 01000011 = 0x43, then "k00".
+	assert.Equal(t, []byte{0x43, 'k', '0', '0'}, buf1.Bytes()[1:5], "first sorted key must be k00")
+}
 
 // The tests in this file were mostly taken from
 // https://github.com/oschwald/maxminddb-golang/blob/master/decoder_test.go
