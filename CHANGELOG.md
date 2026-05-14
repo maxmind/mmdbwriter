@@ -1,5 +1,10 @@
 # CHANGELOG
 
+## 1.3.0
+
+- Reduced allocations on the tree insert and serialization hot paths, lowering
+  memory pressure and GC overhead during large builds.
+
 ## 1.2.0 (2026-01-14)
 
 - The `mmdbtype.Unmarshaler` now caches nested structures, maps and slices, in
