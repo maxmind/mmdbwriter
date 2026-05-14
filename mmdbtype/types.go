@@ -380,7 +380,19 @@ func (t Map) WriteTo(w writer) (int64, error) {
 	// the map items in order by key value. In the future, we will
 	// likely use a more relevant characteristic here (e.g., putting
 	// fields more likely to be accessed first).
-	keys := make([]string, 0, len(t))
+	//
+	// For maps with a small number of keys (the common case for record
+	// schemas), use a stack-allocated buffer to avoid a per-WriteTo
+	// allocation. Map.WriteTo is on the hot path of every
+	// keyWriter.Key call during inserts, so this is amortized across
+	// the full build.
+	var stackKeys [16]string
+	var keys []string
+	if len(t) <= len(stackKeys) {
+		keys = stackKeys[:0]
+	} else {
+		keys = make([]string, 0, len(t))
+	}
 	for k := range t {
 		keys = append(keys, string(k))
 	}

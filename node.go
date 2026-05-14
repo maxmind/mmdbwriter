@@ -138,8 +138,11 @@ func (r *record) insert(
 
 func (r *record) maybeMergeChildren(iRec insertRecord) error {
 	// Check to see if the children are the same and can be merged.
-	child0 := r.node.children[0]
-	child1 := r.node.children[1]
+	// Use pointer access to avoid copying the record struct; this is
+	// called from every node-level insert, so the copies add up across
+	// millions of inserts.
+	child0 := &r.node.children[0]
+	child1 := &r.node.children[1]
 	if child0.recordType != child1.recordType {
 		return nil
 	}
