@@ -108,6 +108,12 @@ type Tree struct {
 	// This is set when the tree is finalized
 	nodeCount       int
 	inserterFuncGen inserter.FuncGenerator
+
+	// insertScratchIP is reused across IPv4-to-IPv6 conversions in
+	// insert. Insert is not thread-safe (see the doc comments on
+	// Insert / InsertFunc), so a single per-Tree scratch suffices.
+	// The first 12 bytes stay zeroed to encode the v4Prefix.
+	insertScratchIP [16]byte
 }
 
 // New creates a new Tree.
@@ -279,7 +285,10 @@ func (t *Tree) insert(
 
 	ip := network.IP
 	if t.treeDepth == 128 && len(ip) == 4 {
-		ip = ipV4ToV6(ip)
+		// Reuse the per-Tree scratch slot. The first 12 bytes stay
+		// zeroed (the v4Prefix); only the last 4 bytes vary per call.
+		copy(t.insertScratchIP[12:], ip)
+		ip = t.insertScratchIP[:]
 		prefixLen += 96
 	}
 
