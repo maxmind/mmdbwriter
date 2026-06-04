@@ -45,7 +45,7 @@ func TestMapLargeKeyCount(t *testing.T) {
 }
 
 // The tests in this file were mostly taken from
-// https://github.com/oschwald/maxminddb-golang/blob/master/decoder_test.go
+// https://github.com/oschwald/maxminddb-golang/blob/main/internal/decoder/decoder_test.go
 
 func TestBool(t *testing.T) {
 	bools := map[string]DataType{
