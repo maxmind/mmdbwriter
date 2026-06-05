@@ -33,7 +33,7 @@ var reservedNetworksIPv4 = []string{
 	"198.51.100.0/24",
 	"203.0.113.0/24",
 	// The above IANA page doesn't list 224.0.0.0/4, but at least some parts
-	// are listed in https://tools.ietf.org/html/rfc5771
+	// are listed in https://datatracker.ietf.org/doc/html/rfc5771
 	"224.0.0.0/4",
 	"240.0.0.0/4",
 	// 255.255.255.255/32 gets brought in by 240.0.0.0/4.

@@ -11,6 +11,7 @@ go = "latest"
 "github:houseabsolute/precious" = "latest"
 node = "latest"
 "npm:prettier" = "latest"
+lychee = "latest"
 
 [hooks]
 enter = "mise install --quiet"
@@ -18,3 +19,7 @@ enter = "mise install --quiet"
 [[watch_files]]
 patterns = ["mise.toml", "mise.lock"]
 run = "mise install --quiet"
+
+[tasks.check-links]
+description = "Check links with lychee"
+run = "lychee --no-progress './**/*.md' './**/*.go'"
