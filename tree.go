@@ -565,13 +565,13 @@ func (t *Tree) writeNode(
 	}
 
 	for i := range 2 {
-		child := n.children[i]
+		child := &n.children[i]
 		if child.recordType != recordTypeNode && child.recordType != recordTypeFixedNode {
 			continue
 		}
 		addedNodes, addedBytes, err := t.writeNode(
 			w,
-			n.children[i].node,
+			child.node,
 			dataWriter,
 			recordBuf,
 		)
@@ -586,7 +586,7 @@ func (t *Tree) writeNode(
 }
 
 func (t *Tree) recordValue(
-	r record,
+	r *record,
 	dataWriter *dataWriter,
 ) (int, error) {
 	switch r.recordType {
@@ -601,11 +601,11 @@ func (t *Tree) recordValue(
 }
 
 func (t *Tree) copyNode(buf []byte, n *node, dataWriter *dataWriter) error {
-	left, err := t.recordValue(n.children[0], dataWriter)
+	left, err := t.recordValue(&n.children[0], dataWriter)
 	if err != nil {
 		return err
 	}
-	right, err := t.recordValue(n.children[1], dataWriter)
+	right, err := t.recordValue(&n.children[1], dataWriter)
 	if err != nil {
 		return err
 	}
@@ -659,12 +659,12 @@ func ipV4ToV6(ip net.IP) net.IP {
 }
 
 func (t *Tree) writeMetadata(dw *dataWriter) (int64, error) {
-	description := mmdbtype.Map{}
+	description := make(mmdbtype.Map, len(t.description))
 	for k, v := range t.description {
 		description[mmdbtype.String(k)] = mmdbtype.String(v)
 	}
 
-	languages := mmdbtype.Slice{}
+	languages := make(mmdbtype.Slice, 0, len(t.languages))
 	for _, v := range t.languages {
 		languages = append(languages, mmdbtype.String(v))
 	}

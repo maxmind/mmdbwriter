@@ -60,20 +60,20 @@ func (dw *dataWriter) maybeWrite(value *dataMapValue) (int, error) {
 }
 
 func (dw *dataWriter) WriteOrWritePointer(t mmdbtype.DataType) (int64, error) {
+	if !dw.usePointers {
+		return t.WriteTo(dw)
+	}
+
 	keyBytes, err := dw.keyWriter.Key(t)
 	if err != nil {
 		return 0, err
 	}
 
-	var ok bool
-	if dw.usePointers {
-		var written writtenType
-		written, ok = dw.offsets[dataMapKey(keyBytes)]
-		if ok && written.size > written.pointer.WrittenSize() {
-			// Only use a pointer if it would take less space than writing the
-			// type again.
-			return written.pointer.WriteTo(dw)
-		}
+	written, ok := dw.offsets[dataMapKey(keyBytes)]
+	if ok && written.size > written.pointer.WrittenSize() {
+		// Only use a pointer if it would take less space than writing the
+		// type again.
+		return written.pointer.WriteTo(dw)
 	}
 	// We can't use the pointers[dataMapKey(keyBytes)] optimization to
 	// avoid an allocation below as the backing buffer for key may change when
