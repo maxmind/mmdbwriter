@@ -818,6 +818,79 @@ func TestInsertFunc_RemovalAndLaterInsert(t *testing.T) {
 	assert.Nil(t, recValue)
 }
 
+func TestInsert_SplittingDataRecordMaintainsRefCounts(t *testing.T) {
+	tree, err := New(
+		Options{
+			DisableIPv4Aliasing:     true,
+			IncludeReservedNetworks: true,
+		},
+	)
+	require.NoError(t, err)
+
+	//nolint:forbidigo // code predates netip
+	_, largerNetwork, err := net.ParseCIDR("1.1.0.0/24")
+	require.NoError(t, err)
+	//nolint:forbidigo // code predates netip
+	_, upperHalfNetwork, err := net.ParseCIDR("1.1.0.128/25")
+	require.NoError(t, err)
+	//nolint:forbidigo // code predates netip
+	_, lowerHalfNetwork, err := net.ParseCIDR("1.1.0.0/25")
+	require.NoError(t, err)
+
+	initialValue := mmdbtype.String("initial")
+	require.NoError(t, tree.Insert(largerNetwork, initialValue))
+
+	initialMapValue := tree.dataMap.data[mustKey(t, tree, initialValue)]
+	require.NotNil(t, initialMapValue)
+
+	require.NoError(t, tree.Insert(upperHalfNetwork, mmdbtype.String("upper")))
+	assertDataMapRefCounts(t, tree)
+	assert.Equal(t, uint32(1), initialMapValue.refCount)
+
+	require.NoError(t, tree.Insert(lowerHalfNetwork, mmdbtype.String("lower")))
+	assertDataMapRefCounts(t, tree)
+	assert.NotContains(t, tree.dataMap.data, initialMapValue.key)
+}
+
+func mustKey(t *testing.T, tree *Tree, value mmdbtype.DataType) dataMapKey {
+	t.Helper()
+
+	key, err := tree.dataMap.keyWriter.Key(value)
+	require.NoError(t, err)
+	return dataMapKey(key)
+}
+
+func assertDataMapRefCounts(t *testing.T, tree *Tree) {
+	t.Helper()
+
+	counts := map[*dataMapValue]uint32{}
+	walkDataMapRefs(tree.root, counts)
+
+	for mapKey, mapValue := range tree.dataMap.data {
+		assert.Equal(t, counts[mapValue], mapValue.refCount, "refCount for key %q", mapKey)
+	}
+
+	for mapValue, count := range counts {
+		storedValue, ok := tree.dataMap.data[mapValue.key]
+		require.True(t, ok, "record value for key %q is missing from data map", mapValue.key)
+		assert.Same(t, mapValue, storedValue)
+		assert.Equal(t, count, mapValue.refCount, "refCount for key %q", mapValue.key)
+	}
+}
+
+func walkDataMapRefs(n *node, counts map[*dataMapValue]uint32) {
+	for i := range 2 {
+		child := n.children[i]
+		switch child.recordType {
+		case recordTypeData:
+			counts[child.value]++
+		case recordTypeNode, recordTypeFixedNode:
+			walkDataMapRefs(child.node, counts)
+		default:
+		}
+	}
+}
+
 // See GitHub #62.
 func TestGet_4ByteIPIn128BitTree(t *testing.T) {
 	writer, err := New(Options{DatabaseType: "GitHub #62"})

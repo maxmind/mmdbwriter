@@ -108,6 +108,9 @@ func (r *record) insert(
 
 		// We are splitting this record so we create two duplicate child
 		// records.
+		if r.recordType == recordTypeData {
+			iRec.dataMap.addRef(r.value)
+		}
 		r.node = &node{children: [2]record{*r, *r}}
 		r.value = nil
 		r.recordType = recordTypeNode
