@@ -126,7 +126,6 @@ func New(opts Options) (*Tree, error) {
 		ipVersion:               6,
 		recordSize:              28,
 		root:                    &node{},
-		inserterFuncGen:         inserter.ReplaceWith,
 	}
 
 	if opts.BuildEpoch != 0 {
@@ -247,6 +246,9 @@ func Load(path string, opts Options) (*Tree, error) {
 //
 // This is not safe to call from multiple threads.
 func (t *Tree) Insert(network *net.IPNet, value mmdbtype.DataType) error {
+	if t.inserterFuncGen == nil {
+		return t.insert(network, recordTypeData, nil, nil, value)
+	}
 	return t.InsertFunc(network, t.inserterFuncGen(value))
 }
 
@@ -269,7 +271,7 @@ func (t *Tree) InsertFunc(
 	network *net.IPNet,
 	inserterFunc inserter.Func,
 ) error {
-	return t.insert(network, recordTypeData, inserterFunc, nil)
+	return t.insert(network, recordTypeData, inserterFunc, nil, nil)
 }
 
 func (t *Tree) insert(
@@ -277,6 +279,7 @@ func (t *Tree) insert(
 	recordType recordType,
 	inserterFunc inserter.Func,
 	node *node,
+	value mmdbtype.DataType,
 ) error {
 	// We set this to 0 so that the tree must be finalized again.
 	t.nodeCount = 0
@@ -299,6 +302,7 @@ func (t *Tree) insert(
 			recordType:   recordType,
 			inserter:     inserterFunc,
 			insertedNode: node,
+			value:        value,
 
 			dataMap: t.dataMap,
 		},
@@ -313,6 +317,9 @@ func (t *Tree) InsertRange(
 	end net.IP,
 	value mmdbtype.DataType,
 ) error {
+	if t.inserterFuncGen == nil {
+		return t.insertRange(start, end, recordTypeData, nil, nil, value)
+	}
 	return t.InsertRangeFunc(start, end, t.inserterFuncGen(value))
 }
 
@@ -323,7 +330,7 @@ func (t *Tree) InsertRangeFunc(
 	end net.IP,
 	inserterFunc inserter.Func,
 ) error {
-	return t.insertRange(start, end, recordTypeData, inserterFunc, nil)
+	return t.insertRange(start, end, recordTypeData, inserterFunc, nil, nil)
 }
 
 func (t *Tree) insertRange(
@@ -332,6 +339,7 @@ func (t *Tree) insertRange(
 	recordType recordType,
 	inserterFunc inserter.Func,
 	node *node,
+	value mmdbtype.DataType,
 ) error {
 	startNetIP, ok := netipx.FromStdIP(start)
 	if !ok {
@@ -348,7 +356,14 @@ func (t *Tree) insertRange(
 	}
 	subnets := r.Prefixes()
 	for _, subnet := range subnets {
-		if err := t.insert(netipx.PrefixIPNet(subnet), recordType, inserterFunc, node); err != nil {
+		err := t.insert(
+			netipx.PrefixIPNet(subnet),
+			recordType,
+			inserterFunc,
+			node,
+			value,
+		)
+		if err != nil {
 			return err
 		}
 	}
@@ -367,7 +382,7 @@ func (t *Tree) insertStringNetwork(
 	if err != nil {
 		return fmt.Errorf("parsing network (%s): %w", network, err)
 	}
-	return t.insert(ipnet, recordType, inserterFunc, node)
+	return t.insert(ipnet, recordType, inserterFunc, node, nil)
 }
 
 var ipv4AliasNetworks = []string{
@@ -386,7 +401,7 @@ func (t *Tree) insertIPv4Aliases() error {
 	ipv4RootNode := &node{}
 
 	// Make ::/96, the IPv4 root, a fixed node.
-	err = t.insert(ipv4Root, recordTypeFixedNode, nil, ipv4RootNode)
+	err = t.insert(ipv4Root, recordTypeFixedNode, nil, ipv4RootNode, nil)
 	if err != nil {
 		return err
 	}

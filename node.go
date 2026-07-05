@@ -40,6 +40,7 @@ type insertRecord struct {
 	prefixLen int
 
 	recordType recordType
+	value      mmdbtype.DataType
 }
 
 func (n *node) insert(iRec insertRecord, currentDepth int) error {
@@ -83,9 +84,13 @@ func (r *record) insert(
 				if r.value != nil {
 					oldData = r.value.data
 				}
-				newData, err := iRec.inserter(oldData)
-				if err != nil {
-					return err
+				newData := iRec.value
+				if iRec.inserter != nil {
+					var err error
+					newData, err = iRec.inserter(oldData)
+					if err != nil {
+						return err
+					}
 				}
 				if newData == nil {
 					iRec.dataMap.remove(r.value)
