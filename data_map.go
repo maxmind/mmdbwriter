@@ -3,7 +3,7 @@ package mmdbwriter
 import (
 	"reflect"
 
-	"github.com/maxmind/mmdbwriter/mmdbtype"
+	"github.com/maxmind/mmdbwriter/v2/mmdbtype"
 )
 
 type dataMapKey string

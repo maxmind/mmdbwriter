@@ -1,10 +1,8 @@
 package mmdbwriter
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
-	"net"
 	"net/netip"
 )
 
@@ -17,24 +15,14 @@ type AliasedNetworkError struct {
 	InsertedNetwork netip.Prefix
 }
 
-func newAliasedNetworkError(netIP net.IP, curPrefixLen, recPrefixLen int) error {
+func newAliasedNetworkError(ip [16]byte, curPrefixLen, recPrefixLen, treeDepth int) error {
 	anErr := &AliasedNetworkError{}
-	ip, ok := netip.AddrFromSlice(netIP)
-	if !ok {
-		return errors.Join(
-			fmt.Errorf("creating netip.Addr from %s", netIP),
-			anErr,
-		)
-	}
 	var err error
-	// We are using netip here despite using net.IP/net.IPNet internally as
-	// it seems quite likely that we will switch to netip throughout.
-	anErr.InsertedNetwork, err = ip.Prefix(recPrefixLen)
+	anErr.InsertedNetwork, err = prefixFromInsertIP(ip, recPrefixLen, treeDepth)
 	if err != nil {
 		return errors.Join(
 			fmt.Errorf(
-				"creating prefix from addr %s and prefix length %d: %w",
-				ip,
+				"creating inserted network prefix with prefix length %d: %w",
 				recPrefixLen,
 				err,
 			),
@@ -42,12 +30,11 @@ func newAliasedNetworkError(netIP net.IP, curPrefixLen, recPrefixLen int) error 
 		)
 	}
 
-	anErr.AliasedNetwork, err = ip.Prefix(curPrefixLen)
+	anErr.AliasedNetwork, err = prefixFromInsertIP(ip, curPrefixLen, treeDepth)
 	if err != nil {
 		return errors.Join(
 			fmt.Errorf(
-				"creating prefix from addr %s and prefix length %d: %w",
-				ip,
+				"creating aliased network prefix with prefix length %d: %w",
 				curPrefixLen,
 				err,
 			),
@@ -76,33 +63,19 @@ type ReservedNetworkError struct {
 
 var _ error = &ReservedNetworkError{}
 
-var ipv4Prefix = []byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
-
-func newReservedNetworkError(netIP net.IP, curPrefixLen, recPrefixLen int) error {
-	// Check if we are in the IPv4 subtree. If so, convert everything to IPv4.
-	if bytes.HasPrefix(netIP, ipv4Prefix) && curPrefixLen > 96 && recPrefixLen > 96 {
-		netIP = netIP[12:]
-		curPrefixLen -= 96
-		recPrefixLen -= 96
-	}
-
+func newReservedNetworkError(
+	ip [16]byte,
+	curPrefixLen,
+	recPrefixLen,
+	treeDepth int,
+) error {
 	rnErr := &ReservedNetworkError{}
-	ip, ok := netip.AddrFromSlice(netIP)
-	if !ok {
-		return errors.Join(
-			fmt.Errorf("creating netip.Addr from %s", netIP),
-			rnErr,
-		)
-	}
 	var err error
-	// We are using netip here despite using net.IP/net.IPNet internally as
-	// it seems quite likely that we will switch to netip throughout.
-	rnErr.InsertedNetwork, err = ip.Prefix(recPrefixLen)
+	rnErr.InsertedNetwork, err = prefixFromInsertIP(ip, recPrefixLen, treeDepth)
 	if err != nil {
 		return errors.Join(
 			fmt.Errorf(
-				"creating prefix from addr %s and prefix length %d: %w",
-				ip,
+				"creating inserted network prefix with prefix length %d: %w",
 				recPrefixLen,
 				err,
 			),
@@ -110,12 +83,11 @@ func newReservedNetworkError(netIP net.IP, curPrefixLen, recPrefixLen int) error
 		)
 	}
 
-	rnErr.ReservedNetwork, err = ip.Prefix(curPrefixLen)
+	rnErr.ReservedNetwork, err = prefixFromInsertIP(ip, curPrefixLen, treeDepth)
 	if err != nil {
 		return errors.Join(
 			fmt.Errorf(
-				"creating prefix from addr %s and prefix length %d: %w",
-				ip,
+				"creating reserved network prefix with prefix length %d: %w",
 				curPrefixLen,
 				err,
 			),
@@ -123,6 +95,45 @@ func newReservedNetworkError(netIP net.IP, curPrefixLen, recPrefixLen int) error
 		)
 	}
 	return rnErr
+}
+
+func prefixFromInsertIP(ip [16]byte, prefixLen, treeDepth int) (netip.Prefix, error) {
+	// Reverse Tree.addrInsertIP's byte layout so error prefixes are reported in
+	// the same address family callers inserted.
+	if treeDepth == 32 {
+		addr := netip.AddrFrom4([4]byte{ip[0], ip[1], ip[2], ip[3]})
+		return prefixFromAddr(addr, prefixLen)
+	}
+
+	if isIPv4SubtreeIP(ip) && prefixLen >= 96 {
+		addr := netip.AddrFrom4([4]byte{ip[12], ip[13], ip[14], ip[15]})
+		return prefixFromAddr(addr, prefixLen-96)
+	}
+
+	addr := netip.AddrFrom16(ip)
+	return prefixFromAddr(addr, prefixLen)
+}
+
+func prefixFromAddr(addr netip.Addr, prefixLen int) (netip.Prefix, error) {
+	prefix, err := addr.Prefix(prefixLen)
+	if err != nil {
+		return netip.Prefix{}, fmt.Errorf(
+			"creating prefix from addr %s and prefix length %d: %w",
+			addr,
+			prefixLen,
+			err,
+		)
+	}
+	return prefix, nil
+}
+
+func isIPv4SubtreeIP(ip [16]byte) bool {
+	for _, b := range ip[:12] {
+		if b != 0 {
+			return false
+		}
+	}
+	return true
 }
 
 func (r *ReservedNetworkError) Error() string {

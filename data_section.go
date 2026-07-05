@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/maxmind/mmdbwriter/mmdbtype"
+	"github.com/maxmind/mmdbwriter/v2/mmdbtype"
 )
 
 type writtenType struct {

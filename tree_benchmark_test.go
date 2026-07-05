@@ -3,22 +3,22 @@ package mmdbwriter
 import (
 	"fmt"
 	"io"
-	"net"
+	"net/netip"
 	"os"
 	"testing"
 
-	"github.com/maxmind/mmdbwriter/inserter"
-	"github.com/maxmind/mmdbwriter/mmdbtype"
+	"github.com/maxmind/mmdbwriter/v2/inserter"
+	"github.com/maxmind/mmdbwriter/v2/mmdbtype"
 )
 
 type benchmarkInsertSpec struct {
-	network *net.IPNet
+	network netip.Prefix
 	value   mmdbtype.DataType
 }
 
 type benchmarkRangeInsertSpec struct {
-	start net.IP
-	end   net.IP
+	start netip.Addr
+	end   netip.Addr
 	value mmdbtype.DataType
 }
 
@@ -424,22 +424,12 @@ func fragmentedRangeBenchmarkSpecs() []benchmarkRangeInsertSpec {
 	return specs
 }
 
-func benchmarkCIDR(cidr string) *net.IPNet {
-	//nolint:forbidigo // benchmarks exercise the existing net.IPNet API.
-	_, network, err := net.ParseCIDR(cidr)
-	if err != nil {
-		panic(err)
-	}
-	return network
+func benchmarkCIDR(cidr string) netip.Prefix {
+	return netip.MustParsePrefix(cidr)
 }
 
-func benchmarkIP(ip string) net.IP {
-	//nolint:forbidigo // benchmarks exercise the existing net.IP API.
-	parsed := net.ParseIP(ip)
-	if parsed == nil {
-		panic("invalid benchmark IP: " + ip)
-	}
-	return parsed
+func benchmarkIP(ip string) netip.Addr {
+	return netip.MustParseAddr(ip)
 }
 
 func benchmarkBaseValues() []mmdbtype.DataType {

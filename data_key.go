@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"hash"
 
-	"github.com/maxmind/mmdbwriter/mmdbtype"
+	"github.com/maxmind/mmdbwriter/v2/mmdbtype"
 )
 
 // KeyGenerator generates a unique key for record values being inserted into the

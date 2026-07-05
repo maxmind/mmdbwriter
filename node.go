@@ -2,9 +2,8 @@ package mmdbwriter
 
 import (
 	"fmt"
-	"net"
 
-	"github.com/maxmind/mmdbwriter/mmdbtype"
+	"github.com/maxmind/mmdbwriter/v2/mmdbtype"
 )
 
 type recordType byte
@@ -34,9 +33,10 @@ type insertRecord struct {
 	inserter func(value mmdbtype.DataType) (mmdbtype.DataType, error)
 
 	dataMap      *dataMap
+	tree         *Tree
 	insertedNode *node
 
-	ip        net.IP
+	ip        [16]byte
 	prefixLen int
 
 	recordType recordType
@@ -130,7 +130,7 @@ func (r *record) insert(
 		return r.maybeMergeChildren(iRec)
 	case recordTypeReserved:
 		if iRec.prefixLen >= newDepth {
-			return newReservedNetworkError(iRec.ip, newDepth, iRec.prefixLen)
+			return newReservedNetworkError(iRec.ip, newDepth, iRec.prefixLen, iRec.tree.treeDepth)
 		}
 		// If we are inserting a network that contains a reserved network,
 		// we silently remove the reserved network.
@@ -142,7 +142,7 @@ func (r *record) insert(
 			return nil
 		}
 		// attempting to insert _into_ an aliased network
-		return newAliasedNetworkError(iRec.ip, newDepth, iRec.prefixLen)
+		return newAliasedNetworkError(iRec.ip, newDepth, iRec.prefixLen, iRec.tree.treeDepth)
 	default:
 		return fmt.Errorf("inserting into record type %d is not implemented", r.recordType)
 	}
@@ -182,7 +182,7 @@ func (r *record) maybeMergeChildren(iRec insertRecord) error {
 }
 
 func (n *node) get(
-	ip net.IP,
+	ip [16]byte,
 	depth int,
 ) (int, record) {
 	r := n.children[bitAt(ip, depth)]
@@ -215,6 +215,6 @@ func (n *node) finalize(currentNum int) int {
 	return currentNum
 }
 
-func bitAt(ip net.IP, depth int) byte {
+func bitAt(ip [16]byte, depth int) byte {
 	return (ip[depth/8] >> (7 - (depth % 8))) & 1
 }

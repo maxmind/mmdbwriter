@@ -7,12 +7,12 @@ import (
 	"errors"
 	"io"
 	"log"
-	"net"
+	"net/netip"
 	"os"
 	"strconv"
 
-	"github.com/maxmind/mmdbwriter"
-	"github.com/maxmind/mmdbwriter/mmdbtype"
+	"github.com/maxmind/mmdbwriter/v2"
+	"github.com/maxmind/mmdbwriter/v2/mmdbtype"
 )
 
 func main() {
@@ -50,7 +50,7 @@ func main() {
 				log.Fatalf("unexpected CSV rows: %v", row)
 			}
 
-			_, network, err := net.ParseCIDR(row[0])
+			network, err := netip.ParsePrefix(row[0])
 			if err != nil {
 				log.Fatal(err)
 			}

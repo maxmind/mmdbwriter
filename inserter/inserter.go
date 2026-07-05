@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"maps"
 
-	"github.com/maxmind/mmdbwriter/mmdbtype"
+	"github.com/maxmind/mmdbwriter/v2/mmdbtype"
 )
 
 // Func is a function that returns the data type to be inserted into an

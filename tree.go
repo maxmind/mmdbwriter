@@ -8,14 +8,14 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"net"
+	"net/netip"
 	"time"
 
 	"github.com/oschwald/maxminddb-golang/v2"
 	"go4.org/netipx"
 
-	"github.com/maxmind/mmdbwriter/inserter"
-	"github.com/maxmind/mmdbwriter/mmdbtype"
+	"github.com/maxmind/mmdbwriter/v2/inserter"
+	"github.com/maxmind/mmdbwriter/v2/mmdbtype"
 )
 
 var (
@@ -111,12 +111,6 @@ type Tree struct {
 	// This is set when the tree is finalized
 	nodeCount       int
 	inserterFuncGen inserter.FuncGenerator
-
-	// insertScratchIP is reused across IPv4-to-IPv6 conversions in
-	// insert. Insert is not thread-safe (see the doc comments on
-	// Insert / InsertFunc), so a single per-Tree scratch suffices.
-	// The first 12 bytes stay zeroed to encode the v4Prefix.
-	insertScratchIP [16]byte
 }
 
 // New creates a new Tree.
@@ -236,26 +230,52 @@ func Load(path string, opts Options) (*Tree, error) {
 			return nil, fmt.Errorf("unmarshaling record for network: %w", err)
 		}
 
-		err = tree.Insert(netipx.PrefixIPNet(res.Prefix()), unmarshaler.Result())
+		value := unmarshaler.Result()
+		prefix, err := tree.normalizeLoadPrefix(res.Prefix())
 		if err != nil {
 			return nil, err
+		}
+
+		var inserterFunc inserter.Func
+		insertValue := value
+		if tree.inserterFuncGen != nil {
+			inserterFunc = tree.inserterFuncGen(value)
+			insertValue = nil
+		}
+		err = tree.insertNormalized(prefix, recordTypeData, inserterFunc, nil, insertValue)
+		if err != nil {
+			return nil, fmt.Errorf("loading network %s: %w", prefix, err)
 		}
 	}
 	return tree, nil
 }
 
-// Insert a data value into the tree using the Tree's inserter function
+func (t *Tree) normalizeLoadPrefix(prefix netip.Prefix) (netip.Prefix, error) {
+	// Database readers should already return valid, masked prefixes. Only
+	// normalize mapped IPv4 prefixes so loaded data follows Insert semantics.
+	if !prefix.Addr().Is4In6() {
+		return prefix, nil
+	}
+
+	normalized, err := t.normalizeInsertPrefix(prefix)
+	if err != nil {
+		return netip.Prefix{}, fmt.Errorf("normalizing loaded network %s: %w", prefix, err)
+	}
+	return normalized, nil
+}
+
+// Insert inserts a data value into the tree using the Tree's inserter function
 // (defaults to inserter.ReplaceWith).
 //
 // You must never modify the value after insertion as values may be shared with
 // other records.
 //
 // This is not safe to call from multiple threads.
-func (t *Tree) Insert(network *net.IPNet, value mmdbtype.DataType) error {
+func (t *Tree) Insert(prefix netip.Prefix, value mmdbtype.DataType) error {
 	if t.inserterFuncGen == nil {
-		return t.insert(network, recordTypeData, nil, nil, value)
+		return t.insert(prefix, recordTypeData, nil, nil, value)
 	}
-	return t.InsertFunc(network, t.inserterFuncGen(value))
+	return t.InsertFunc(prefix, t.inserterFuncGen(value))
 }
 
 // InsertFunc will insert the output of the function passed to it. The argument
@@ -274,32 +294,62 @@ func (t *Tree) Insert(network *net.IPNet, value mmdbtype.DataType) error {
 //
 // This is not safe to call from multiple threads.
 func (t *Tree) InsertFunc(
-	network *net.IPNet,
+	prefix netip.Prefix,
 	inserterFunc inserter.Func,
 ) error {
-	return t.insert(network, recordTypeData, inserterFunc, nil, nil)
+	return t.insert(prefix, recordTypeData, inserterFunc, nil, nil)
 }
 
 func (t *Tree) insert(
-	network *net.IPNet,
+	prefix netip.Prefix,
 	recordType recordType,
 	inserterFunc inserter.Func,
 	node *node,
 	value mmdbtype.DataType,
 ) error {
-	// We set this to 0 so that the tree must be finalized again.
+	var err error
+	if recordType == recordTypeData {
+		prefix, err = t.normalizeInsertPrefix(prefix)
+		if err != nil {
+			return err
+		}
+	} else {
+		if !prefix.IsValid() {
+			return errors.New("prefix is invalid")
+		}
+		prefix = prefix.Masked()
+		if err := t.checkInsertPrefixFamily(prefix); err != nil {
+			return err
+		}
+	}
+	return t.insertPrepared(prefix, recordType, inserterFunc, node, value)
+}
+
+func (t *Tree) insertNormalized(
+	prefix netip.Prefix,
+	recordType recordType,
+	inserterFunc inserter.Func,
+	node *node,
+	value mmdbtype.DataType,
+) error {
+	if t.treeDepth == 32 && !prefix.Addr().Is4() {
+		return errors.New("IPv6 prefixes cannot be inserted into an IPv4 tree")
+	}
+	return t.insertPrepared(prefix, recordType, inserterFunc, node, value)
+}
+
+func (t *Tree) insertPrepared(
+	prefix netip.Prefix,
+	recordType recordType,
+	inserterFunc inserter.Func,
+	node *node,
+	value mmdbtype.DataType,
+) error {
+	// Any insert can change the reachable node graph, so cached finalization
+	// state must be rebuilt before the next write.
 	t.nodeCount = 0
 
-	prefixLen, _ := network.Mask.Size()
-
-	ip := network.IP
-	if t.treeDepth == 128 && len(ip) == 4 {
-		// Reuse the per-Tree scratch slot. The first 12 bytes stay
-		// zeroed (the v4Prefix); only the last 4 bytes vary per call.
-		copy(t.insertScratchIP[12:], ip)
-		ip = t.insertScratchIP[:]
-		prefixLen += 96
-	}
+	ip, prefixLen := t.prefixInsertIP(prefix)
 
 	return t.root.insert(
 		insertRecord{
@@ -308,6 +358,7 @@ func (t *Tree) insert(
 			recordType:   recordType,
 			inserter:     inserterFunc,
 			insertedNode: node,
+			tree:         t,
 			value:        value,
 
 			dataMap: t.dataMap,
@@ -316,11 +367,118 @@ func (t *Tree) insert(
 	)
 }
 
+func (t *Tree) normalizeInsertPrefix(prefix netip.Prefix) (netip.Prefix, error) {
+	if !prefix.IsValid() {
+		return netip.Prefix{}, errors.New("prefix is invalid")
+	}
+
+	addr := prefix.Addr()
+	if addr.Is4() {
+		return prefix.Masked(), nil
+	}
+	if addr.Is4In6() {
+		if prefix.Bits() < 96 {
+			return netip.Prefix{}, errors.New(
+				"IPv4-mapped prefixes shorter than /96 cannot be inserted",
+			)
+		}
+		return netip.PrefixFrom(addr.Unmap(), prefix.Bits()-96).Masked(), nil
+	}
+	if err := t.checkInsertPrefixFamily(prefix); err != nil {
+		return netip.Prefix{}, err
+	}
+	return prefix.Masked(), nil
+}
+
+func (t *Tree) checkInsertPrefixFamily(prefix netip.Prefix) error {
+	if t.treeDepth == 32 && !prefix.Addr().Is4() {
+		return errors.New("IPv6 prefixes cannot be inserted into an IPv4 tree")
+	}
+	return nil
+}
+
+func (t *Tree) prefixInsertIP(prefix netip.Prefix) ([16]byte, int) {
+	prefixLen := prefix.Bits()
+	return t.addrInsertIP(prefix.Addr(), prefixLen)
+}
+
+func (t *Tree) addrInsertIP(addr netip.Addr, prefixLen int) ([16]byte, int) {
+	var ip [16]byte
+
+	if addr.Is4() {
+		ip4 := addr.As4()
+		if t.treeDepth == 128 {
+			copy(ip[12:], ip4[:])
+			return ip, prefixLen + 96
+		}
+
+		copy(ip[:4], ip4[:])
+		return ip, prefixLen
+	}
+
+	ip16 := addr.As16()
+	copy(ip[:], ip16[:])
+	return ip, prefixLen
+}
+
+func (t *Tree) lookupIP(addr netip.Addr) ([16]byte, bool) {
+	if !addr.IsValid() {
+		return [16]byte{}, false
+	}
+
+	if t.treeDepth == 32 {
+		addr = addr.Unmap()
+		if !addr.Is4() {
+			return [16]byte{}, false
+		}
+		ip, _ := t.addrInsertIP(addr, addr.BitLen())
+		return ip, true
+	}
+
+	addr = addr.Unmap()
+	ip, _ := t.addrInsertIP(addr, addr.BitLen())
+	return ip, true
+}
+
+func (t *Tree) getPrefixForAddr(addr netip.Addr, prefixLen int) netip.Prefix {
+	if !addr.IsValid() {
+		return netip.Prefix{}
+	}
+
+	if t.treeDepth == 32 {
+		addr = addr.Unmap()
+		if !addr.Is4() {
+			return netip.Prefix{}
+		}
+		prefix, err := addr.Prefix(prefixLen)
+		if err != nil {
+			return netip.Prefix{}
+		}
+		return prefix
+	}
+
+	if unmapped := addr.Unmap(); unmapped.Is4() {
+		if prefixLen >= 96 {
+			prefixLen -= 96
+			addr = unmapped
+		} else {
+			ip, _ := t.addrInsertIP(unmapped, unmapped.BitLen())
+			addr = netip.AddrFrom16(ip)
+		}
+	}
+
+	prefix, err := addr.Prefix(prefixLen)
+	if err != nil {
+		return netip.Prefix{}
+	}
+	return prefix
+}
+
 // InsertRange is the same as Insert, except it will insert all subnets within
 // the range of IPs specified by `[start,end]`.
 func (t *Tree) InsertRange(
-	start net.IP,
-	end net.IP,
+	start netip.Addr,
+	end netip.Addr,
 	value mmdbtype.DataType,
 ) error {
 	if t.inserterFuncGen == nil {
@@ -332,43 +490,40 @@ func (t *Tree) InsertRange(
 // InsertRangeFunc is the same as InsertFunc, except it will insert all subnets
 // within the range of IPs specified by `[start,end]`.
 func (t *Tree) InsertRangeFunc(
-	start net.IP,
-	end net.IP,
+	start netip.Addr,
+	end netip.Addr,
 	inserterFunc inserter.Func,
 ) error {
 	return t.insertRange(start, end, recordTypeData, inserterFunc, nil, nil)
 }
 
 func (t *Tree) insertRange(
-	start net.IP,
-	end net.IP,
+	start netip.Addr,
+	end netip.Addr,
 	recordType recordType,
 	inserterFunc inserter.Func,
 	node *node,
 	value mmdbtype.DataType,
 ) error {
-	startNetIP, ok := netipx.FromStdIP(start)
-	if !ok {
+	if !start.IsValid() {
 		return errors.New("start IP is invalid")
 	}
-	endNetIP, ok := netipx.FromStdIP(end)
-	if !ok {
+	if !end.IsValid() {
 		return errors.New("end IP is invalid")
 	}
+	start = start.Unmap()
+	end = end.Unmap()
+	if t.treeDepth == 32 && (!start.Is4() || !end.Is4()) {
+		return errors.New("IPv6 ranges cannot be inserted into an IPv4 tree")
+	}
 
-	r := netipx.IPRangeFrom(startNetIP, endNetIP)
+	r := netipx.IPRangeFrom(start, end)
 	if !r.IsValid() {
 		return errors.New("start & end IPs did not give valid range")
 	}
 	subnets := r.Prefixes()
 	for _, subnet := range subnets {
-		err := t.insert(
-			netipx.PrefixIPNet(subnet),
-			recordType,
-			inserterFunc,
-			node,
-			value,
-		)
+		err := t.insertPrepared(subnet, recordType, inserterFunc, node, value)
 		if err != nil {
 			return err
 		}
@@ -383,12 +538,11 @@ func (t *Tree) insertStringNetwork(
 	inserterFunc inserter.Func,
 	node *node,
 ) error {
-	//nolint:forbidigo // code predates netip
-	_, ipnet, err := net.ParseCIDR(network)
+	prefix, err := netip.ParsePrefix(network)
 	if err != nil {
 		return fmt.Errorf("parsing network (%s): %w", network, err)
 	}
-	return t.insert(ipnet, recordType, inserterFunc, node, nil)
+	return t.insert(prefix, recordType, inserterFunc, node, nil)
 }
 
 var ipv4AliasNetworks = []string{
@@ -398,8 +552,7 @@ var ipv4AliasNetworks = []string{
 }
 
 func (t *Tree) insertIPv4Aliases() error {
-	//nolint:forbidigo // code predates netip
-	_, ipv4Root, err := net.ParseCIDR("::/96")
+	ipv4Root, err := netip.ParsePrefix("::/96")
 	if err != nil {
 		return fmt.Errorf("parsing IPv4 root: %w", err)
 	}
@@ -438,42 +591,22 @@ func (t *Tree) insertReservedNetworks() error {
 }
 
 // Get the value for the given IP address from the tree. If the nil interface
-// is returned, that means the tree does not have a value for the IP.
-func (t *Tree) Get(ip net.IP) (*net.IPNet, mmdbtype.DataType) {
-	lookupIP := ip
-
-	if t.treeDepth == 128 {
-		// We use To4() here as Go will parse an IPv4 address to a 16 byte
-		// IPv6-mapped IPv4 address, e.g.:
-		//
-		// len(net.ParseIP("1.1.1.1")) == 16
-		//
-		// The parsed address above is equal to ::ffff:1.1.1.1. However,
-		// the MaxMind DB format has the record for 1.1.1.1 at ::1.1.1.1.
-		if ipv4 := ip.To4(); ipv4 != nil {
-			lookupIP = ipV4ToV6(ipv4)
-
-			// This simplifies the logic around creating the IPNet. If we didn't
-			// do this, we would need to specifically adjust the prefix length
-			// when creating the mask and we would also need to worry about
-			// what to do if there isn't an IPv4 tree.
-			ip = ip.To16()
-		}
+// is returned, that means the tree does not have a value for the IP. If ip is
+// invalid or cannot be looked up in this tree's IP version, the returned prefix
+// is the zero value.
+func (t *Tree) Get(ip netip.Addr) (netip.Prefix, mmdbtype.DataType) {
+	lookupIP, ok := t.lookupIP(ip)
+	if !ok {
+		return netip.Prefix{}, nil
 	}
-
 	prefixLen, r := t.root.get(lookupIP, 0)
-
-	mask := net.CIDRMask(prefixLen, t.treeDepth)
 
 	var value mmdbtype.DataType
 	if r.recordType == recordTypeData {
 		value = r.value.data
 	}
 
-	return &net.IPNet{
-		IP:   ip.Mask(mask),
-		Mask: mask,
-	}, value
+	return t.getPrefixForAddr(ip, prefixLen), value
 }
 
 // finalize prepares the tree for writing. It is not threadsafe.
@@ -656,12 +789,6 @@ func (t *Tree) copyNode(buf []byte, n *node, dataWriter *dataWriter) error {
 		return fmt.Errorf("unsupported record size of %d", t.recordSize)
 	}
 	return nil
-}
-
-var v4Prefix = net.IP{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
-
-func ipV4ToV6(ip net.IP) net.IP {
-	return append(v4Prefix, ip...)
 }
 
 func (t *Tree) writeMetadata(dw *dataWriter) (int64, error) {

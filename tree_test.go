@@ -2,9 +2,9 @@ package mmdbwriter
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"math/big"
-	"net"
 	"net/netip"
 	"os"
 	"strings"
@@ -15,8 +15,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/maxmind/mmdbwriter/inserter"
-	"github.com/maxmind/mmdbwriter/mmdbtype"
+	"github.com/maxmind/mmdbwriter/v2/inserter"
+	"github.com/maxmind/mmdbwriter/v2/mmdbtype"
 )
 
 type testInsert struct {
@@ -39,6 +39,239 @@ type testGet struct {
 	expectedNetwork     string
 	expectedGetValue    mmdbtype.DataType
 	expectedLookupValue *any
+}
+
+func TestTreeInsert(t *testing.T) {
+	tree, err := New(Options{
+		IncludeReservedNetworks: true,
+	})
+	require.NoError(t, err)
+
+	value := mmdbtype.Map{"name": mmdbtype.String("test")}
+	err = tree.Insert(netip.MustParsePrefix("1.2.3.0/24"), value)
+	require.NoError(t, err)
+
+	network, got := tree.Get(netip.MustParseAddr("1.2.3.4"))
+	assert.Equal(t, "1.2.3.0/24", network.String())
+	assert.Equal(t, value, got)
+}
+
+func TestTreeInsertFunc(t *testing.T) {
+	tree, err := New(Options{
+		IPVersion:               4,
+		IncludeReservedNetworks: true,
+	})
+	require.NoError(t, err)
+
+	err = tree.Insert(
+		netip.MustParsePrefix("1.2.3.0/24"),
+		mmdbtype.Map{"base": mmdbtype.String("value")},
+	)
+	require.NoError(t, err)
+
+	err = tree.InsertFunc(
+		netip.MustParsePrefix("1.2.3.0/25"),
+		inserter.TopLevelMergeWith(mmdbtype.Map{"extra": mmdbtype.String("value")}),
+	)
+	require.NoError(t, err)
+
+	network, got := tree.Get(netip.MustParseAddr("1.2.3.4"))
+	assert.Equal(t, "1.2.3.0/25", network.String())
+	assert.Equal(t, mmdbtype.Map{
+		"base":  mmdbtype.String("value"),
+		"extra": mmdbtype.String("value"),
+	}, got)
+}
+
+func TestTreeInsertInvalid(t *testing.T) {
+	tree, err := New(Options{
+		IPVersion:               4,
+		IncludeReservedNetworks: true,
+	})
+	require.NoError(t, err)
+
+	err = tree.Insert(netip.Prefix{}, mmdbtype.Map{})
+	require.EqualError(t, err, "prefix is invalid")
+}
+
+func TestTreeInsertMasksPrefix(t *testing.T) {
+	tree, err := New(Options{
+		IPVersion:               4,
+		IncludeReservedNetworks: true,
+	})
+	require.NoError(t, err)
+
+	value := mmdbtype.String("value")
+	err = tree.Insert(netip.PrefixFrom(netip.MustParseAddr("1.2.3.4"), 24), value)
+	require.NoError(t, err)
+
+	network, got := tree.Get(netip.MustParseAddr("1.2.3.5"))
+	assert.Equal(t, netip.MustParsePrefix("1.2.3.0/24"), network)
+	assert.Equal(t, value, got)
+}
+
+func TestTreeInsertIPv4MappedPrefix(t *testing.T) {
+	tests := []struct {
+		name string
+		opts Options
+	}{
+		{
+			name: "IPv6 tree",
+			opts: Options{IncludeReservedNetworks: true},
+		},
+		{
+			name: "IPv4 tree",
+			opts: Options{
+				IPVersion:               4,
+				IncludeReservedNetworks: true,
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			tree, err := New(test.opts)
+			require.NoError(t, err)
+
+			value := mmdbtype.String("value")
+			err = tree.Insert(netip.MustParsePrefix("::ffff:1.2.3.0/120"), value)
+			require.NoError(t, err)
+
+			network, got := tree.Get(netip.MustParseAddr("1.2.3.1"))
+			assert.Equal(t, netip.MustParsePrefix("1.2.3.0/24"), network)
+			assert.Equal(t, value, got)
+		})
+	}
+}
+
+func TestTreeInsertIPv4MappedPrefixShorterThan96(t *testing.T) {
+	tree, err := New(Options{IncludeReservedNetworks: true})
+	require.NoError(t, err)
+
+	err = tree.Insert(
+		netip.PrefixFrom(netip.MustParseAddr("::ffff:1.2.3.4"), 95),
+		mmdbtype.String("value"),
+	)
+	require.EqualError(t, err, "IPv4-mapped prefixes shorter than /96 cannot be inserted")
+}
+
+func TestTreeNormalizeLoadPrefixIPv4Mapped(t *testing.T) {
+	tree, err := New(Options{IncludeReservedNetworks: true})
+	require.NoError(t, err)
+
+	prefix, err := tree.normalizeLoadPrefix(netip.MustParsePrefix("::ffff:1.2.3.0/120"))
+	require.NoError(t, err)
+	assert.Equal(t, netip.MustParsePrefix("1.2.3.0/24"), prefix)
+
+	_, err = tree.normalizeLoadPrefix(
+		netip.PrefixFrom(netip.MustParseAddr("::ffff:1.2.3.4"), 95),
+	)
+	require.EqualError(
+		t,
+		err,
+		"normalizing loaded network ::ffff:1.2.3.4/95: IPv4-mapped prefixes shorter than /96 cannot be inserted",
+	)
+}
+
+func TestTreeInsertIPv6IntoIPv4Tree(t *testing.T) {
+	tree, err := New(Options{
+		IPVersion:               4,
+		IncludeReservedNetworks: true,
+	})
+	require.NoError(t, err)
+
+	err = tree.Insert(
+		netip.MustParsePrefix("2001:db8::/32"),
+		mmdbtype.String("value"),
+	)
+	require.EqualError(t, err, "IPv6 prefixes cannot be inserted into an IPv4 tree")
+
+	err = tree.InsertRange(
+		netip.MustParseAddr("2001:db8::1"),
+		netip.MustParseAddr("2001:db8::1"),
+		mmdbtype.String("value"),
+	)
+	require.EqualError(t, err, "IPv6 ranges cannot be inserted into an IPv4 tree")
+
+	err = tree.InsertRange(netip.Addr{}, netip.MustParseAddr("1.2.3.4"), mmdbtype.String("value"))
+	require.EqualError(t, err, "start IP is invalid")
+}
+
+func TestTreeInsertIPv4TreeReservedNetworkError(t *testing.T) {
+	tree, err := New(Options{IPVersion: 4})
+	require.NoError(t, err)
+
+	err = tree.Insert(netip.MustParsePrefix("10.0.0.1/32"), mmdbtype.String("value"))
+	require.EqualError(
+		t,
+		err,
+		"attempt to insert 10.0.0.1/32 into 10.0.0.0/8, which is a reserved network",
+	)
+
+	var reservedErr *ReservedNetworkError
+	require.ErrorAs(t, err, &reservedErr)
+	assert.Equal(t, netip.MustParsePrefix("10.0.0.1/32"), reservedErr.InsertedNetwork)
+	assert.Equal(t, netip.MustParsePrefix("10.0.0.0/8"), reservedErr.ReservedNetwork)
+}
+
+func TestTreeGetIPv4AddressForShortIPv6Prefix(t *testing.T) {
+	tree, err := New(Options{
+		DisableIPv4Aliasing:     true,
+		IncludeReservedNetworks: true,
+	})
+	require.NoError(t, err)
+
+	value := mmdbtype.String("value")
+	require.NoError(t, tree.Insert(netip.MustParsePrefix("::/90"), value))
+
+	network, got := tree.Get(netip.MustParseAddr("1.2.3.4"))
+	assert.Equal(t, netip.MustParsePrefix("::/90"), network)
+	assert.Equal(t, value, got)
+}
+
+func TestTreeGetInvalidOrWrongFamilyReturnsZeroPrefix(t *testing.T) {
+	tree, err := New(Options{
+		IPVersion:               4,
+		IncludeReservedNetworks: true,
+	})
+	require.NoError(t, err)
+
+	network, got := tree.Get(netip.Addr{})
+	assert.Equal(t, netip.Prefix{}, network)
+	assert.Nil(t, got)
+
+	network, got = tree.Get(netip.MustParseAddr("2001:db8::1"))
+	assert.Equal(t, netip.Prefix{}, network)
+	assert.Nil(t, got)
+}
+
+func TestLoadWrapsInsertErrorWithNetwork(t *testing.T) {
+	tree, err := New(Options{
+		DisableIPv4Aliasing:     true,
+		IncludeReservedNetworks: true,
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, tree.Insert(
+		netip.MustParsePrefix("2001:db8::/32"),
+		mmdbtype.String("value"),
+	))
+
+	f, err := os.CreateTemp(t.TempDir(), "mmdbwriter-load-error-*.mmdb")
+	require.NoError(t, err)
+	defer func() { require.NoError(t, os.Remove(f.Name())) }()
+
+	_, err = tree.WriteTo(f)
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	_, err = Load(f.Name(), Options{
+		IPVersion:               4,
+		IncludeReservedNetworks: true,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "loading network 2001:db8::/32")
+	assert.Contains(t, err.Error(), "IPv6 prefixes cannot be inserted into an IPv4 tree")
 }
 
 func TestTreeInsertAndGet(t *testing.T) {
@@ -628,15 +861,13 @@ func TestTreeInsertAndGet(t *testing.T) {
 					switch test.insertType {
 					case "", "net":
 						for _, insert := range test.inserts {
-							//nolint:forbidigo // code predates netip
-							_, network, err := net.ParseCIDR(insert.network)
+							network, err := netip.ParsePrefix(insert.network)
 							require.NoError(t, err)
 
 							require.NoError(t, tree.Insert(network, insert.value))
 						}
 						for _, insert := range test.insertErrors {
-							//nolint:forbidigo // code predates netip
-							_, network, err := net.ParseCIDR(insert.network)
+							network, err := netip.ParsePrefix(insert.network)
 							require.NoError(t, err)
 
 							err = tree.Insert(network, insert.value)
@@ -645,22 +876,18 @@ func TestTreeInsertAndGet(t *testing.T) {
 						}
 					case "range":
 						for _, insert := range test.inserts {
-							//nolint:forbidigo // code predates netip
-							start := net.ParseIP(insert.start)
-							require.NotNil(t, start)
-							//nolint:forbidigo // code predates netip
-							end := net.ParseIP(insert.end)
-							require.NotNil(t, end)
+							start, err := netip.ParseAddr(insert.start)
+							require.NoError(t, err)
+							end, err := netip.ParseAddr(insert.end)
+							require.NoError(t, err)
 
 							require.NoError(t, tree.InsertRange(start, end, insert.value))
 						}
 						for _, insert := range test.insertErrors {
-							//nolint:forbidigo // code predates netip
-							start := net.ParseIP(insert.start)
-							require.NotNil(t, start)
-							//nolint:forbidigo // code predates netip
-							end := net.ParseIP(insert.end)
-							require.NotNil(t, end)
+							start, err := netip.ParseAddr(insert.start)
+							require.NoError(t, err)
+							end, err := netip.ParseAddr(insert.end)
+							require.NoError(t, err)
 
 							err = tree.InsertRange(start, end, insert.value)
 							require.EqualError(t, err, insert.expectedErrorMsg)
@@ -670,8 +897,7 @@ func TestTreeInsertAndGet(t *testing.T) {
 					tree.finalize()
 
 					for _, get := range test.gets {
-						//nolint:forbidigo // code predates netip
-						network, value := tree.Get(net.ParseIP(get.ip))
+						network, value := tree.Get(netip.MustParseAddr(get.ip))
 
 						assert.Equal(
 							t,
@@ -774,24 +1000,19 @@ func TestInsertFunc_RemovalAndLaterInsert(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	//nolint:forbidigo // code predates netip
-	_, network, err := net.ParseCIDR("::1.1.1.0/120")
-	require.NoError(t, err)
+	network := netip.MustParsePrefix("::1.1.1.0/120")
 
 	value := mmdbtype.String("value")
 	require.NoError(t, tree.Insert(network, value))
 
-	//nolint:forbidigo // code predates netip
-	ip := net.ParseIP("::1.1.1.1")
+	ip := netip.MustParseAddr("::1.1.1.1")
 
 	recNetwork, recValue := tree.Get(ip)
 
 	assert.Equal(t, network, recNetwork)
 	assert.Equal(t, value, recValue)
 
-	//nolint:forbidigo // code predates netip
-	_, removedNetwork, err := net.ParseCIDR("::1.1.1.1/128")
-	require.NoError(t, err)
+	removedNetwork := netip.MustParsePrefix("::1.1.1.1/128")
 
 	err = tree.InsertFunc(
 		removedNetwork,
@@ -819,24 +1040,22 @@ func TestInsertFunc_RemovalAndLaterInsert(t *testing.T) {
 }
 
 // See GitHub #62.
-func TestGet_4ByteIPIn128BitTree(t *testing.T) {
+func TestGet_IPv4MappedIn128BitTree(t *testing.T) {
 	writer, err := New(Options{DatabaseType: "GitHub #62"})
 	require.NoError(t, err)
 
-	//nolint:forbidigo // code predates netip
-	ip, network, err := net.ParseCIDR("1.0.0.0/24")
-	require.NoError(t, err)
+	network := netip.MustParsePrefix("1.0.0.0/24")
 
 	err = writer.Insert(network, mmdbtype.Map{"country_code": mmdbtype.String("AU")})
 	require.NoError(t, err)
 
-	getNetwork, _ := writer.Get(ip.To4())
+	getNetwork, _ := writer.Get(netip.MustParseAddr("1.0.0.1"))
 
-	assert.Equal(t, network.String(), getNetwork.String(), "4-byte lookup")
+	assert.Equal(t, network.String(), getNetwork.String(), "IPv4 lookup")
 
-	getNetwork, _ = writer.Get(ip.To16())
+	getNetwork, _ = writer.Get(netip.MustParseAddr("::ffff:1.0.0.1"))
 
-	assert.Equal(t, network.String(), getNetwork.String(), "16-byte lookup")
+	assert.Equal(t, network.String(), getNetwork.String(), "IPv4-mapped lookup")
 }
 
 func s2ip(v string) *any {

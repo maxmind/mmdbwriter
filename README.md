@@ -1,6 +1,6 @@
 # Go MaxMind DB Writer
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/maxmind/mmdbwriter.svg)](https://pkg.go.dev/github.com/maxmind/mmdbwriter)
+[![Go Reference](https://pkg.go.dev/badge/github.com/maxmind/mmdbwriter/v2.svg)](https://pkg.go.dev/github.com/maxmind/mmdbwriter/v2)
 
 This is a Go writer for the
 [MaxMind DB format](https://github.com/maxmind/MaxMind-DB).
