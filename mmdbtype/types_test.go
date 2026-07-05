@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/hex"
 	"fmt"
+	"math"
 	"math/big"
 	"strings"
 	"testing"
@@ -71,6 +72,17 @@ func TestFloat32(t *testing.T) {
 	validateEncoding(t, floats)
 }
 
+func TestFloat32SpecialValues(t *testing.T) {
+	floats := map[string]DataType{
+		"04087fc00001": Float32(math.Float32frombits(0x7fc00001)),
+		"04087f800000": Float32(math.Float32frombits(0x7f800000)),
+		"0408ff800000": Float32(math.Float32frombits(0xff800000)),
+		"040880000000": Float32(math.Float32frombits(0x80000000)),
+		"040800000001": Float32(math.Float32frombits(0x00000001)),
+	}
+	validateEncoding(t, floats)
+}
+
 func TestFloat64(t *testing.T) {
 	float64s := map[string]DataType{
 		"680000000000000000": Float64(0.0),
@@ -83,6 +95,43 @@ func TestFloat64(t *testing.T) {
 		"68c1d000000007f8f4": Float64(-1073741824.12457),
 	}
 	validateEncoding(t, float64s)
+}
+
+func TestFloat64SpecialValues(t *testing.T) {
+	float64s := map[string]DataType{
+		"687ff8000000000001": Float64(math.Float64frombits(0x7ff8000000000001)),
+		"687ff0000000000000": Float64(math.Float64frombits(0x7ff0000000000000)),
+		"68fff0000000000000": Float64(math.Float64frombits(0xfff0000000000000)),
+		"688000000000000000": Float64(math.Float64frombits(0x8000000000000000)),
+		"680000000000000001": Float64(math.Float64frombits(0x0000000000000001)),
+	}
+	validateEncoding(t, float64s)
+}
+
+func BenchmarkFloatWriteTo(b *testing.B) {
+	benchmarks := []struct {
+		name  string
+		value DataType
+	}{
+		{name: "Float32", value: Float32(3.14159)},
+		{name: "Float64", value: Float64(3.14159265359)},
+	}
+
+	for _, bm := range benchmarks {
+		b.Run(bm.name, func(b *testing.B) {
+			w := &dataWriter{Buffer: bytes.NewBuffer(make([]byte, 0, 9))}
+
+			b.ReportAllocs()
+			b.ResetTimer()
+
+			for range b.N {
+				w.Reset()
+				if _, err := bm.value.WriteTo(w); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
 }
 
 func TestInt32(t *testing.T) {

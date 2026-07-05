@@ -3,9 +3,9 @@ package mmdbtype
 
 import (
 	"bytes"
-	"encoding/binary"
 	"fmt"
 	"io"
+	"math"
 	"math/big"
 	"math/bits"
 	"reflect"
@@ -191,11 +191,15 @@ func (t Float32) WriteTo(w writer) (int64, error) {
 		return numBytes, err
 	}
 
-	err = binary.Write(w, binary.BigEndian, t)
-	if err != nil {
-		return numBytes, fmt.Errorf("writing %f as float32: %w", t, err)
+	size := t.size()
+	raw := math.Float32bits(float32(t))
+	for i := size; i > 0; i-- {
+		err = w.WriteByte(byte((raw >> (8 * (i - 1))) & 0xFF))
+		if err != nil {
+			return numBytes + int64(size-i), fmt.Errorf("writing %f as float32: %w", t, err)
+		}
 	}
-	return numBytes + int64(t.size()), nil
+	return numBytes + int64(size), nil
 }
 
 // Float64 is the MaxMind DB double type.
@@ -237,11 +241,15 @@ func (t Float64) WriteTo(w writer) (int64, error) {
 		return numBytes, err
 	}
 
-	err = binary.Write(w, binary.BigEndian, t)
-	if err != nil {
-		return numBytes, fmt.Errorf("writing %f as float64: %w", t, err)
+	size := t.size()
+	raw := math.Float64bits(float64(t))
+	for i := size; i > 0; i-- {
+		err = w.WriteByte(byte((raw >> (8 * (i - 1))) & 0xFF))
+		if err != nil {
+			return numBytes + int64(size-i), fmt.Errorf("writing %f as float64: %w", t, err)
+		}
 	}
-	return numBytes + int64(t.size()), nil
+	return numBytes + int64(size), nil
 }
 
 // Int32 is the MaxMind DB signed 32-bit integer type.
