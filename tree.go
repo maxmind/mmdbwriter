@@ -90,6 +90,9 @@ type Options struct {
 	// The default key generator serializes the value and generates a
 	// SHA-256 hash from it. Although this is relatively safe, it can be
 	// resource intensive for large data structures.
+	//
+	// Values passed to the key generator must not be modified after insertion as
+	// the tree may retain and deduplicate them.
 	KeyGenerator KeyGenerator
 }
 
@@ -243,6 +246,9 @@ func Load(path string, opts Options) (*Tree, error) {
 
 // Insert a data value into the tree using the Tree's inserter function
 // (defaults to inserter.ReplaceWith).
+//
+// You must never modify the value after insertion as values may be shared with
+// other records.
 //
 // This is not safe to call from multiple threads.
 func (t *Tree) Insert(network *net.IPNet, value mmdbtype.DataType) error {

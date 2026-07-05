@@ -43,6 +43,13 @@ type insertRecord struct {
 	value      mmdbtype.DataType
 }
 
+func (iRec insertRecord) storeData(v mmdbtype.DataType) (*dataMapValue, error) {
+	if iRec.inserter == nil {
+		return iRec.dataMap.storeWithIdentity(v)
+	}
+	return iRec.dataMap.store(v)
+}
+
 func (n *node) insert(iRec insertRecord, currentDepth int) error {
 	newDepth := currentDepth + 1
 	// Check if we are inside the network already
@@ -98,7 +105,7 @@ func (r *record) insert(
 					r.value = nil
 				} else if oldData == nil || !oldData.Equal(newData) {
 					iRec.dataMap.remove(r.value)
-					value, err := iRec.dataMap.store(newData)
+					value, err := iRec.storeData(newData)
 					//nolint:revive //preexisting
 					if err != nil {
 						return err

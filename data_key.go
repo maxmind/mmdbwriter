@@ -19,6 +19,9 @@ import (
 // collision with two different values having the same key, one of the
 // values will be overwritten.
 //
+// Values passed to Key must not be modified after insertion as the tree may
+// retain and deduplicate them.
+//
 // The returned byte slice is not stored. You may use the same backing
 // array between calls.
 type KeyGenerator interface {
