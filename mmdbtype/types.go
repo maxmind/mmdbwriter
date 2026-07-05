@@ -90,7 +90,7 @@ func (t *Bool) UnmarshalMaxMindDB(decoder *mmdbdata.Decoder) error {
 
 // WriteTo writes the value to w.
 func (t Bool) WriteTo(w writer) (int64, error) {
-	return writeCtrlByte(w, t)
+	return writeCtrlByte(w, t.size(), t.typeNum())
 }
 
 // Bytes is the MaxMind DB bytes type.
@@ -138,7 +138,7 @@ func (t *Bytes) UnmarshalMaxMindDB(decoder *mmdbdata.Decoder) error {
 
 // WriteTo writes the value to w.
 func (t Bytes) WriteTo(w writer) (int64, error) {
-	numBytes, err := writeCtrlByte(w, t)
+	numBytes, err := writeCtrlByte(w, t.size(), t.typeNum())
 	if err != nil {
 		return numBytes, err
 	}
@@ -185,7 +185,7 @@ func (t *Float32) UnmarshalMaxMindDB(decoder *mmdbdata.Decoder) error {
 
 // WriteTo writes the value to w.
 func (t Float32) WriteTo(w writer) (int64, error) {
-	numBytes, err := writeCtrlByte(w, t)
+	numBytes, err := writeCtrlByte(w, t.size(), t.typeNum())
 	if err != nil {
 		return numBytes, err
 	}
@@ -231,7 +231,7 @@ func (t *Float64) UnmarshalMaxMindDB(decoder *mmdbdata.Decoder) error {
 
 // WriteTo writes the value to w.
 func (t Float64) WriteTo(w writer) (int64, error) {
-	numBytes, err := writeCtrlByte(w, t)
+	numBytes, err := writeCtrlByte(w, t.size(), t.typeNum())
 	if err != nil {
 		return numBytes, err
 	}
@@ -278,7 +278,7 @@ func (t *Int32) UnmarshalMaxMindDB(decoder *mmdbdata.Decoder) error {
 
 // WriteTo writes the value to w.
 func (t Int32) WriteTo(w writer) (int64, error) {
-	numBytes, err := writeCtrlByte(w, t)
+	numBytes, err := writeCtrlByte(w, t.size(), t.typeNum())
 	if err != nil {
 		return numBytes, err
 	}
@@ -371,7 +371,7 @@ func (t *Map) unmarshalMaxMindDB(decoder *mmdbdata.Decoder, cache map[uint]DataT
 
 // WriteTo writes the value to w.
 func (t Map) WriteTo(w writer) (int64, error) {
-	numBytes, err := writeCtrlByte(w, t)
+	numBytes, err := writeCtrlByte(w, t.size(), t.typeNum())
 	if err != nil {
 		return numBytes, err
 	}
@@ -606,7 +606,7 @@ func (t *Slice) unmarshalMaxMindDB(decoder *mmdbdata.Decoder, cache map[uint]Dat
 
 // WriteTo writes the value to w.
 func (t Slice) WriteTo(w writer) (int64, error) {
-	numBytes, err := writeCtrlByte(w, t)
+	numBytes, err := writeCtrlByte(w, t.size(), t.typeNum())
 	if err != nil {
 		return numBytes, err
 	}
@@ -655,7 +655,7 @@ func (t *String) UnmarshalMaxMindDB(decoder *mmdbdata.Decoder) error {
 
 // WriteTo writes the value to w.
 func (t String) WriteTo(w writer) (int64, error) {
-	numBytes, err := writeCtrlByte(w, t)
+	numBytes, err := writeCtrlByte(w, t.size(), t.typeNum())
 	if err != nil {
 		return numBytes, err
 	}
@@ -702,7 +702,7 @@ func (t *Uint16) UnmarshalMaxMindDB(decoder *mmdbdata.Decoder) error {
 
 // WriteTo writes the value to w.
 func (t Uint16) WriteTo(w writer) (int64, error) {
-	numBytes, err := writeCtrlByte(w, t)
+	numBytes, err := writeCtrlByte(w, t.size(), t.typeNum())
 	if err != nil {
 		return numBytes, err
 	}
@@ -752,7 +752,7 @@ func (t *Uint32) UnmarshalMaxMindDB(decoder *mmdbdata.Decoder) error {
 
 // WriteTo writes the value to w.
 func (t Uint32) WriteTo(w writer) (int64, error) {
-	numBytes, err := writeCtrlByte(w, t)
+	numBytes, err := writeCtrlByte(w, t.size(), t.typeNum())
 	if err != nil {
 		return numBytes, err
 	}
@@ -802,7 +802,7 @@ func (t *Uint64) UnmarshalMaxMindDB(decoder *mmdbdata.Decoder) error {
 
 // WriteTo writes the value to w.
 func (t Uint64) WriteTo(w writer) (int64, error) {
-	numBytes, err := writeCtrlByte(w, t)
+	numBytes, err := writeCtrlByte(w, t.size(), t.typeNum())
 	if err != nil {
 		return numBytes, err
 	}
@@ -864,7 +864,7 @@ func (t *Uint128) UnmarshalMaxMindDB(decoder *mmdbdata.Decoder) error {
 
 // WriteTo writes the value to w.
 func (t *Uint128) WriteTo(w writer) (int64, error) {
-	numBytes, err := writeCtrlByte(w, t)
+	numBytes, err := writeCtrlByte(w, t.size(), t.typeNum())
 	if err != nil {
 		return numBytes, err
 	}
@@ -884,11 +884,7 @@ const (
 	maxSize    = thirdSize + (1 << 24)
 )
 
-func writeCtrlByte(w writer, t DataType) (int64, error) {
-	size := t.size()
-
-	typeN := t.typeNum()
-
+func writeCtrlByte(w writer, size int, typeN typeNum) (int64, error) {
 	var firstByte byte
 	var secondByte byte
 
