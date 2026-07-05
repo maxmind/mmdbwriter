@@ -1,6 +1,7 @@
 package inserter
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -8,6 +9,8 @@ import (
 
 	"github.com/maxmind/mmdbwriter/mmdbtype"
 )
+
+var benchmarkMergeValue mmdbtype.DataType
 
 func TestRemove(t *testing.T) {
 	v, err := Remove(mmdbtype.Map{})
@@ -90,6 +93,105 @@ func TestTopLevelMergeWith(t *testing.T) {
 			assert.Equal(t, test.expected, v)
 		}
 	}
+}
+
+func BenchmarkTopLevelMergeWithOverwriteHeavy(b *testing.B) {
+	existing := benchmarkFlatMap("existing", 0, 64)
+	newValue := benchmarkFlatMap("new", 0, 64)
+	merge := TopLevelMergeWith(newValue)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for range b.N {
+		value, err := merge(existing)
+		if err != nil {
+			b.Fatal(err)
+		}
+		benchmarkMergeValue = value
+	}
+}
+
+func BenchmarkTopLevelMergeWithAdditive(b *testing.B) {
+	existing := benchmarkFlatMap("existing", 0, 64)
+	newValue := benchmarkFlatMap("new", 64, 16)
+	merge := TopLevelMergeWith(newValue)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for range b.N {
+		value, err := merge(existing)
+		if err != nil {
+			b.Fatal(err)
+		}
+		benchmarkMergeValue = value
+	}
+}
+
+func BenchmarkDeepMergeWithNestedOverwrite(b *testing.B) {
+	existing := benchmarkNestedMap("existing", 0, 16)
+	newValue := benchmarkNestedMap("new", 0, 16)
+	merge := DeepMergeWith(newValue)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for range b.N {
+		value, err := merge(existing)
+		if err != nil {
+			b.Fatal(err)
+		}
+		benchmarkMergeValue = value
+	}
+}
+
+func BenchmarkDeepMergeWithNestedAdditive(b *testing.B) {
+	existing := benchmarkNestedMap("existing", 0, 16)
+	newValue := benchmarkNestedMap("new", 16, 4)
+	merge := DeepMergeWith(newValue)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for range b.N {
+		value, err := merge(existing)
+		if err != nil {
+			b.Fatal(err)
+		}
+		benchmarkMergeValue = value
+	}
+}
+
+func benchmarkFlatMap(valuePrefix string, start, count int) mmdbtype.Map {
+	m := make(mmdbtype.Map, count)
+	for i := range count {
+		key := mmdbtype.String(fmt.Sprintf("key-%02d", start+i))
+		m[key] = mmdbtype.String(fmt.Sprintf("%s-%02d", valuePrefix, i))
+	}
+	return m
+}
+
+func benchmarkNestedMap(
+	valuePrefix string,
+	start int,
+	groups int,
+) mmdbtype.Map {
+	const fields = 8
+
+	m := make(mmdbtype.Map, groups)
+	for group := range groups {
+		nested := make(mmdbtype.Map, fields)
+		for field := range fields {
+			key := mmdbtype.String(fmt.Sprintf("field-%02d", field))
+			nested[key] = mmdbtype.String(
+				fmt.Sprintf("%s-%02d-%02d", valuePrefix, group, field),
+			)
+		}
+		key := mmdbtype.String(fmt.Sprintf("section-%02d", start+group))
+		m[key] = nested
+	}
+	return m
 }
 
 func TestDeepMergeWith(t *testing.T) {
