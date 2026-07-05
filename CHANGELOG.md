@@ -16,7 +16,10 @@
   new value directly. This removes per-insertion closure generation from merge
   insertion paths. `inserter.ReplaceWith`, `inserter.TopLevelMergeWith`, and
   `inserter.DeepMergeWith` are replaced by `inserter.Replace`,
-  `inserter.TopLevelMerge`, and `inserter.DeepMerge`.
+  `inserter.TopLevelMerge`, and `inserter.DeepMerge`. `inserter.FuncGenerator`
+  was removed, `Options.Inserter` now accepts `inserter.Func`, and
+  `Tree.InsertFunc` and `Tree.InsertRangeFunc` now take the new value as an
+  argument.
 - Reduced allocations on the tree insert and serialization hot paths, lowering
   memory pressure and GC overhead during large builds.
 

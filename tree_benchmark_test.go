@@ -52,7 +52,7 @@ func BenchmarkTreeInsertTopLevelMergeOverlappingPasses(b *testing.B) {
 	for range b.N {
 		tree := newBenchmarkTree(b)
 		for _, spec := range specs {
-			err := tree.InsertFunc(spec.network, inserter.TopLevelMergeWith(spec.value))
+			err := tree.InsertFunc(spec.network, spec.value, inserter.TopLevelMerge)
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -70,7 +70,7 @@ func BenchmarkTreeInsertDeepMergeOverlappingPasses(b *testing.B) {
 	for range b.N {
 		tree := newBenchmarkTree(b)
 		for _, spec := range specs {
-			err := tree.InsertFunc(spec.network, inserter.DeepMergeWith(spec.value))
+			err := tree.InsertFunc(spec.network, spec.value, inserter.DeepMerge)
 			if err != nil {
 				b.Fatal(err)
 			}

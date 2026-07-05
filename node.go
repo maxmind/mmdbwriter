@@ -30,7 +30,7 @@ type node struct {
 }
 
 type insertRecord struct {
-	inserter func(value mmdbtype.DataType) (mmdbtype.DataType, error)
+	inserter func(existingValue, newValue mmdbtype.DataType) (mmdbtype.DataType, error)
 
 	dataMap      *dataMap
 	tree         *Tree
@@ -94,7 +94,7 @@ func (r *record) insert(
 				newData := iRec.value
 				if iRec.inserter != nil {
 					var err error
-					newData, err = iRec.inserter(oldData)
+					newData, err = iRec.inserter(oldData, iRec.value)
 					if err != nil {
 						return err
 					}

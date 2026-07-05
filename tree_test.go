@@ -71,7 +71,8 @@ func TestTreeInsertFunc(t *testing.T) {
 
 	err = tree.InsertFunc(
 		netip.MustParsePrefix("1.2.3.0/25"),
-		inserter.TopLevelMergeWith(mmdbtype.Map{"extra": mmdbtype.String("value")}),
+		mmdbtype.Map{"extra": mmdbtype.String("value")},
+		inserter.TopLevelMerge,
 	)
 	require.NoError(t, err)
 
@@ -81,6 +82,67 @@ func TestTreeInsertFunc(t *testing.T) {
 		"base":  mmdbtype.String("value"),
 		"extra": mmdbtype.String("value"),
 	}, got)
+}
+
+func TestTreeOptionsInserter(t *testing.T) {
+	tree, err := New(Options{
+		IPVersion:               4,
+		IncludeReservedNetworks: true,
+		Inserter:                inserter.TopLevelMerge,
+	})
+	require.NoError(t, err)
+
+	err = tree.Insert(
+		netip.MustParsePrefix("1.2.3.0/24"),
+		mmdbtype.Map{"base": mmdbtype.String("value")},
+	)
+	require.NoError(t, err)
+
+	err = tree.Insert(
+		netip.MustParsePrefix("1.2.3.0/25"),
+		mmdbtype.Map{"extra": mmdbtype.String("value")},
+	)
+	require.NoError(t, err)
+
+	network, got := tree.Get(netip.MustParseAddr("1.2.3.4"))
+	assert.Equal(t, "1.2.3.0/25", network.String())
+	assert.Equal(t, mmdbtype.Map{
+		"base":  mmdbtype.String("value"),
+		"extra": mmdbtype.String("value"),
+	}, got)
+
+	network, got = tree.Get(netip.MustParseAddr("1.2.3.200"))
+	assert.Equal(t, "1.2.3.128/25", network.String())
+	assert.Equal(t, mmdbtype.Map{"base": mmdbtype.String("value")}, got)
+}
+
+func TestTreeInsertCompressedPathBeforeFinalize(t *testing.T) {
+	tree, err := New(Options{
+		IPVersion:               4,
+		IncludeReservedNetworks: true,
+	})
+	require.NoError(t, err)
+
+	base := mmdbtype.Map{"name": mmdbtype.String("base")}
+	require.NoError(t, tree.Insert(netip.MustParsePrefix("11.0.0.0/8"), base))
+	assert.Equal(t, 1, tree.nodeCountAllocated)
+
+	network, got := tree.Get(netip.MustParseAddr("11.1.2.3"))
+	assert.Equal(t, "11.0.0.0/8", network.String())
+	assert.Equal(t, base, got)
+
+	_, got = tree.Get(netip.MustParseAddr("12.1.2.3"))
+	assert.Nil(t, got)
+
+	specific := mmdbtype.Map{"name": mmdbtype.String("specific")}
+	require.NoError(t, tree.Insert(netip.MustParsePrefix("11.2.0.0/16"), specific))
+
+	network, got = tree.Get(netip.MustParseAddr("11.2.3.4"))
+	assert.Equal(t, "11.2.0.0/16", network.String())
+	assert.Equal(t, specific, got)
+
+	_, got = tree.Get(netip.MustParseAddr("11.3.3.4"))
+	assert.Equal(t, base, got)
 }
 
 func TestTreeInsertInvalid(t *testing.T) {
@@ -1016,6 +1078,7 @@ func TestInsertFunc_RemovalAndLaterInsert(t *testing.T) {
 
 	err = tree.InsertFunc(
 		removedNetwork,
+		nil,
 		inserter.Remove,
 	)
 	require.NoError(t, err)
@@ -1027,7 +1090,8 @@ func TestInsertFunc_RemovalAndLaterInsert(t *testing.T) {
 
 	err = tree.InsertFunc(
 		removedNetwork,
-		func(v mmdbtype.DataType) (mmdbtype.DataType, error) {
+		nil,
+		func(v, _ mmdbtype.DataType) (mmdbtype.DataType, error) {
 			return v, nil
 		},
 	)

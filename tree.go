@@ -76,10 +76,12 @@ type Options struct {
 	// use should primarily be limited to existing database types.
 	DisableMetadataPointers bool
 
-	// Inserter is the insert function used when calling `Insert`. It defaults
-	// to `inserter.ReplaceWith`, which replaces any conflicting old value
-	// entirely with the new.
-	Inserter inserter.FuncGenerator
+	// Inserter is the insert function used when calling `Insert`. Leaving it nil
+	// is equivalent to `inserter.Replace`, which replaces any conflicting old
+	// value entirely with the new, and allows Insert to use the default
+	// direct-value fast path. Passing `inserter.Replace` explicitly has the same
+	// behavior but skips that optimization.
+	Inserter inserter.Func
 
 	// KeyGenerator is used to generate unique keys for the top-level record
 	// values inserted into the database. This is used to deduplicate data
@@ -109,8 +111,8 @@ type Tree struct {
 	root                    *node
 	treeDepth               int
 	// This is set when the tree is finalized
-	nodeCount       int
-	inserterFuncGen inserter.FuncGenerator
+	nodeCount    int
+	inserterFunc inserter.Func
 }
 
 // New creates a new Tree.
@@ -152,7 +154,7 @@ func New(opts Options) (*Tree, error) {
 	}
 
 	if opts.Inserter != nil {
-		tree.inserterFuncGen = opts.Inserter
+		tree.inserterFunc = opts.Inserter
 	}
 
 	switch tree.ipVersion {
@@ -265,29 +267,28 @@ func (t *Tree) normalizeLoadPrefix(prefix netip.Prefix) (netip.Prefix, error) {
 }
 
 // Insert inserts a data value into the tree using the Tree's inserter function
-// (defaults to inserter.ReplaceWith).
+// (defaults to inserter.Replace).
 //
 // You must never modify the value after insertion as values may be shared with
 // other records.
 //
 // This is not safe to call from multiple threads.
 func (t *Tree) Insert(prefix netip.Prefix, value mmdbtype.DataType) error {
-	if t.inserterFuncGen == nil {
-		return t.insert(prefix, recordTypeData, nil, nil, value)
-	}
-	return t.InsertFunc(prefix, t.inserterFuncGen(value))
+	return t.insert(prefix, recordTypeData, t.inserterFunc, nil, value)
 }
 
-// InsertFunc will insert the output of the function passed to it. The argument
-// passed to the function is the existing value in the record. The inserter
-// function should return the mmdbtype.DataType to be inserted. In both cases,
-// a nil value means an empty record.
+// InsertFunc will insert the output of the function passed to it. The arguments
+// passed to the function are the existing value in the record and the new value
+// passed to InsertFunc. The inserter function should return the
+// mmdbtype.DataType to be inserted. In all cases, a nil value means an empty
+// record.
 //
-// You must never modify the argument passed to the function as the value may
-// be shared with other records. If you want a copy of the mmdbtype.DataType to modify,
-// call the Copy method on it, which will make a deep copy. This isn't done
-// automatically before calling the function as not all functions will require
-// the record to be copied and there is a non-trivial performance impact.
+// You must never modify arguments passed to the function as values may be
+// shared with other records. If you want a copy of the mmdbtype.DataType to
+// modify, call the Copy method on it, which will make a deep copy. This isn't
+// done automatically before calling the function as not all functions will
+// require the record to be copied and there is a non-trivial performance
+// impact.
 //
 // The function will be called multiple times per insert when the network
 // has multiple preexisting records associated with it.
@@ -295,9 +296,10 @@ func (t *Tree) Insert(prefix netip.Prefix, value mmdbtype.DataType) error {
 // This is not safe to call from multiple threads.
 func (t *Tree) InsertFunc(
 	prefix netip.Prefix,
+	value mmdbtype.DataType,
 	inserterFunc inserter.Func,
 ) error {
-	return t.insert(prefix, recordTypeData, inserterFunc, nil, nil)
+	return t.insert(prefix, recordTypeData, inserterFunc, nil, value)
 }
 
 func (t *Tree) insert(
@@ -481,10 +483,7 @@ func (t *Tree) InsertRange(
 	end netip.Addr,
 	value mmdbtype.DataType,
 ) error {
-	if t.inserterFuncGen == nil {
-		return t.insertRange(start, end, recordTypeData, nil, nil, value)
-	}
-	return t.InsertRangeFunc(start, end, t.inserterFuncGen(value))
+	return t.insertRange(start, end, recordTypeData, t.inserterFunc, nil, value)
 }
 
 // InsertRangeFunc is the same as InsertFunc, except it will insert all subnets
@@ -492,9 +491,10 @@ func (t *Tree) InsertRange(
 func (t *Tree) InsertRangeFunc(
 	start netip.Addr,
 	end netip.Addr,
+	value mmdbtype.DataType,
 	inserterFunc inserter.Func,
 ) error {
-	return t.insertRange(start, end, recordTypeData, inserterFunc, nil, nil)
+	return t.insertRange(start, end, recordTypeData, inserterFunc, nil, value)
 }
 
 func (t *Tree) insertRange(

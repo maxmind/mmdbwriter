@@ -9,72 +9,61 @@ import (
 	"github.com/maxmind/mmdbwriter/v2/mmdbtype"
 )
 
-// Func is a function that returns the data type to be inserted into an
-// mmdbwriter.Tree using some conflict resolution strategy.
-type Func func(mmdbtype.DataType) (mmdbtype.DataType, error)
-
-// FuncGenerator is a function that generates an Func given a
-// value.
-type FuncGenerator func(value mmdbtype.DataType) Func
+// Func resolves an insertion into a tree record. existingValue is nil for an
+// empty record, and newValue is the value passed to the insert method. Returning
+// nil leaves the record empty or removes the existing value.
+type Func func(existingValue, newValue mmdbtype.DataType) (mmdbtype.DataType, error)
 
 // Remove any records for the network being inserted.
-func Remove(_ mmdbtype.DataType) (mmdbtype.DataType, error) {
+func Remove(_, _ mmdbtype.DataType) (mmdbtype.DataType, error) {
 	return nil, nil
 }
 
-// ReplaceWith generates an inserter function that replaces the existing
-// value with the new value.
-func ReplaceWith(value mmdbtype.DataType) Func {
-	return func(_ mmdbtype.DataType) (mmdbtype.DataType, error) {
-		return value, nil
-	}
+// Replace replaces the existing value with the new value.
+func Replace(_, newValue mmdbtype.DataType) (mmdbtype.DataType, error) {
+	return newValue, nil
 }
 
-// TopLevelMergeWith creates an inserter for Map values that will update an
+// TopLevelMerge is an inserter for Map values that will update an
 // existing Map by adding the top-level keys and values from the new Map,
 // replacing any existing values for the keys.
 //
 // Both the new and existing value must be a Map. An error will be returned
 // otherwise.
-func TopLevelMergeWith(newValue mmdbtype.DataType) Func {
-	return func(existingValue mmdbtype.DataType) (mmdbtype.DataType, error) {
-		newMap, ok := newValue.(mmdbtype.Map)
-		if !ok {
-			return nil, fmt.Errorf(
-				"the new value is a %T, not a Map; TopLevelMergeWith only works if both values are Map values",
-				newValue,
-			)
-		}
-
-		if existingValue == nil {
-			return newValue, nil
-		}
-
-		// A possible optimization would be to not bother copying
-		// values that will be replaced.
-		existingMap, ok := existingValue.(mmdbtype.Map)
-		if !ok {
-			return nil, fmt.Errorf(
-				"the existing value is a %T, not a Map; TopLevelMergeWith only works if both values are Map values",
-				existingValue,
-			)
-		}
-
-		returnMap := make(mmdbtype.Map, len(existingMap)+len(newMap))
-		maps.Copy(returnMap, existingMap)
-		maps.Copy(returnMap, newMap)
-
-		return returnMap, nil
+func TopLevelMerge(existingValue, newValue mmdbtype.DataType) (mmdbtype.DataType, error) {
+	newMap, ok := newValue.(mmdbtype.Map)
+	if !ok {
+		return nil, fmt.Errorf(
+			"the new value is a %T, not a Map; TopLevelMerge only works if both values are Map values",
+			newValue,
+		)
 	}
+
+	if existingValue == nil {
+		return newValue, nil
+	}
+
+	// A possible optimization would be to not bother copying
+	// values that will be replaced.
+	existingMap, ok := existingValue.(mmdbtype.Map)
+	if !ok {
+		return nil, fmt.Errorf(
+			"the existing value is a %T, not a Map; TopLevelMerge only works if both values are Map values",
+			existingValue,
+		)
+	}
+
+	returnMap := make(mmdbtype.Map, len(existingMap)+len(newMap))
+	maps.Copy(returnMap, existingMap)
+	maps.Copy(returnMap, newMap)
+
+	return returnMap, nil
 }
 
-// DeepMergeWith creates an inserter that will recursively update an existing
-// value. Map and Slice values will be merged recursively. Other values will
-// be replaced by the new value.
-func DeepMergeWith(newValue mmdbtype.DataType) Func {
-	return func(existingValue mmdbtype.DataType) (mmdbtype.DataType, error) {
-		return deepMerge(existingValue, newValue)
-	}
+// DeepMerge recursively updates an existing value. Map and Slice values will be
+// merged recursively. Other values will be replaced by the new value.
+func DeepMerge(existingValue, newValue mmdbtype.DataType) (mmdbtype.DataType, error) {
+	return deepMerge(existingValue, newValue)
 }
 
 func deepMerge(existingValue, newValue mmdbtype.DataType) (mmdbtype.DataType, error) {

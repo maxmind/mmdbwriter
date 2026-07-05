@@ -13,18 +13,18 @@ import (
 var benchmarkMergeValue mmdbtype.DataType
 
 func TestRemove(t *testing.T) {
-	v, err := Remove(mmdbtype.Map{})
+	v, err := Remove(mmdbtype.Map{}, mmdbtype.Map{})
 	require.NoError(t, err)
 	assert.Nil(t, v)
 }
 
-func TestReplaceWith(t *testing.T) {
-	v, err := ReplaceWith(mmdbtype.Uint64(1))(mmdbtype.Bool(true))
+func TestReplace(t *testing.T) {
+	v, err := Replace(mmdbtype.Bool(true), mmdbtype.Uint64(1))
 	require.NoError(t, err)
 	assert.Equal(t, mmdbtype.Uint64(1), v)
 }
 
-func TestTopLevelMergeWith(t *testing.T) {
+func TestTopLevelMerge(t *testing.T) {
 	tests := []struct {
 		description string
 		existing    mmdbtype.DataType
@@ -38,21 +38,21 @@ func TestTopLevelMergeWith(t *testing.T) {
 			new:         nil,
 			expected:    nil,
 			expectedErr: "the new value is a <nil>, not a Map; " +
-				"TopLevelMergeWith only works if both values are Map values",
+				"TopLevelMerge only works if both values are Map values",
 		},
 		{
 			description: "existing slice, new map",
 			existing:    mmdbtype.Slice{},
 			new:         mmdbtype.Map{"a": mmdbtype.String("b")},
 			expectedErr: "the existing value is a mmdbtype.Slice, not a Map; " +
-				"TopLevelMergeWith only works if both values are Map values",
+				"TopLevelMerge only works if both values are Map values",
 		},
 		{
 			description: "existing map, new slice",
 			existing:    mmdbtype.Map{"a": mmdbtype.String("b")},
 			new:         mmdbtype.Slice{},
 			expectedErr: "the new value is a mmdbtype.Slice, not a Map; " +
-				"TopLevelMergeWith only works if both values are Map values",
+				"TopLevelMerge only works if both values are Map values",
 		},
 		{
 			description: "existing nil, new map",
@@ -85,7 +85,7 @@ func TestTopLevelMergeWith(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		v, err := TopLevelMergeWith(test.new)(test.existing)
+		v, err := TopLevelMerge(test.existing, test.new)
 		if test.expectedErr != "" {
 			require.EqualError(t, err, test.expectedErr)
 		} else {
@@ -95,16 +95,15 @@ func TestTopLevelMergeWith(t *testing.T) {
 	}
 }
 
-func BenchmarkTopLevelMergeWithOverwriteHeavy(b *testing.B) {
+func BenchmarkTopLevelMergeOverwriteHeavy(b *testing.B) {
 	existing := benchmarkFlatMap("existing", 0, 64)
 	newValue := benchmarkFlatMap("new", 0, 64)
-	merge := TopLevelMergeWith(newValue)
 
 	b.ReportAllocs()
 	b.ResetTimer()
 
 	for range b.N {
-		value, err := merge(existing)
+		value, err := TopLevelMerge(existing, newValue)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -112,16 +111,15 @@ func BenchmarkTopLevelMergeWithOverwriteHeavy(b *testing.B) {
 	}
 }
 
-func BenchmarkTopLevelMergeWithAdditive(b *testing.B) {
+func BenchmarkTopLevelMergeAdditive(b *testing.B) {
 	existing := benchmarkFlatMap("existing", 0, 64)
 	newValue := benchmarkFlatMap("new", 64, 16)
-	merge := TopLevelMergeWith(newValue)
 
 	b.ReportAllocs()
 	b.ResetTimer()
 
 	for range b.N {
-		value, err := merge(existing)
+		value, err := TopLevelMerge(existing, newValue)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -129,16 +127,15 @@ func BenchmarkTopLevelMergeWithAdditive(b *testing.B) {
 	}
 }
 
-func BenchmarkDeepMergeWithNestedOverwrite(b *testing.B) {
+func BenchmarkDeepMergeNestedOverwrite(b *testing.B) {
 	existing := benchmarkNestedMap("existing", 0, 16)
 	newValue := benchmarkNestedMap("new", 0, 16)
-	merge := DeepMergeWith(newValue)
 
 	b.ReportAllocs()
 	b.ResetTimer()
 
 	for range b.N {
-		value, err := merge(existing)
+		value, err := DeepMerge(existing, newValue)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -146,16 +143,15 @@ func BenchmarkDeepMergeWithNestedOverwrite(b *testing.B) {
 	}
 }
 
-func BenchmarkDeepMergeWithNestedAdditive(b *testing.B) {
+func BenchmarkDeepMergeNestedAdditive(b *testing.B) {
 	existing := benchmarkNestedMap("existing", 0, 16)
 	newValue := benchmarkNestedMap("new", 16, 4)
-	merge := DeepMergeWith(newValue)
 
 	b.ReportAllocs()
 	b.ResetTimer()
 
 	for range b.N {
-		value, err := merge(existing)
+		value, err := DeepMerge(existing, newValue)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -194,7 +190,7 @@ func benchmarkNestedMap(
 	return m
 }
 
-func TestDeepMergeWith(t *testing.T) {
+func TestDeepMerge(t *testing.T) {
 	tests := []struct {
 		description string
 		existing    mmdbtype.DataType
@@ -274,7 +270,7 @@ func TestDeepMergeWith(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		v, err := DeepMergeWith(test.new)(test.existing)
+		v, err := DeepMerge(test.existing, test.new)
 		if test.expectedErr != "" {
 			require.EqualError(t, err, test.expectedErr)
 		} else {
