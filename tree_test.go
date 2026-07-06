@@ -336,6 +336,50 @@ func TestLoadWrapsInsertErrorWithNetwork(t *testing.T) {
 	assert.Contains(t, err.Error(), "IPv6 prefixes cannot be inserted into an IPv4 tree")
 }
 
+func TestLoadChecksIteratorErrorBeforeOffsetCache(t *testing.T) {
+	tree, err := New(Options{
+		DatabaseType:            "mmdbwriter-load-corrupt",
+		IncludeReservedNetworks: true,
+		IPVersion:               4,
+		RecordSize:              24,
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, tree.Insert(
+		netip.MustParsePrefix("0.0.0.0/1"),
+		mmdbtype.String("first"),
+	))
+	require.NoError(t, tree.Insert(
+		netip.MustParsePrefix("128.0.0.0/1"),
+		mmdbtype.String("second"),
+	))
+
+	buf := &bytes.Buffer{}
+	_, err = tree.WriteTo(buf)
+	require.NoError(t, err)
+
+	dbBytes := append([]byte(nil), buf.Bytes()...)
+	// Record size 24 stores the root node as three bytes per child. Corrupt
+	// the right child pointer so its iterator result has Err set and Offset 0.
+	dbBytes[3], dbBytes[4], dbBytes[5] = 0xFF, 0xFF, 0xFF
+
+	f, err := os.CreateTemp(t.TempDir(), "mmdbwriter-load-corrupt-*.mmdb")
+	require.NoError(t, err)
+	defer func() { require.NoError(t, os.Remove(f.Name())) }()
+
+	_, err = f.Write(dbBytes)
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	_, err = Load(f.Name(), Options{
+		IPVersion:               4,
+		IncludeReservedNetworks: true,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "loading network 128.0.0.0/1")
+	assert.Contains(t, err.Error(), "search tree is corrupt")
+}
+
 func TestTreeInsertAndGet(t *testing.T) {
 	bigInt := big.Int{}
 	bigInt.SetString("1329227995784915872903807060280344576", 10)

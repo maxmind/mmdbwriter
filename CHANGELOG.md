@@ -22,6 +22,9 @@
   argument.
 - Reduced allocations on the tree insert and serialization hot paths, lowering
   memory pressure and GC overhead during large builds.
+- `Load` now caches decoded source records by data offset during loading. This
+  speeds up databases with repeated records, but the cache is retained until
+  `Load` completes and can increase peak memory for very large source databases.
 
 ## 1.2.0 (2026-01-14)
 

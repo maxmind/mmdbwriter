@@ -219,6 +219,7 @@ func Load(path string, opts Options) (*Tree, error) {
 	}
 
 	unmarshaler := mmdbtype.NewUnmarshaler()
+	dataByOffset := map[uintptr]mmdbtype.DataType{}
 
 	var networkOpts []maxminddb.NetworksOption
 	if opts.IPVersion == 6 && opts.DisableIPv4Aliasing {
@@ -226,25 +227,29 @@ func Load(path string, opts Options) (*Tree, error) {
 	}
 
 	for res := range db.Networks(networkOpts...) {
-		unmarshaler.Clear()
-		err := res.Decode(unmarshaler)
-		if err != nil {
-			return nil, fmt.Errorf("unmarshaling record for network: %w", err)
+		prefix := res.Prefix()
+		if err := res.Err(); err != nil {
+			return nil, fmt.Errorf("loading network %s: %w", prefix, err)
 		}
 
-		value := unmarshaler.Result()
-		prefix, err := tree.normalizeLoadPrefix(res.Prefix())
+		offset := res.Offset()
+		value, ok := dataByOffset[offset]
+		if !ok {
+			unmarshaler.Clear()
+			err := res.Decode(unmarshaler)
+			if err != nil {
+				return nil, fmt.Errorf("unmarshaling record for network: %w", err)
+			}
+			value = unmarshaler.Result()
+			dataByOffset[offset] = value
+		}
+
+		prefix, err := tree.normalizeLoadPrefix(prefix)
 		if err != nil {
 			return nil, err
 		}
 
-		var inserterFunc inserter.Func
-		insertValue := value
-		if tree.inserterFuncGen != nil {
-			inserterFunc = tree.inserterFuncGen(value)
-			insertValue = nil
-		}
-		err = tree.insertNormalized(prefix, recordTypeData, inserterFunc, nil, insertValue)
+		err = tree.insertNormalized(prefix, recordTypeData, tree.inserterFunc, nil, value)
 		if err != nil {
 			return nil, fmt.Errorf("loading network %s: %w", prefix, err)
 		}
