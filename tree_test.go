@@ -116,6 +116,64 @@ func TestTreeOptionsInserter(t *testing.T) {
 	assert.Equal(t, mmdbtype.Map{"base": mmdbtype.String("value")}, got)
 }
 
+func TestTreeInsertFuncErrorDoesNotMutateEmptySiblingRecord(t *testing.T) {
+	tree, err := New(Options{
+		IPVersion:               4,
+		IncludeReservedNetworks: true,
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, tree.Insert(
+		netip.MustParsePrefix("1.2.3.0/24"),
+		mmdbtype.String("neighbor"),
+	))
+
+	insertErr := errors.New("insert failed")
+	err = tree.InsertFunc(
+		netip.MustParsePrefix("1.2.2.0/24"),
+		mmdbtype.String("value"),
+		func(_, _ mmdbtype.DataType) (mmdbtype.DataType, error) {
+			return nil, insertErr
+		},
+	)
+	require.ErrorIs(t, err, insertErr)
+
+	require.NotPanics(t, func() {
+		_, got := tree.Get(netip.MustParseAddr("1.2.2.4"))
+		assert.Nil(t, got)
+	})
+
+	buf := &bytes.Buffer{}
+	_, err = tree.WriteTo(buf)
+	require.NoError(t, err)
+}
+
+func TestTreeInsertFuncErrorLeavesExistingRecordUnchanged(t *testing.T) {
+	tree, err := New(Options{
+		IPVersion:               4,
+		IncludeReservedNetworks: true,
+	})
+	require.NoError(t, err)
+
+	prefix := netip.MustParsePrefix("1.2.3.0/24")
+	base := mmdbtype.Map{"base": mmdbtype.String("value")}
+	require.NoError(t, tree.Insert(prefix, base))
+
+	insertErr := errors.New("insert failed")
+	err = tree.InsertFunc(
+		prefix,
+		mmdbtype.Map{"extra": mmdbtype.String("value")},
+		func(_, _ mmdbtype.DataType) (mmdbtype.DataType, error) {
+			return nil, insertErr
+		},
+	)
+	require.ErrorIs(t, err, insertErr)
+
+	network, got := tree.Get(netip.MustParseAddr("1.2.3.4"))
+	assert.Equal(t, prefix, network)
+	assert.Equal(t, base, got)
+}
+
 func TestTreeInsertCompressedPathBeforeFinalize(t *testing.T) {
 	tree, err := New(Options{
 		IPVersion:               4,

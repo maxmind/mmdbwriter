@@ -25,6 +25,11 @@
 - `Load` now caches decoded source records by data offset during loading. This
   speeds up databases with repeated records, but the cache is retained until
   `Load` completes and can increase peak memory for very large source databases.
+- Reworked tree storage to use an append-only indexed arena. This reduces
+  pointer overhead and keeps node references stable, but merged or abandoned
+  nodes and materialized sparse paths are retained until the `Tree` is
+  discarded. Workloads with heavy mutation churn may see higher peak memory than
+  v1.
 
 ## 1.2.0 (2026-01-14)
 

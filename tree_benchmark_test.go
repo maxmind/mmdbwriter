@@ -160,8 +160,8 @@ func BenchmarkTreeLoadOverlappingPasses(b *testing.B) {
 		if err != nil {
 			b.Fatal(err)
 		}
-		if loadedTree.root == nil {
-			b.Fatal("loaded tree has nil root")
+		if loadedTree.nodeCountAllocated == 0 {
+			b.Fatal("loaded tree has no nodes")
 		}
 	}
 }

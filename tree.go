@@ -108,9 +108,20 @@ type Tree struct {
 	ipVersion               int
 	languages               []string
 	recordSize              int
-	root                    *node
-	treeDepth               int
-	// This is set when the tree is finalized
+	// nodeBlocks is an append-only arena split into fixed-size blocks. Blocks
+	// preserve pointer stability during inserts but grow monotonically; merged
+	// or abandoned nodes are not reclaimed until the Tree is discarded.
+	nodeBlocks         [][]node
+	nodeCountAllocated int
+	// nodeNumbers and nodeCount are invalidated by mutation and rebuilt lazily
+	// by finalize before writing.
+	nodeNumbers []int
+	// paths is an append-only arena for compressed sparse insertion paths. Path
+	// entries are not reclaimed after materialization.
+	paths     []compressedPath
+	root      nodeIndex
+	treeDepth int
+
 	nodeCount    int
 	inserterFunc inserter.Func
 }
@@ -124,7 +135,9 @@ func New(opts Options) (*Tree, error) {
 		disableMetadataPointers: opts.DisableMetadataPointers,
 		ipVersion:               6,
 		recordSize:              28,
-		root:                    &node{},
+		nodeBlocks:              [][]node{make([]node, nodeBlockSize)},
+		nodeCountAllocated:      1,
+		root:                    rootNodeIndex,
 	}
 
 	if opts.BuildEpoch != 0 {
@@ -249,7 +262,7 @@ func Load(path string, opts Options) (*Tree, error) {
 			return nil, err
 		}
 
-		err = tree.insertNormalized(prefix, recordTypeData, tree.inserterFunc, nil, value)
+		err = tree.insertNormalized(prefix, recordTypeData, tree.inserterFunc, noNodeIndex, value)
 		if err != nil {
 			return nil, fmt.Errorf("loading network %s: %w", prefix, err)
 		}
@@ -279,7 +292,7 @@ func (t *Tree) normalizeLoadPrefix(prefix netip.Prefix) (netip.Prefix, error) {
 //
 // This is not safe to call from multiple threads.
 func (t *Tree) Insert(prefix netip.Prefix, value mmdbtype.DataType) error {
-	return t.insert(prefix, recordTypeData, t.inserterFunc, nil, value)
+	return t.insert(prefix, recordTypeData, t.inserterFunc, noNodeIndex, value)
 }
 
 // InsertFunc will insert the output of the function passed to it. The arguments
@@ -304,14 +317,14 @@ func (t *Tree) InsertFunc(
 	value mmdbtype.DataType,
 	inserterFunc inserter.Func,
 ) error {
-	return t.insert(prefix, recordTypeData, inserterFunc, nil, value)
+	return t.insert(prefix, recordTypeData, inserterFunc, noNodeIndex, value)
 }
 
 func (t *Tree) insert(
 	prefix netip.Prefix,
 	recordType recordType,
 	inserterFunc inserter.Func,
-	node *node,
+	node nodeIndex,
 	value mmdbtype.DataType,
 ) error {
 	var err error
@@ -336,7 +349,7 @@ func (t *Tree) insertNormalized(
 	prefix netip.Prefix,
 	recordType recordType,
 	inserterFunc inserter.Func,
-	node *node,
+	node nodeIndex,
 	value mmdbtype.DataType,
 ) error {
 	if t.treeDepth == 32 && !prefix.Addr().Is4() {
@@ -349,29 +362,27 @@ func (t *Tree) insertPrepared(
 	prefix netip.Prefix,
 	recordType recordType,
 	inserterFunc inserter.Func,
-	node *node,
+	node nodeIndex,
 	value mmdbtype.DataType,
 ) error {
 	// Any insert can change the reachable node graph, so cached finalization
 	// state must be rebuilt before the next write.
 	t.nodeCount = 0
+	t.nodeNumbers = nil
 
 	ip, prefixLen := t.prefixInsertIP(prefix)
 
-	return t.root.insert(
-		insertRecord{
-			ip:           ip,
-			prefixLen:    prefixLen,
-			recordType:   recordType,
-			inserter:     inserterFunc,
-			insertedNode: node,
-			tree:         t,
-			value:        value,
+	return insertRecord{
+		ip:           ip,
+		prefixLen:    prefixLen,
+		recordType:   recordType,
+		inserter:     inserterFunc,
+		insertedNode: node,
+		tree:         t,
+		value:        value,
 
-			dataMap: t.dataMap,
-		},
-		0,
-	)
+		dataMap: t.dataMap,
+	}.insertNode(t.root, 0)
 }
 
 func (t *Tree) normalizeInsertPrefix(prefix netip.Prefix) (netip.Prefix, error) {
@@ -488,7 +499,7 @@ func (t *Tree) InsertRange(
 	end netip.Addr,
 	value mmdbtype.DataType,
 ) error {
-	return t.insertRange(start, end, recordTypeData, t.inserterFunc, nil, value)
+	return t.insertRange(start, end, recordTypeData, t.inserterFunc, noNodeIndex, value)
 }
 
 // InsertRangeFunc is the same as InsertFunc, except it will insert all subnets
@@ -499,7 +510,7 @@ func (t *Tree) InsertRangeFunc(
 	value mmdbtype.DataType,
 	inserterFunc inserter.Func,
 ) error {
-	return t.insertRange(start, end, recordTypeData, inserterFunc, nil, value)
+	return t.insertRange(start, end, recordTypeData, inserterFunc, noNodeIndex, value)
 }
 
 func (t *Tree) insertRange(
@@ -507,7 +518,7 @@ func (t *Tree) insertRange(
 	end netip.Addr,
 	recordType recordType,
 	inserterFunc inserter.Func,
-	node *node,
+	node nodeIndex,
 	value mmdbtype.DataType,
 ) error {
 	if !start.IsValid() {
@@ -541,7 +552,7 @@ func (t *Tree) insertStringNetwork(
 	network string,
 	recordType recordType,
 	inserterFunc inserter.Func,
-	node *node,
+	node nodeIndex,
 ) error {
 	prefix, err := netip.ParsePrefix(network)
 	if err != nil {
@@ -562,7 +573,7 @@ func (t *Tree) insertIPv4Aliases() error {
 		return fmt.Errorf("parsing IPv4 root: %w", err)
 	}
 
-	ipv4RootNode := &node{}
+	ipv4RootNode := t.newNode([2]record{})
 
 	// Make ::/96, the IPv4 root, a fixed node.
 	err = t.insert(ipv4Root, recordTypeFixedNode, nil, ipv4RootNode, nil)
@@ -587,7 +598,7 @@ func (t *Tree) insertReservedNetworks() error {
 	}
 
 	for _, network := range networks {
-		err := t.insertStringNetwork(network, recordTypeReserved, nil, nil)
+		err := t.insertStringNetwork(network, recordTypeReserved, nil, noNodeIndex)
 		if err != nil {
 			return err
 		}
@@ -604,7 +615,7 @@ func (t *Tree) Get(ip netip.Addr) (netip.Prefix, mmdbtype.DataType) {
 	if !ok {
 		return netip.Prefix{}, nil
 	}
-	prefixLen, r := t.root.get(lookupIP, 0)
+	prefixLen, r := t.getNode(t.root, lookupIP, 0)
 
 	var value mmdbtype.DataType
 	if r.recordType == recordTypeData {
@@ -616,7 +627,9 @@ func (t *Tree) Get(ip netip.Addr) (netip.Prefix, mmdbtype.DataType) {
 
 // finalize prepares the tree for writing. It is not threadsafe.
 func (t *Tree) finalize() {
-	t.nodeCount = t.root.finalize(0)
+	t.expandPaths(t.root, 0)
+	t.nodeNumbers = make([]int, t.nodeCountAllocated)
+	t.nodeCount = t.finalizeNode(t.root, 0)
 }
 
 // WriteTo writes the tree to the provided Writer.
@@ -691,10 +704,11 @@ func (t *Tree) WriteTo(w io.Writer) (int64, error) {
 
 func (t *Tree) writeNode(
 	w io.Writer,
-	n *node,
+	nodeIndex nodeIndex,
 	dataWriter *dataWriter,
 	recordBuf []byte,
 ) (int, int64, error) {
+	n := t.nodeAt(nodeIndex)
 	err := t.copyNode(recordBuf, n, dataWriter)
 	if err != nil {
 		return 0, 0, err
@@ -715,7 +729,7 @@ func (t *Tree) writeNode(
 		}
 		addedNodes, addedBytes, err := t.writeNode(
 			w,
-			child.node,
+			child.nodeIndex,
 			dataWriter,
 			recordBuf,
 		)
@@ -739,8 +753,10 @@ func (t *Tree) recordValue(
 		return t.nodeCount + len(dataSectionSeparator) + offset, err
 	case recordTypeEmpty, recordTypeReserved:
 		return t.nodeCount, nil
+	case recordTypePath:
+		return 0, errors.New("compressed path record cannot be written before finalization")
 	default:
-		return r.node.nodeNum, nil
+		return t.nodeNumbers[r.nodeIndex], nil
 	}
 }
 
