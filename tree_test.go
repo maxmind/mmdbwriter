@@ -405,6 +405,43 @@ func TestTreeInsertIPv6IntoIPv4Tree(t *testing.T) {
 	require.EqualError(t, err, "start IP is invalid")
 }
 
+func TestTreeInsertRangeInvalidBounds(t *testing.T) {
+	tree, err := New(Options{IncludeReservedNetworks: true})
+	require.NoError(t, err)
+
+	tests := []struct {
+		name          string
+		start         netip.Addr
+		end           netip.Addr
+		expectedError string
+	}{
+		{
+			name:          "invalid end",
+			start:         netip.MustParseAddr("1.2.3.4"),
+			expectedError: "end IP is invalid",
+		},
+		{
+			name:          "reversed range",
+			start:         netip.MustParseAddr("1.2.3.5"),
+			end:           netip.MustParseAddr("1.2.3.4"),
+			expectedError: "start & end IPs did not give valid range",
+		},
+		{
+			name:          "mixed address families",
+			start:         netip.MustParseAddr("1.2.3.4"),
+			end:           netip.MustParseAddr("2001:db8::1"),
+			expectedError: "start & end IPs did not give valid range",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := tree.InsertRange(test.start, test.end, mmdbtype.String("value"))
+			require.EqualError(t, err, test.expectedError)
+		})
+	}
+}
+
 func TestTreeInsertIPv4TreeReservedNetworkError(t *testing.T) {
 	tree, err := New(Options{IPVersion: 4})
 	require.NoError(t, err)
