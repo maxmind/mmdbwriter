@@ -31,7 +31,7 @@ type benchmarkValueSets struct {
 
 func BenchmarkTreeInsertOverlappingPasses(b *testing.B) {
 	specs := overlappingBenchmarkInsertSpecs()
-	reportOverlappingBenchmarkShape(b, specs)
+	reportOverlappingBenchmarkShape(b, specs, nil)
 
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -44,7 +44,7 @@ func BenchmarkTreeInsertOverlappingPasses(b *testing.B) {
 
 func BenchmarkTreeInsertTopLevelMergeOverlappingPasses(b *testing.B) {
 	specs := overlappingBenchmarkTopLevelMergeSpecs()
-	reportOverlappingBenchmarkShape(b, specs)
+	reportOverlappingBenchmarkShape(b, specs, inserter.TopLevelMerge)
 
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -62,7 +62,7 @@ func BenchmarkTreeInsertTopLevelMergeOverlappingPasses(b *testing.B) {
 
 func BenchmarkTreeInsertDeepMergeOverlappingPasses(b *testing.B) {
 	specs := overlappingBenchmarkDeepMergeSpecs()
-	reportOverlappingBenchmarkShape(b, specs)
+	reportOverlappingBenchmarkShape(b, specs, inserter.DeepMerge)
 
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -166,11 +166,23 @@ func BenchmarkTreeLoadOverlappingPasses(b *testing.B) {
 	}
 }
 
-func reportOverlappingBenchmarkShape(b *testing.B, specs []benchmarkInsertSpec) {
+func reportOverlappingBenchmarkShape(
+	b *testing.B,
+	specs []benchmarkInsertSpec,
+	insertFunc inserter.Func,
+) {
 	b.Helper()
 
 	tree := newBenchmarkTree(b)
-	insertBenchmarkSpecs(b, tree, specs)
+	if insertFunc == nil {
+		insertBenchmarkSpecs(b, tree, specs)
+	} else {
+		for _, spec := range specs {
+			if err := tree.InsertFunc(spec.network, spec.value, insertFunc); err != nil {
+				b.Fatal(err)
+			}
+		}
+	}
 	tree.finalize()
 
 	b.ReportMetric(float64(len(specs)), "insertions/op")
