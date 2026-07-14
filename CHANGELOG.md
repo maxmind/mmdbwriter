@@ -25,6 +25,8 @@
 - `Load` now caches decoded source records by data offset during loading. This
   speeds up databases with repeated records, but the cache is retained until
   `Load` completes and can increase peak memory for very large source databases.
+  Source networks that reference the same data offset also share a decoded
+  value, so custom inserters must copy values before modifying them.
 - Reworked tree storage to use an append-only indexed arena. This reduces
   pointer overhead and keeps node references stable, but merged or abandoned
   nodes and materialized sparse paths are retained until the `Tree` is

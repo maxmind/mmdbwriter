@@ -81,6 +81,10 @@ type Options struct {
 	// value entirely with the new, and allows Insert to use the default
 	// direct-value fast path. Passing `inserter.Replace` explicitly has the same
 	// behavior but skips that optimization.
+	//
+	// An Inserter must not modify either argument. Values may be shared with
+	// other records, and Load reuses decoded values for source networks that
+	// reference the same data offset. Copy a value before modifying it.
 	Inserter inserter.Func
 
 	// KeyGenerator is used to generate unique keys for the top-level record
@@ -195,7 +199,9 @@ func New(opts Options) (*Tree, error) {
 	return tree, nil
 }
 
-// Load an existing database into the writer.
+// Load loads an existing database into the writer. Source records that share a
+// data offset also share a decoded value. An Options.Inserter must treat its
+// arguments as immutable and copy a value before modifying it.
 func Load(path string, opts Options) (*Tree, error) {
 	db, err := maxminddb.Open(path)
 	if err != nil {
