@@ -266,7 +266,15 @@ func TestTreeInsertCompressedPathBeforeFinalize(t *testing.T) {
 	assert.Equal(t, "11.0.0.0/8", network.String())
 	assert.Equal(t, base, got)
 
-	_, got = tree.Get(netip.MustParseAddr("12.1.2.3"))
+	missAddress := netip.MustParseAddr("12.1.2.3")
+	expectedMissPrefix := netip.MustParsePrefix("12.0.0.0/6")
+	network, got = tree.Get(missAddress)
+	assert.Equal(t, expectedMissPrefix, network)
+	assert.Nil(t, got)
+
+	tree.finalize()
+	network, got = tree.Get(missAddress)
+	assert.Equal(t, expectedMissPrefix, network)
 	assert.Nil(t, got)
 
 	specific := mmdbtype.Map{"name": mmdbtype.String("specific")}
