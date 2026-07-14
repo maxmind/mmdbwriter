@@ -128,8 +128,8 @@ func BenchmarkTopLevelMergeAdditive(b *testing.B) {
 }
 
 func BenchmarkDeepMergeNestedOverwrite(b *testing.B) {
-	existing := benchmarkNestedMap("existing", 0, 16, 0)
-	newValue := benchmarkNestedMap("new", 0, 16, 0)
+	existing := benchmarkNestedMap("existing", 16, 0)
+	newValue := benchmarkNestedMap("new", 16, 0)
 
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -144,8 +144,8 @@ func BenchmarkDeepMergeNestedOverwrite(b *testing.B) {
 }
 
 func BenchmarkDeepMergeNestedAdditive(b *testing.B) {
-	existing := benchmarkNestedMap("existing", 0, 16, 0)
-	newValue := benchmarkNestedMap("new", 0, 4, 8)
+	existing := benchmarkNestedMap("existing", 16, 0)
+	newValue := benchmarkNestedMap("new", 4, 8)
 
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -170,7 +170,6 @@ func benchmarkFlatMap(valuePrefix string, start, count int) mmdbtype.Map {
 
 func benchmarkNestedMap(
 	valuePrefix string,
-	start int,
 	groups int,
 	fieldStart int,
 ) mmdbtype.Map {
@@ -185,7 +184,7 @@ func benchmarkNestedMap(
 				fmt.Sprintf("%s-%02d-%02d", valuePrefix, group, field),
 			)
 		}
-		key := mmdbtype.String(fmt.Sprintf("section-%02d", start+group))
+		key := mmdbtype.String(fmt.Sprintf("section-%02d", group))
 		m[key] = nested
 	}
 	return m
