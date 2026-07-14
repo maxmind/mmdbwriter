@@ -376,6 +376,9 @@ func TestTreeNormalizeLoadPrefixIPv4Mapped(t *testing.T) {
 		err,
 		"normalizing loaded network ::ffff:1.2.3.4/95: IPv4-mapped prefixes shorter than /96 cannot be inserted",
 	)
+
+	_, err = tree.normalizeLoadPrefix(netip.Prefix{})
+	require.EqualError(t, err, "loaded prefix is invalid")
 }
 
 func TestTreeInsertIPv6IntoIPv4Tree(t *testing.T) {

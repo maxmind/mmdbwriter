@@ -273,6 +273,9 @@ func Load(path string, opts Options) (*Tree, error) {
 func (t *Tree) normalizeLoadPrefix(prefix netip.Prefix) (netip.Prefix, error) {
 	// Database readers should already return valid, masked prefixes. Only
 	// normalize mapped IPv4 prefixes so loaded data follows Insert semantics.
+	if !prefix.IsValid() {
+		return netip.Prefix{}, errors.New("loaded prefix is invalid")
+	}
 	if !prefix.Addr().Is4In6() {
 		return prefix, nil
 	}
