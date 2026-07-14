@@ -251,7 +251,7 @@ func Load(path string, opts Options) (*Tree, error) {
 			unmarshaler.Clear()
 			err := res.Decode(unmarshaler)
 			if err != nil {
-				return nil, fmt.Errorf("unmarshaling record for network: %w", err)
+				return nil, fmt.Errorf("unmarshaling record for network %s: %w", prefix, err)
 			}
 			value = unmarshaler.Result()
 			dataByOffset[offset] = value

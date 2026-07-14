@@ -563,6 +563,45 @@ func TestLoadChecksIteratorErrorBeforeOffsetCache(t *testing.T) {
 	assert.Contains(t, err.Error(), "search tree is corrupt")
 }
 
+func TestLoadDecodeErrorIncludesNetwork(t *testing.T) {
+	tree, err := New(Options{
+		DatabaseType:            "mmdbwriter-load-corrupt-data",
+		Description:             map[string]string{"en": "Test database"},
+		IncludeReservedNetworks: true,
+		IPVersion:               4,
+		RecordSize:              24,
+	})
+	require.NoError(t, err)
+
+	prefix := netip.MustParsePrefix("1.2.3.0/24")
+	require.NoError(t, tree.Insert(prefix, mmdbtype.String("value")))
+
+	var buf bytes.Buffer
+	_, err = tree.WriteTo(&buf)
+	require.NoError(t, err)
+
+	dbBytes := append([]byte(nil), buf.Bytes()...)
+	nodeSize := 2 * tree.recordSize / 8
+	dataStart := tree.nodeCount*nodeSize + len(dataSectionSeparator)
+	// Extended type 16 is validly encoded but unsupported by the unmarshaler.
+	dbBytes[dataStart], dbBytes[dataStart+1] = 0, 9
+
+	f, err := os.CreateTemp(t.TempDir(), "mmdbwriter-load-corrupt-data-*.mmdb")
+	require.NoError(t, err)
+	defer func() { require.NoError(t, os.Remove(f.Name())) }()
+
+	_, err = f.Write(dbBytes)
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	_, err = Load(f.Name(), Options{
+		IPVersion:               4,
+		IncludeReservedNetworks: true,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unmarshaling record for network 1.2.3.0/24")
+}
+
 func TestTreeInsertAndGet(t *testing.T) {
 	bigInt := big.Int{}
 	bigInt.SetString("1329227995784915872903807060280344576", 10)
