@@ -88,6 +88,51 @@ func TestTreeInsertSplittingDataRecordMaintainsRefCounts(t *testing.T) {
 	assert.NotContains(t, tree.dataMap.data, key)
 }
 
+func TestTreeNodeBlocksGrowAndWrite(t *testing.T) {
+	tree, err := New(Options{
+		DatabaseType:            "Test",
+		Description:             map[string]string{"en": "Test database"},
+		IPVersion:               4,
+		IncludeReservedNetworks: true,
+	})
+	require.NoError(t, err)
+
+	addresses := make([]netip.Addr, nodeBlockSize+1)
+	for i := range addresses {
+		address := netip.AddrFrom4([4]byte{
+			1,
+			byte(i >> 16),
+			byte(i >> 8),
+			byte(i),
+		})
+		addresses[i] = address
+		require.NoError(t, tree.Insert(
+			netip.PrefixFrom(address, address.BitLen()),
+			mmdbtype.Uint32(i),
+		))
+	}
+
+	require.Greater(t, tree.nodeCountAllocated, nodeBlockSize)
+	require.Greater(t, len(tree.nodeBlocks), 1)
+
+	var buf bytes.Buffer
+	_, err = tree.WriteTo(&buf)
+	require.NoError(t, err)
+
+	reader, err := maxminddb.OpenBytes(buf.Bytes())
+	require.NoError(t, err)
+	defer reader.Close()
+	require.NoError(t, reader.Verify())
+
+	for i, address := range addresses {
+		var got uint32
+		result := reader.Lookup(address)
+		require.True(t, result.Found(), "record for %s", address)
+		require.NoError(t, result.Decode(&got), "decode record for %s", address)
+		assert.Equal(t, uint32(i), got, "record for %s", address)
+	}
+}
+
 func TestTreeInsertFunc(t *testing.T) {
 	tree, err := New(Options{
 		IPVersion:               4,
