@@ -168,6 +168,16 @@ func keyIdentity(v mmdbtype.DataType) (dataMapIdentityKey, bool) {
 	}
 }
 
+// addRef adds a reference to the value.
+func (dm *dataMap) addRef(v *dataMapValue) {
+	// This is here mostly so that we don't have to guard against it
+	// elsewhere.
+	if v == nil {
+		return
+	}
+	v.refCount++
+}
+
 // remove removes a reference to the value. If the reference count
 // drops to zero, the value is removed from the dataMap.
 func (dm *dataMap) remove(v *dataMapValue) {

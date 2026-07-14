@@ -56,6 +56,38 @@ func TestTreeInsert(t *testing.T) {
 	assert.Equal(t, value, got)
 }
 
+func TestTreeInsertSplittingDataRecordMaintainsRefCounts(t *testing.T) {
+	tree, err := New(Options{
+		IPVersion:               4,
+		IncludeReservedNetworks: true,
+	})
+	require.NoError(t, err)
+
+	initialValue := mmdbtype.String("initial")
+	require.NoError(t, tree.Insert(netip.MustParsePrefix("1.1.0.0/24"), initialValue))
+
+	keyBytes, err := tree.dataMap.keyWriter.Key(initialValue)
+	require.NoError(t, err)
+	key := dataMapKey(keyBytes)
+	initialMapValue := tree.dataMap.data[key]
+	require.NotNil(t, initialMapValue)
+	require.Equal(t, uint32(1), initialMapValue.refCount)
+
+	require.NoError(t, tree.Insert(
+		netip.MustParsePrefix("1.1.0.128/25"),
+		mmdbtype.String("upper"),
+	))
+	assert.Equal(t, uint32(1), initialMapValue.refCount)
+	assert.Same(t, initialMapValue, tree.dataMap.data[key])
+
+	require.NoError(t, tree.Insert(
+		netip.MustParsePrefix("1.1.0.0/25"),
+		mmdbtype.String("lower"),
+	))
+	assert.Zero(t, initialMapValue.refCount)
+	assert.NotContains(t, tree.dataMap.data, key)
+}
+
 func TestTreeInsertFunc(t *testing.T) {
 	tree, err := New(Options{
 		IPVersion:               4,

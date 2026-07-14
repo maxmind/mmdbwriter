@@ -227,6 +227,9 @@ func (iRec insertRecord) insertRecord(
 
 		// We are splitting this record so we create two duplicate child
 		// records.
+		if r.recordType == recordTypeData {
+			iRec.dataMap.addRef(r.value)
+		}
 		r.nodeIndex = iRec.tree.newNode([2]record{*r, *r})
 		r.value = nil
 		r.recordType = recordTypeNode
