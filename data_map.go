@@ -138,7 +138,7 @@ func keyIdentity(v mmdbtype.DataType) (dataMapIdentityKey, bool) {
 			size: len(t),
 		}, true
 	case mmdbtype.Map:
-		if t == nil {
+		if len(t) == 0 {
 			return dataMapIdentityKey{kind: dataMapIdentityMap}, true
 		}
 		return dataMapIdentityKey{

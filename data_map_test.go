@@ -1,6 +1,7 @@
 package mmdbwriter
 
 import (
+	"math/big"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -145,6 +146,44 @@ func TestDataMapDoesNotUseStaleIdentityForMutatedNonRetainedValue(t *testing.T) 
 	assert.Equal(t, second, mutatedDMV.data)
 }
 
+func TestDataMapDoesNotUseStaleIdentityEntry(t *testing.T) {
+	retained := mmdbtype.Bytes{1, 2, 3}
+	requested := mmdbtype.Bytes{4, 5, 6}
+
+	dm := newDataMap(newKeyWriter())
+	retainedDMV, err := dm.storeWithIdentity(retained)
+	require.NoError(t, err)
+
+	requestedIdentity, ok := keyIdentity(requested)
+	require.True(t, ok)
+	dm.keyByDataIdentity[requestedIdentity] = retainedDMV.key
+
+	requestedDMV, err := dm.storeWithIdentity(requested)
+	require.NoError(t, err)
+
+	assert.NotSame(t, retainedDMV, requestedDMV)
+	assert.Equal(t, requested, requestedDMV.data)
+	assert.Equal(t, requestedDMV.key, dm.keyByDataIdentity[requestedIdentity])
+}
+
+func TestDataMapCachesUint128PointerIdentity(t *testing.T) {
+	value := mmdbtype.Uint128(*big.NewInt(12345))
+	valuePointer := &value
+	identity, ok := keyIdentity(valuePointer)
+	require.True(t, ok)
+
+	dm := newDataMap(newKeyWriter())
+	dmv, err := dm.storeWithIdentity(valuePointer)
+	require.NoError(t, err)
+
+	sameDMV, err := dm.storeWithIdentity(valuePointer)
+	require.NoError(t, err)
+
+	assert.Same(t, dmv, sameDMV)
+	assert.Equal(t, uint32(2), dmv.refCount)
+	assert.Equal(t, dmv.key, dm.keyByDataIdentity[identity])
+}
+
 func TestKeyIdentityDistinguishesKinds(t *testing.T) {
 	bytesIdentity, ok := keyIdentity(mmdbtype.Bytes{})
 	require.True(t, ok)
@@ -157,6 +196,17 @@ func TestKeyIdentityDistinguishesKinds(t *testing.T) {
 	var uint128 *mmdbtype.Uint128
 	_, ok = keyIdentity(uint128)
 	assert.False(t, ok)
+}
+
+func TestKeyIdentityCollapsesEmptyMaps(t *testing.T) {
+	var nilMap mmdbtype.Map
+	nilIdentity, ok := keyIdentity(nilMap)
+	require.True(t, ok)
+
+	emptyIdentity, ok := keyIdentity(mmdbtype.Map{})
+	require.True(t, ok)
+
+	assert.Equal(t, nilIdentity, emptyIdentity)
 }
 
 func TestDataMapDoesNotCacheCustomKeyGenerator(t *testing.T) {
