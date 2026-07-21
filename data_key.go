@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"hash"
 
-	"github.com/maxmind/mmdbwriter/mmdbtype"
+	"github.com/maxmind/mmdbwriter/v2/mmdbtype"
 )
 
 // KeyGenerator generates a unique key for record values being inserted into the
@@ -18,6 +18,9 @@ import (
 // Please be certain that any key you generate is unique. If there is a
 // collision with two different values having the same key, one of the
 // values will be overwritten.
+//
+// Values passed to Key must not be modified after insertion as the tree may
+// retain and deduplicate them.
 //
 // The returned byte slice is not stored. You may use the same backing
 // array between calls.
@@ -57,6 +60,27 @@ func (kw *keyWriter) Key(v mmdbtype.DataType) ([]byte, error) {
 	return kw.sha256.Sum(kw.key[:0]), nil
 }
 
+// KeyString is intentionally identical to Key but takes a concrete String to
+// keep map-key writes from boxing into DataType on the write hot path.
+func (kw *keyWriter) KeyString(v mmdbtype.String) ([]byte, error) {
+	kw.Truncate(0)
+	kw.sha256.Reset()
+	_, err := v.WriteTo(kw)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := kw.WriteTo(kw.sha256); err != nil {
+		return nil, fmt.Errorf("writing key to writer: %w", err)
+	}
+	return kw.sha256.Sum(kw.key[:0]), nil
+}
+
 func (kw *keyWriter) WriteOrWritePointer(t mmdbtype.DataType) (int64, error) {
+	return t.WriteTo(kw)
+}
+
+// WriteOrWritePointerString mirrors WriteOrWritePointer without converting the
+// map key to DataType. keyWriter never emits pointers.
+func (kw *keyWriter) WriteOrWritePointerString(t mmdbtype.String) (int64, error) {
 	return t.WriteTo(kw)
 }

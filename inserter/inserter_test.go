@@ -1,27 +1,30 @@
 package inserter
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/maxmind/mmdbwriter/mmdbtype"
+	"github.com/maxmind/mmdbwriter/v2/mmdbtype"
 )
 
+var benchmarkMergeValue mmdbtype.DataType
+
 func TestRemove(t *testing.T) {
-	v, err := Remove(mmdbtype.Map{})
+	v, err := Remove(mmdbtype.Map{}, mmdbtype.Map{})
 	require.NoError(t, err)
 	assert.Nil(t, v)
 }
 
-func TestReplaceWith(t *testing.T) {
-	v, err := ReplaceWith(mmdbtype.Uint64(1))(mmdbtype.Bool(true))
+func TestReplace(t *testing.T) {
+	v, err := Replace(mmdbtype.Bool(true), mmdbtype.Uint64(1))
 	require.NoError(t, err)
 	assert.Equal(t, mmdbtype.Uint64(1), v)
 }
 
-func TestTopLevelMergeWith(t *testing.T) {
+func TestTopLevelMerge(t *testing.T) {
 	tests := []struct {
 		description string
 		existing    mmdbtype.DataType
@@ -35,21 +38,21 @@ func TestTopLevelMergeWith(t *testing.T) {
 			new:         nil,
 			expected:    nil,
 			expectedErr: "the new value is a <nil>, not a Map; " +
-				"TopLevelMergeWith only works if both values are Map values",
+				"TopLevelMerge only works if both values are Map values",
 		},
 		{
 			description: "existing slice, new map",
 			existing:    mmdbtype.Slice{},
 			new:         mmdbtype.Map{"a": mmdbtype.String("b")},
 			expectedErr: "the existing value is a mmdbtype.Slice, not a Map; " +
-				"TopLevelMergeWith only works if both values are Map values",
+				"TopLevelMerge only works if both values are Map values",
 		},
 		{
 			description: "existing map, new slice",
 			existing:    mmdbtype.Map{"a": mmdbtype.String("b")},
 			new:         mmdbtype.Slice{},
 			expectedErr: "the new value is a mmdbtype.Slice, not a Map; " +
-				"TopLevelMergeWith only works if both values are Map values",
+				"TopLevelMerge only works if both values are Map values",
 		},
 		{
 			description: "existing nil, new map",
@@ -82,7 +85,7 @@ func TestTopLevelMergeWith(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		v, err := TopLevelMergeWith(test.new)(test.existing)
+		v, err := TopLevelMerge(test.existing, test.new)
 		if test.expectedErr != "" {
 			require.EqualError(t, err, test.expectedErr)
 		} else {
@@ -92,7 +95,102 @@ func TestTopLevelMergeWith(t *testing.T) {
 	}
 }
 
-func TestDeepMergeWith(t *testing.T) {
+func BenchmarkTopLevelMergeOverwriteHeavy(b *testing.B) {
+	existing := benchmarkFlatMap("existing", 0, 64)
+	newValue := benchmarkFlatMap("new", 0, 64)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for range b.N {
+		value, err := TopLevelMerge(existing, newValue)
+		if err != nil {
+			b.Fatal(err)
+		}
+		benchmarkMergeValue = value
+	}
+}
+
+func BenchmarkTopLevelMergeAdditive(b *testing.B) {
+	existing := benchmarkFlatMap("existing", 0, 64)
+	newValue := benchmarkFlatMap("new", 64, 16)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for range b.N {
+		value, err := TopLevelMerge(existing, newValue)
+		if err != nil {
+			b.Fatal(err)
+		}
+		benchmarkMergeValue = value
+	}
+}
+
+func BenchmarkDeepMergeNestedOverwrite(b *testing.B) {
+	existing := benchmarkNestedMap("existing", 16, 0)
+	newValue := benchmarkNestedMap("new", 16, 0)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for range b.N {
+		value, err := DeepMerge(existing, newValue)
+		if err != nil {
+			b.Fatal(err)
+		}
+		benchmarkMergeValue = value
+	}
+}
+
+func BenchmarkDeepMergeNestedAdditive(b *testing.B) {
+	existing := benchmarkNestedMap("existing", 16, 0)
+	newValue := benchmarkNestedMap("new", 4, 8)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for range b.N {
+		value, err := DeepMerge(existing, newValue)
+		if err != nil {
+			b.Fatal(err)
+		}
+		benchmarkMergeValue = value
+	}
+}
+
+func benchmarkFlatMap(valuePrefix string, start, count int) mmdbtype.Map {
+	m := make(mmdbtype.Map, count)
+	for i := range count {
+		key := mmdbtype.String(fmt.Sprintf("key-%02d", start+i))
+		m[key] = mmdbtype.String(fmt.Sprintf("%s-%02d", valuePrefix, i))
+	}
+	return m
+}
+
+func benchmarkNestedMap(
+	valuePrefix string,
+	groups int,
+	fieldStart int,
+) mmdbtype.Map {
+	const fields = 8
+
+	m := make(mmdbtype.Map, groups)
+	for group := range groups {
+		nested := make(mmdbtype.Map, fields)
+		for field := range fields {
+			key := mmdbtype.String(fmt.Sprintf("field-%02d", fieldStart+field))
+			nested[key] = mmdbtype.String(
+				fmt.Sprintf("%s-%02d-%02d", valuePrefix, group, field),
+			)
+		}
+		key := mmdbtype.String(fmt.Sprintf("section-%02d", group))
+		m[key] = nested
+	}
+	return m
+}
+
+func TestDeepMerge(t *testing.T) {
 	tests := []struct {
 		description string
 		existing    mmdbtype.DataType
@@ -172,7 +270,7 @@ func TestDeepMergeWith(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		v, err := DeepMergeWith(test.new)(test.existing)
+		v, err := DeepMerge(test.existing, test.new)
 		if test.expectedErr != "" {
 			require.EqualError(t, err, test.expectedErr)
 		} else {

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/maxmind/mmdbwriter/mmdbtype"
+	"github.com/maxmind/mmdbwriter/v2/mmdbtype"
 )
 
 type writtenType struct {
@@ -60,20 +60,20 @@ func (dw *dataWriter) maybeWrite(value *dataMapValue) (int, error) {
 }
 
 func (dw *dataWriter) WriteOrWritePointer(t mmdbtype.DataType) (int64, error) {
+	if !dw.usePointers {
+		return t.WriteTo(dw)
+	}
+
 	keyBytes, err := dw.keyWriter.Key(t)
 	if err != nil {
 		return 0, err
 	}
 
-	var ok bool
-	if dw.usePointers {
-		var written writtenType
-		written, ok = dw.offsets[dataMapKey(keyBytes)]
-		if ok && written.size > written.pointer.WrittenSize() {
-			// Only use a pointer if it would take less space than writing the
-			// type again.
-			return written.pointer.WriteTo(dw)
-		}
+	written, ok := dw.offsets[dataMapKey(keyBytes)]
+	if ok && written.size > written.pointer.WrittenSize() {
+		// Only use a pointer if it would take less space than writing the
+		// type again.
+		return written.pointer.WriteTo(dw)
 	}
 	// We can't use the pointers[dataMapKey(keyBytes)] optimization to
 	// avoid an allocation below as the backing buffer for key may change when
@@ -86,6 +86,46 @@ func (dw *dataWriter) WriteOrWritePointer(t mmdbtype.DataType) (int64, error) {
 	// Slice though as they may have internal pointers missing from key.
 	// I briefly tested this and didn't see much difference, but it might
 	// be worth exploring more.
+	offset := dw.Len()
+	size, err := t.WriteTo(dw)
+	if err != nil || ok {
+		return size, err
+	}
+
+	if offset > math.MaxUint32 {
+		return 0, fmt.Errorf("offset of %d exceeds maximum when writing data", offset)
+	}
+
+	//nolint:gosec // we check for overflow above
+	dw.offsets[key] = writtenType{
+		pointer: mmdbtype.Pointer(offset),
+		size:    size,
+	}
+	return size, nil
+}
+
+func (dw *dataWriter) WriteOrWritePointerString(t mmdbtype.String) (int64, error) {
+	if !dw.usePointers {
+		return t.WriteTo(dw)
+	}
+
+	// This mirrors WriteOrWritePointer but accepts a concrete String to avoid
+	// boxing map keys into DataType while writing sorted maps.
+	keyBytes, err := dw.keyWriter.KeyString(t)
+	if err != nil {
+		return 0, err
+	}
+
+	written, ok := dw.offsets[dataMapKey(keyBytes)]
+	if ok && written.size > written.pointer.WrittenSize() {
+		// Only use a pointer if it would take less space than writing the
+		// type again.
+		return written.pointer.WriteTo(dw)
+	}
+
+	// Take a stable copy of the key before storing it; the key writer reuses
+	// its buffer on the next key generation.
+	key := dataMapKey(keyBytes)
 	offset := dw.Len()
 	size, err := t.WriteTo(dw)
 	if err != nil || ok {
