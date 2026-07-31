@@ -48,7 +48,9 @@ type mmdbSource struct {
 }
 
 // MMDBSource adapts a maxminddb Reader to NetworkSource. Values are decoded
-// lazily and cached by data offset for the duration of each enumeration.
+// lazily and cached by data offset for the duration of each enumeration. A
+// yielded value may be shared by multiple records and must be treated as
+// read-only. Call Copy before modifying it.
 func MMDBSource(reader *maxminddb.Reader, options ...maxminddb.NetworksOption) NetworkSource {
 	return &mmdbSource{reader: reader, options: options}
 }
@@ -85,8 +87,8 @@ func (s *mmdbSource) Networks() iter.Seq2[NetworkValue, error] {
 }
 
 // Networks enumerates the Tree's data records as ascending, disjoint
-// networks. Values are immutable store-materialized views. Reserved, empty,
-// and alias records are omitted.
+// networks. Values are shared, read-only store-materialized views; call Copy
+// before modifying one. Reserved, empty, and alias records are omitted.
 func (t *Tree) Networks() iter.Seq2[NetworkValue, error] {
 	return func(yield func(NetworkValue, error) bool) {
 		var ip [16]byte
@@ -175,7 +177,8 @@ func NewSortingSource(resolve inserter.Func) *SortingSource {
 	return &SortingSource{resolve: resolve}
 }
 
-// Insert adds a value to the unsorted source.
+// Insert adds a value to the unsorted source. The value must not be modified
+// after insertion.
 func (s *SortingSource) Insert(prefix netip.Prefix, value mmdbtype.DataType) error {
 	if !prefix.IsValid() {
 		return errors.New("prefix is invalid")
