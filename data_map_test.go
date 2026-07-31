@@ -78,6 +78,31 @@ func TestValueStoreHashCollisionsUseExactEquality(t *testing.T) {
 	store.release(equalFirst)
 }
 
+func TestValueStoreContainerHashCollisionsUseExactEquality(t *testing.T) {
+	store := newValueStoreWithHash(func([]byte) uint64 { return 7 })
+	firstValue := mmdbtype.Map{
+		"nested": mmdbtype.Slice{mmdbtype.String("first")},
+	}
+	secondValue := mmdbtype.Map{
+		"nested": mmdbtype.Slice{mmdbtype.String("second")},
+	}
+	first, err := store.intern(firstValue)
+	require.NoError(t, err)
+	second, err := store.intern(secondValue)
+	require.NoError(t, err)
+	equalFirst, err := store.intern(firstValue.Copy())
+	require.NoError(t, err)
+
+	assert.NotEqual(t, first, second)
+	assert.Equal(t, first, equalFirst)
+	assert.Equal(t, firstValue, store.materialize(first))
+	assert.Equal(t, secondValue, store.materialize(second))
+
+	store.release(first)
+	store.release(second)
+	store.release(equalFirst)
+}
+
 func TestValueStoreCascadeReleaseAndFreelistReuse(t *testing.T) {
 	store := newValueStore()
 	first, err := store.internUncached(mmdbtype.String("key"))
