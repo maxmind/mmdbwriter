@@ -147,6 +147,44 @@ func TestComposeNilMergeUsesHighestLayer(t *testing.T) {
 	assert.Equal(t, mmdbtype.String("top"), top)
 }
 
+func TestComposeRefinesIPv6Layers(t *testing.T) {
+	tree, err := Compose(
+		Options{IncludeReservedNetworks: true},
+		[]NetworkSource{
+			networkSource(NetworkValue{
+				Prefix: netip.MustParsePrefix("2001:db8::/32"),
+				Value:  mmdbtype.String("base"),
+			}),
+			networkSource(NetworkValue{
+				Prefix: netip.MustParsePrefix("2001:db8:8000::/33"),
+				Value:  mmdbtype.String("top"),
+			}),
+		},
+		nil,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, []netip.Prefix{
+		netip.MustParsePrefix("2001:db8::/33"),
+		netip.MustParsePrefix("2001:db8:8000::/33"),
+	}, prefixesFromValues(collectNetworks(t, tree)))
+}
+
+func TestComposeHandlesEmptyAndNilLayers(t *testing.T) {
+	options := Options{IPVersion: 4, IncludeReservedNetworks: true}
+	tree, err := Compose(options, nil, nil)
+	require.NoError(t, err)
+	assert.Empty(t, collectNetworks(t, tree))
+
+	_, err = Compose(options, []NetworkSource{nil}, nil)
+	require.ErrorContains(t, err, "composition layer 0 is nil")
+}
+
+func TestPrefixesForRangeRejectsOversizedIPv4Range(t *testing.T) {
+	require.Panics(t, func() {
+		prefixesForRange(uint128{}, uint128{hi: 1}, true)
+	})
+}
+
 func TestComposeRejectsUnsortedOrOverlappingLayer(t *testing.T) {
 	_, err := Compose(
 		Options{IPVersion: 4, IncludeReservedNetworks: true},

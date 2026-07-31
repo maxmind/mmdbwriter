@@ -246,6 +246,12 @@ func prefixesForRange(start, end uint128, ipv4 bool) []netip.Prefix {
 	if start.hi == 0 && end.hi == 0 && end.lo <= math.MaxUint32 {
 		ipv4 = true
 	}
+	// Compose prefers IPv4 only while an active IPv4 interval bounds the range,
+	// so both endpoints must fit in the low 32 bits before the IPv4 conversion
+	// below discards the remaining bits.
+	if ipv4 && (start.hi != 0 || end.hi != 0 || end.lo > math.MaxUint32) {
+		panic("IPv4 composition range exceeds 32 bits")
+	}
 	prefixes := make([]netip.Prefix, 0, 4)
 	for start.lessOrEqual(end) {
 		hostBits := start.trailingZeros()
