@@ -27,6 +27,10 @@ type testInsert struct {
 	value   mmdbtype.DataType
 }
 
+type failingWriter struct{ err error }
+
+func (w failingWriter) Write([]byte) (int, error) { return 0, w.err }
+
 type testInsertError struct {
 	network          string
 	start            string
@@ -127,6 +131,19 @@ func TestTreeNodeBlocksGrowAndWrite(t *testing.T) {
 		require.NoError(t, result.Decode(&got), "decode record for %s", address)
 		assert.Equal(t, uint32(i), got, "record for %s", address)
 	}
+}
+
+func TestWriteToPropagatesDeferredFlushError(t *testing.T) {
+	tree, err := New(Options{IPVersion: 4, IncludeReservedNetworks: true})
+	require.NoError(t, err)
+	require.NoError(t, tree.Insert(
+		netip.MustParsePrefix("1.2.3.0/24"),
+		mmdbtype.String("value"),
+	))
+	writeErr := errors.New("write failed")
+
+	_, err = tree.WriteTo(failingWriter{err: writeErr})
+	require.ErrorIs(t, err, writeErr)
 }
 
 func TestTreeInsertFunc(t *testing.T) {
