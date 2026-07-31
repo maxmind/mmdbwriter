@@ -40,7 +40,7 @@ func (t *Tree) auditValueStore() error {
 		return nil
 	}
 	walkNode = func(index nodeIndex) error {
-		if uint64(index) >= uint64(t.nodeCountAllocated) {
+		if int64(index) >= int64(t.nodeCountAllocated) {
 			return fmt.Errorf("refcount audit found invalid node %d", index)
 		}
 		if seenNodes[index] {
