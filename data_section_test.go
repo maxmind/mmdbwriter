@@ -16,7 +16,7 @@ func TestDisablingPointers(t *testing.T) {
 		mmdbtype.String("a repeated string"),
 		mmdbtype.String("a repeated string"),
 	}
-	dm := newDataMap(newKeyWriter())
+	dm := newDataMap()
 
 	key, err := dm.store(v)
 	require.NoError(t, err)

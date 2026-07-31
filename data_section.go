@@ -17,6 +17,7 @@ type dataWriter struct {
 	*bytes.Buffer
 
 	dataMap     *dataMap
+	dataOffsets map[*dataMapValue]writtenType
 	offsets     map[dataMapKey]writtenType
 	keyWriter   *keyWriter
 	usePointers bool
@@ -26,6 +27,7 @@ func newDataWriter(dataMap *dataMap, usePointers bool) *dataWriter {
 	return &dataWriter{
 		Buffer:      &bytes.Buffer{},
 		dataMap:     dataMap,
+		dataOffsets: map[*dataMapValue]writtenType{},
 		offsets:     map[dataMapKey]writtenType{},
 		keyWriter:   newKeyWriter(),
 		usePointers: usePointers,
@@ -33,7 +35,7 @@ func newDataWriter(dataMap *dataMap, usePointers bool) *dataWriter {
 }
 
 func (dw *dataWriter) maybeWrite(value *dataMapValue) (int, error) {
-	written, ok := dw.offsets[value.key]
+	written, ok := dw.dataOffsets[value]
 	if ok {
 		return int(written.pointer), nil
 	}
@@ -54,7 +56,7 @@ func (dw *dataWriter) maybeWrite(value *dataMapValue) (int, error) {
 		size:    size,
 	}
 
-	dw.offsets[value.key] = written
+	dw.dataOffsets[value] = written
 
 	return int(written.pointer), nil
 }

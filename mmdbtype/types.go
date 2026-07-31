@@ -392,9 +392,9 @@ func (t Map) WriteTo(w writer) (int64, error) {
 	//
 	// For maps with a small number of keys (the common case for record
 	// schemas), use a stack-allocated buffer to avoid a per-WriteTo
-	// allocation. Map.WriteTo is on the hot path of every
-	// keyWriter.Key call during inserts, so this is amortized across
-	// the full build.
+	// allocation. Map.WriteTo is on the hot path of pointer-free value
+	// serialization during inserts and writes, so this is amortized across the
+	// full build.
 	var stackKeys [16]string
 	var keys []string
 	if len(t) <= len(stackKeys) {

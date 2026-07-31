@@ -5,30 +5,46 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"hash"
+	"hash/maphash"
 
 	"github.com/maxmind/mmdbwriter/v2/mmdbtype"
 )
 
-// KeyGenerator generates a unique key for record values being inserted into the
-// Tree. This is used for deduplicating the values in memory. The default
-// KeyGenerator will serialize and hash the whole datastructure. This handles
-// the general case well but may be inefficient given the particulars of the
-// data.
-//
-// Please be certain that any key you generate is unique. If there is a
-// collision with two different values having the same key, one of the
-// values will be overwritten.
-//
-// Values passed to Key must not be modified after insertion as the tree may
-// retain and deduplicate them.
-//
-// The returned byte slice is not stored. You may use the same backing
-// array between calls.
-type KeyGenerator interface {
-	Key(mmdbtype.DataType) ([]byte, error)
+// dataHasher serializes a value into its canonical, pointer-free MMDB encoding
+// and hashes it for the in-memory data map. Hash matches are always followed by
+// an exact comparison, so correctness does not depend on collision resistance.
+type dataHasher struct {
+	bytes.Buffer
+	seed     maphash.Seed
+	hashFunc func([]byte) uint64
 }
 
-var _ KeyGenerator = &keyWriter{}
+func newDataHasher() *dataHasher {
+	return &dataHasher{seed: maphash.MakeSeed()}
+}
+
+func newDataHasherWithHash(hashFunc func([]byte) uint64) *dataHasher {
+	return &dataHasher{hashFunc: hashFunc}
+}
+
+func (h *dataHasher) Hash(value mmdbtype.DataType) (uint64, error) {
+	h.Reset()
+	if _, err := value.WriteTo(h); err != nil {
+		return 0, err
+	}
+	if h.hashFunc != nil {
+		return h.hashFunc(h.Bytes()), nil
+	}
+	return maphash.Bytes(h.seed, h.Bytes()), nil
+}
+
+func (h *dataHasher) WriteOrWritePointer(value mmdbtype.DataType) (int64, error) {
+	return value.WriteTo(h)
+}
+
+func (h *dataHasher) WriteOrWritePointerString(value mmdbtype.String) (int64, error) {
+	return value.WriteTo(h)
+}
 
 // keyWriter is similar to dataWriter but it will never use pointers. This
 // will produce a unique key for the type.

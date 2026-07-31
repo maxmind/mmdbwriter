@@ -278,7 +278,7 @@ func (iRec insertRecord) maybeMergeChildren(r *record) error {
 		r.nodeIndex = noNodeIndex
 		return nil
 	case recordTypeData:
-		if child0.value.key != child1.value.key {
+		if child0.value != child1.value {
 			return nil
 		}
 		// Children have same data and can be merged
