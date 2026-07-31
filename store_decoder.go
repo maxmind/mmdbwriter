@@ -155,7 +155,11 @@ func (d *storeDecoder) decodeMap(decoder *mmdbdata.Decoder) (valueRef, error) {
 		keyRef   valueRef
 		valueRef valueRef
 	}
-	pairs := make([]mapPair, 0, int(size))
+	pairs := make(
+		[]mapPair,
+		0,
+		int(size), // #nosec G115 -- Decoder container sizes are bounded by the source buffer.
+	)
 	release := func() {
 		for _, pair := range pairs {
 			d.store.release(pair.keyRef)
@@ -201,7 +205,11 @@ func (d *storeDecoder) decodeSlice(decoder *mmdbdata.Decoder) (valueRef, error) 
 	if err != nil {
 		return nilValueRef, fmt.Errorf("reading slice: %w", err)
 	}
-	children := make([]valueRef, 0, int(size))
+	children := make(
+		[]valueRef,
+		0,
+		int(size), // #nosec G115 -- Decoder container sizes are bounded by the source buffer.
+	)
 	for iteratorErr := range iterator {
 		if iteratorErr != nil {
 			for _, child := range children {

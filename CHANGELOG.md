@@ -37,9 +37,9 @@
 - Added `Options.ScratchPath`. Data and metadata sections spill from memory to a
   temporary file in this directory after 64 MiB, reducing peak memory during
   large writes.
-- Inserter functions are now documented as pure and repeated existing values
-  are memoized within each insert call. `TopLevelMerge` and `DeepMerge` return
-  the existing value without cloning when a merge makes no semantic change.
+- Inserter functions are now documented as pure and repeated existing values are
+  memoized within each insert call. `TopLevelMerge` and `DeepMerge` return the
+  existing value without cloning when a merge makes no semantic change.
 - Added streaming composition with `NetworkSource`, `NetworkValue`,
   `MMDBSource`, `Tree.Networks`, `SourceFunc`, `SortingSource`, `MergeFunc`, and
   `Compose`. Composition refines sorted disjoint layers in one pass and calls

@@ -221,7 +221,8 @@ func Load(path string, opts Options) (*Tree, error) {
 	}
 
 	if opts.IPVersion == 0 {
-		opts.IPVersion = int(metadata.IPVersion)
+		// New validates that this is exactly 4 or 6 before using it.
+		opts.IPVersion = int(metadata.IPVersion) // #nosec G115 -- MMDB IP versions are tiny.
 	}
 
 	if opts.Languages == nil {
@@ -229,7 +230,8 @@ func Load(path string, opts Options) (*Tree, error) {
 	}
 
 	if opts.RecordSize == 0 {
-		opts.RecordSize = int(metadata.RecordSize)
+		// New validates that this is exactly 24, 28, or 32 before using it.
+		opts.RecordSize = int(metadata.RecordSize) // #nosec G115 -- MMDB record sizes are tiny.
 	}
 
 	tree, err := New(opts)
