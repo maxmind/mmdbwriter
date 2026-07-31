@@ -9,6 +9,7 @@ import (
 	"io"
 	"math"
 	"net/netip"
+	"os"
 	"time"
 
 	"github.com/oschwald/maxminddb-golang/v2"
@@ -125,6 +126,8 @@ type Tree struct {
 
 	// Tests use this to compare the optimized cursor with the root walk.
 	disableInsertCursor bool
+	refcountAudit       bool
+	debugPoison         bool
 
 	nodeCount    int
 	inserterFunc inserter.Func
@@ -144,6 +147,8 @@ func New(opts Options) (*Tree, error) {
 		nodeCountAllocated:      1,
 		root:                    rootNodeIndex,
 		valueStore:              newValueStore(),
+		refcountAudit:           os.Getenv("MMDBWRITER_REFCOUNT_AUDIT") != "",
+		debugPoison:             os.Getenv("MMDBWRITER_DEBUG_POISON") != "",
 	}
 
 	if opts.BuildEpoch != 0 {
@@ -264,6 +269,12 @@ func Load(path string, opts Options) (*Tree, error) {
 			return nil, fmt.Errorf("loading network %s: %w", prefix, err)
 		}
 	}
+	decoder.close()
+	if tree.refcountAudit {
+		if err := tree.auditValueStore(); err != nil {
+			return nil, err
+		}
+	}
 	return tree, nil
 }
 
@@ -375,9 +386,13 @@ func (t *Tree) insertPrepared(
 		if err != nil {
 			return err
 		}
-		defer t.valueStore.release(newValueRef)
 	}
-	return t.insertPreparedRef(prefix, recordType, inserterFunc, node, newValueRef)
+	err = t.insertPreparedRef(prefix, recordType, inserterFunc, node, newValueRef)
+	t.valueStore.release(newValueRef)
+	if err == nil && t.refcountAudit {
+		err = t.auditValueStore()
+	}
+	return err
 }
 
 func (t *Tree) insertNormalizedRef(

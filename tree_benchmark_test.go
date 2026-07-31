@@ -1,6 +1,7 @@
 package mmdbwriter
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"io"
 	"net/netip"
@@ -195,6 +196,177 @@ func BenchmarkTreeInsertSortedCursor(b *testing.B) {
 			}
 		})
 	}
+}
+
+func BenchmarkEnterpriseLoadThenOverlay(b *testing.B) {
+	base, overlays := enterpriseBenchmarkLayers(2_048)
+	source := newBenchmarkTree(b)
+	for _, value := range base {
+		if err := source.Insert(value.Prefix, value.Value); err != nil {
+			b.Fatal(err)
+		}
+	}
+	file, err := os.CreateTemp(b.TempDir(), "mmdbwriter-enterprise-*.mmdb")
+	if err != nil {
+		b.Fatal(err)
+	}
+	if _, err := source.WriteTo(file); err != nil {
+		b.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		b.Fatal(err)
+	}
+
+	b.ReportMetric(float64(len(base)), "networks/op")
+	b.ReportMetric(float64(len(overlays)), "overlays/op")
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		tree, err := Load(file.Name(), Options{IncludeReservedNetworks: true})
+		if err != nil {
+			b.Fatal(err)
+		}
+		for _, layer := range overlays {
+			for _, value := range layer {
+				if err := tree.InsertFunc(value.Prefix, value.Value, inserter.DeepMerge); err != nil {
+					b.Fatal(err)
+				}
+			}
+		}
+	}
+}
+
+func BenchmarkComposeEnterpriseLayers(b *testing.B) {
+	base, overlays := enterpriseBenchmarkLayers(2_048)
+	layerValues := append([][]NetworkValue{base}, overlays...)
+	layers := make([]NetworkSource, len(layerValues))
+	for index, values := range layerValues {
+		values := values
+		layers[index] = SourceFunc(func(yield func(NetworkValue, error) bool) {
+			for _, value := range values {
+				if !yield(value, nil) {
+					return
+				}
+			}
+		})
+	}
+	merge := func(_ netip.Prefix, values []mmdbtype.DataType) (mmdbtype.DataType, error) {
+		var merged mmdbtype.DataType
+		var err error
+		for _, value := range values {
+			merged, err = inserter.DeepMerge(merged, value)
+			if err != nil {
+				return nil, err
+			}
+		}
+		return merged, nil
+	}
+
+	for _, compose := range []bool{false, true} {
+		name := "sequential-passes"
+		if compose {
+			name = "compose"
+		}
+		b.Run(name, func(b *testing.B) {
+			b.ReportMetric(float64(len(base)), "networks/op")
+			b.ReportAllocs()
+			for range b.N {
+				if compose {
+					if _, err := Compose(
+						Options{IPVersion: 4, IncludeReservedNetworks: true},
+						layers,
+						merge,
+					); err != nil {
+						b.Fatal(err)
+					}
+					continue
+				}
+				tree, err := New(Options{IPVersion: 4, IncludeReservedNetworks: true})
+				if err != nil {
+					b.Fatal(err)
+				}
+				for _, value := range base {
+					if err := tree.Insert(value.Prefix, value.Value); err != nil {
+						b.Fatal(err)
+					}
+				}
+				for _, layer := range overlays {
+					for _, value := range layer {
+						if err := tree.InsertFunc(value.Prefix, value.Value, inserter.DeepMerge); err != nil {
+							b.Fatal(err)
+						}
+					}
+				}
+			}
+		})
+	}
+}
+
+func BenchmarkValueStoreVsSerializedHash(b *testing.B) {
+	base, _ := enterpriseBenchmarkLayers(256)
+	values := make([]mmdbtype.DataType, len(base))
+	for index := range base {
+		values[index] = base[index].Value
+	}
+	b.Run("value-store", func(b *testing.B) {
+		b.ReportAllocs()
+		store := newValueStore()
+		for index := range b.N {
+			ref, err := store.intern(values[index%len(values)])
+			if err != nil {
+				b.Fatal(err)
+			}
+			store.release(ref)
+		}
+	})
+	b.Run("legacy-serialized-sha256", func(b *testing.B) {
+		b.ReportAllocs()
+		var writer scalarWriter
+		var digest [sha256.Size]byte
+		for index := range b.N {
+			writer.Reset()
+			if _, err := values[index%len(values)].WriteTo(&writer); err != nil {
+				b.Fatal(err)
+			}
+			digest = sha256.Sum256(writer.Bytes())
+		}
+		benchmarkDigest = digest
+	})
+}
+
+var benchmarkDigest [sha256.Size]byte
+
+func enterpriseBenchmarkLayers(networkCount int) ([]NetworkValue, [][]NetworkValue) {
+	base := make([]NetworkValue, networkCount)
+	overlays := make([][]NetworkValue, 4)
+	for index := range overlays {
+		overlays[index] = make([]NetworkValue, networkCount)
+	}
+	for index := range networkCount {
+		address := netip.AddrFrom4([4]byte{1, byte(index >> 16), byte(index >> 8), byte(index)})
+		prefix := netip.PrefixFrom(address, 32)
+		base[index] = NetworkValue{
+			Prefix: prefix,
+			Value: benchmarkDeepMergeValue(
+				[]string{"GB", "US", "DE", "JP"}[index%4],
+				"city",
+				uint16(index%100), //nolint:gosec // bounded above
+			),
+		}
+		overlays[0][index] = NetworkValue{Prefix: prefix, Value: mmdbtype.Map{
+			"traits": mmdbtype.Map{"confidence": mmdbtype.Uint16(index % 100)},
+		}}
+		overlays[1][index] = NetworkValue{Prefix: prefix, Value: mmdbtype.Map{
+			"traits": mmdbtype.Map{"user_type": mmdbtype.String("business")},
+		}}
+		overlays[2][index] = NetworkValue{Prefix: prefix, Value: mmdbtype.Map{
+			"traits": mmdbtype.Map{"isp": mmdbtype.String("Example ISP")},
+		}}
+		overlays[3][index] = NetworkValue{Prefix: prefix, Value: mmdbtype.Map{
+			"traits": mmdbtype.Map{"domain": mmdbtype.String("example.test")},
+		}}
+	}
+	return base, overlays
 }
 
 func reportOverlappingBenchmarkShape(

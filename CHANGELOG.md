@@ -47,6 +47,9 @@
 - Ascending disjoint replacement inserts now use a persistent path cursor and
   resume from the previous path's divergence point. Unsorted or overlapping
   inserts automatically fall back to the root walk.
+- Added opt-in value-reference auditing and retired-arena poisoning through
+  `MMDBWRITER_REFCOUNT_AUDIT` and `MMDBWRITER_DEBUG_POISON` for correctness
+  testing of large mutation workloads.
 
 ## 1.2.0 (2026-01-14)
 

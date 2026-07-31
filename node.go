@@ -141,12 +141,23 @@ func (t *Tree) newPath(ip [16]byte, endDepth int, record record) nodeIndex {
 }
 
 func (t *Tree) retireNode(index nodeIndex) {
-	*t.nodeAt(index) = node{}
+	if t.debugPoison {
+		*t.nodeAt(index) = node{children: [2]record{
+			{recordType: recordType(0xff)},
+			{recordType: recordType(0xff)},
+		}}
+	} else {
+		*t.nodeAt(index) = node{}
+	}
 	t.freeNodes = append(t.freeNodes, index)
 }
 
 func (t *Tree) retirePath(index nodeIndex) {
-	t.paths[index] = compressedPath{}
+	if t.debugPoison {
+		t.paths[index] = compressedPath{record: record{recordType: recordType(0xff)}}
+	} else {
+		t.paths[index] = compressedPath{}
+	}
 	t.freePaths = append(t.freePaths, index)
 }
 
