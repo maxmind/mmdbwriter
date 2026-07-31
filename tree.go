@@ -305,7 +305,10 @@ func (t *Tree) Insert(prefix netip.Prefix, value mmdbtype.DataType) error {
 // impact.
 //
 // The function will be called multiple times per insert when the network
-// has multiple preexisting records associated with it.
+// has multiple distinct preexisting records associated with it. It must be
+// pure: its result and error must depend only on its arguments. Repeated
+// argument pairs may be memoized, so callers must not depend on invocation
+// count or order.
 //
 // This is not safe to call from multiple threads.
 func (t *Tree) InsertFunc(

@@ -12,6 +12,11 @@ import (
 // Func resolves an insertion into a tree record. existingValue is nil for an
 // empty record, and newValue is the value passed to the insert method. Returning
 // nil leaves the record empty or removes the existing value.
+//
+// A Func must be pure: its result and error must depend only on its arguments.
+// The writer may memoize repeated argument pairs within one insert operation,
+// so callers must not depend on invocation count or order. A Func must not
+// modify either argument.
 type Func func(existingValue, newValue mmdbtype.DataType) (mmdbtype.DataType, error)
 
 // Remove any records for the network being inserted.
@@ -52,6 +57,17 @@ func TopLevelMerge(existingValue, newValue mmdbtype.DataType) (mmdbtype.DataType
 			existingValue,
 		)
 	}
+	unchanged := true
+	for key, value := range newMap {
+		existing, exists := existingMap[key]
+		if !exists || existing == nil || value == nil || !existing.Equal(value) {
+			unchanged = false
+			break
+		}
+	}
+	if unchanged {
+		return existingValue, nil
+	}
 
 	returnMap := make(mmdbtype.Map, len(existingMap)+len(newMap))
 	maps.Copy(returnMap, existingMap)
@@ -81,14 +97,24 @@ func deepMerge(existingValue, newValue mmdbtype.DataType) (mmdbtype.DataType, er
 			return newValue, nil
 		}
 
-		returnMap := make(mmdbtype.Map, len(existingValue)+len(newMap))
-		maps.Copy(returnMap, existingValue)
+		var returnMap mmdbtype.Map
 		for k, v := range newMap {
-			nv, err := deepMerge(returnMap[k], v)
+			existingChild, exists := existingValue[k]
+			nv, err := deepMerge(existingChild, v)
 			if err != nil {
 				return nil, err
 			}
+			if exists && existingChild != nil && nv != nil && existingChild.Equal(nv) {
+				continue
+			}
+			if returnMap == nil {
+				returnMap = make(mmdbtype.Map, len(existingValue)+len(newMap))
+				maps.Copy(returnMap, existingValue)
+			}
 			returnMap[k] = nv
+		}
+		if returnMap == nil {
+			return existingValue, nil
 		}
 		return returnMap, nil
 	case mmdbtype.Slice:
@@ -98,8 +124,8 @@ func deepMerge(existingValue, newValue mmdbtype.DataType) (mmdbtype.DataType, er
 		}
 		length := max(len(newSlice), len(existingValue))
 
-		rv := make(mmdbtype.Slice, length)
-		for i := range rv {
+		var rv mmdbtype.Slice
+		for i := range length {
 			var ev, nv mmdbtype.DataType
 			if i < len(existingValue) {
 				ev = existingValue[i]
@@ -107,14 +133,30 @@ func deepMerge(existingValue, newValue mmdbtype.DataType) (mmdbtype.DataType, er
 			if i < len(newSlice) {
 				nv = newSlice[i]
 			}
-			var err error
-			rv[i], err = deepMerge(ev, nv)
+			merged, err := deepMerge(ev, nv)
 			if err != nil {
 				return nil, err
 			}
+			if i < len(existingValue) && ev != nil && merged != nil && ev.Equal(merged) {
+				continue
+			}
+			if i < len(existingValue) && ev == nil && merged == nil {
+				continue
+			}
+			if rv == nil {
+				rv = make(mmdbtype.Slice, length)
+				copy(rv, existingValue)
+			}
+			rv[i] = merged
+		}
+		if rv == nil {
+			return existingValue, nil
 		}
 		return rv, nil
 	default:
+		if existingValue.Equal(newValue) {
+			return existingValue, nil
+		}
 		return newValue, nil
 	}
 }

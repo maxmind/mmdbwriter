@@ -37,6 +37,9 @@
 - Added `Options.ScratchPath`. Data and metadata sections spill from memory to a
   temporary file in this directory after 64 MiB, reducing peak memory during
   large writes.
+- Inserter functions are now documented as pure and repeated existing values
+  are memoized within each insert call. `TopLevelMerge` and `DeepMerge` return
+  the existing value without cloning when a merge makes no semantic change.
 
 ## 1.2.0 (2026-01-14)
 
