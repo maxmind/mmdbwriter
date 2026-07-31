@@ -247,6 +247,23 @@ func TestSortingSourceResolvesUnsortedOverlaps(t *testing.T) {
 	}, got)
 }
 
+func TestSortingSourceDefaultsToReplace(t *testing.T) {
+	source := NewSortingSource(nil)
+	require.NoError(t, source.Insert(
+		netip.MustParsePrefix("1.2.0.0/16"),
+		mmdbtype.String("specific"),
+	))
+	require.NoError(t, source.Insert(
+		netip.MustParsePrefix("1.0.0.0/8"),
+		mmdbtype.String("replacement"),
+	))
+
+	values := collectNetworks(t, source)
+	require.Len(t, values, 1)
+	assert.Equal(t, netip.MustParsePrefix("1.0.0.0/8"), values[0].Prefix)
+	assert.Equal(t, mmdbtype.String("replacement"), values[0].Value)
+}
+
 func TestComposeOrdersIPv4WithinLowIPv6Region(t *testing.T) {
 	var mergedPrefixes []netip.Prefix
 	tree, err := Compose(
