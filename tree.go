@@ -790,11 +790,6 @@ func (t *Tree) WriteTo(w io.Writer) (numBytes int64, returnErr error) {
 		return numBytes, fmt.Errorf("writing metadata to buffer: %w", err)
 	}
 
-	err = buf.Flush()
-	if err != nil {
-		return numBytes, fmt.Errorf("flushing buffer to writer: %w", err)
-	}
-
 	return numBytes, nil
 }
 
