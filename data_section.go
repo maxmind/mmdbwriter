@@ -245,7 +245,7 @@ func (dw *dataWriter) writeValue(ref valueRef, remember bool) (int64, error) {
 			return dw.Len() - start, err
 		}
 	}
-	written := int64(dw.Len() - start)
+	written := dw.Len() - start
 	if remember {
 		dw.rememberOffset(ref, start, written)
 	}
