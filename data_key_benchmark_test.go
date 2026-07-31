@@ -1,6 +1,8 @@
 package mmdbwriter
 
 import (
+	"maps"
+	"strconv"
 	"testing"
 
 	"github.com/maxmind/mmdbwriter/v2/mmdbtype"
@@ -26,6 +28,76 @@ func BenchmarkDataHasherEnterpriseValue(b *testing.B) {
 			}
 		}
 	})
+}
+
+func BenchmarkDataMapEnterpriseValue(b *testing.B) {
+	value := benchmarkEnterpriseValue()
+
+	b.Run("equal-distinct", func(b *testing.B) {
+		values := benchmarkShallowCopies(value, 8_192)
+		dataMap := newDataMap()
+		canonical, err := dataMap.storeWithIdentity(value)
+		if err != nil {
+			b.Fatal(err)
+		}
+		b.Cleanup(func() { dataMap.remove(canonical) })
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := range b.N {
+			stored, err := dataMap.storeWithIdentity(values[i%len(values)])
+			if err != nil {
+				b.Fatal(err)
+			}
+			dataMap.remove(stored)
+		}
+	})
+
+	b.Run("unique-miss", func(b *testing.B) {
+		values := benchmarkUniqueValues(value, 8_192)
+		dataMap := newDataMap()
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := range b.N {
+			stored, err := dataMap.storeWithIdentity(values[i%len(values)])
+			if err != nil {
+				b.Fatal(err)
+			}
+			dataMap.remove(stored)
+		}
+	})
+}
+
+func BenchmarkWireDataEqualEnterpriseValue(b *testing.B) {
+	value := benchmarkEnterpriseValue()
+	clone := benchmarkShallowCopies(value, 1)[0]
+	b.ReportAllocs()
+	for range b.N {
+		if !wireDataEqual(value, clone) {
+			b.Fatal("values do not compare equal")
+		}
+	}
+}
+
+func benchmarkShallowCopies(value mmdbtype.Map, count int) []mmdbtype.DataType {
+	values := make([]mmdbtype.DataType, count)
+	for i := range values {
+		clone := make(mmdbtype.Map, len(value))
+		maps.Copy(clone, value)
+		values[i] = clone
+	}
+	return values
+}
+
+func benchmarkUniqueValues(value mmdbtype.Map, count int) []mmdbtype.DataType {
+	values := benchmarkShallowCopies(value, count)
+	baseTraits := value["traits"].(mmdbtype.Map)
+	for i, data := range values {
+		traits := make(mmdbtype.Map, len(baseTraits))
+		maps.Copy(traits, baseTraits)
+		traits["domain"] = mmdbtype.String("example-" + strconv.Itoa(i) + ".test")
+		data.(mmdbtype.Map)["traits"] = traits
+	}
+	return values
 }
 
 func benchmarkEnterpriseValue() mmdbtype.Map {
@@ -63,6 +135,7 @@ func benchmarkEnterpriseValue() mmdbtype.Map {
 			"metro_code":      mmdbtype.Uint16(0),
 			"time_zone":       mmdbtype.String("Europe/London"),
 		},
+		"location_prefix_length": mmdbtype.Uint16(24),
 		"postal": mmdbtype.Map{
 			"code":       mmdbtype.String("EC1A"),
 			"confidence": mmdbtype.Uint16(80),
@@ -72,12 +145,24 @@ func benchmarkEnterpriseValue() mmdbtype.Map {
 			"iso_code":   mmdbtype.String("GB"),
 			"names":      names,
 		},
-		"subdivisions": mmdbtype.Slice{mmdbtype.Map{
-			"confidence": mmdbtype.Uint16(75),
-			"geoname_id": mmdbtype.Uint32(6269131),
-			"iso_code":   mmdbtype.String("ENG"),
+		"represented_country": mmdbtype.Map{
+			"geoname_id": mmdbtype.Uint32(2635167),
+			"iso_code":   mmdbtype.String("GB"),
 			"names":      names,
-		}},
+		},
+		"subdivisions": mmdbtype.Slice{
+			mmdbtype.Map{
+				"confidence": mmdbtype.Uint16(75),
+				"geoname_id": mmdbtype.Uint32(6269131),
+				"iso_code":   mmdbtype.String("ENG"),
+				"names":      names,
+			},
+			mmdbtype.Map{
+				"geoname_id": mmdbtype.Uint32(3333121),
+				"iso_code":   mmdbtype.String("LND"),
+				"names":      names,
+			},
+		},
 		"traits": mmdbtype.Map{
 			"autonomous_system_number":       mmdbtype.Uint32(64512),
 			"autonomous_system_organization": mmdbtype.String("Example AS"),
@@ -87,6 +172,8 @@ func benchmarkEnterpriseValue() mmdbtype.Map {
 			"is_anycast":                     mmdbtype.Bool(false),
 			"is_legitimate_proxy":            mmdbtype.Bool(false),
 			"isp":                            mmdbtype.String("Example ISP"),
+			"mobile_country_code":            mmdbtype.String("234"),
+			"mobile_network_code":            mmdbtype.String("15"),
 			"organization":                   mmdbtype.String("Example Organization"),
 			"user_type":                      mmdbtype.String("business"),
 		},
