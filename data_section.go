@@ -238,11 +238,11 @@ func (dw *dataWriter) writeValue(ref valueRef, remember bool) (int64, error) {
 		size /= 2
 	}
 	if err := writeContainerHeader(dw, node.kind, size); err != nil {
-		return int64(dw.Len() - start), err
+		return dw.Len() - start, err
 	}
 	for _, child := range dw.store.childRefs(node) {
 		if _, err := dw.writeOrWritePointer(child); err != nil {
-			return int64(dw.Len() - start), err
+			return dw.Len() - start, err
 		}
 	}
 	written := int64(dw.Len() - start)
@@ -252,7 +252,7 @@ func (dw *dataWriter) writeValue(ref valueRef, remember bool) (int64, error) {
 	return written, nil
 }
 
-func (dw *dataWriter) rememberOffset(ref valueRef, offset int64, size int64) {
+func (dw *dataWriter) rememberOffset(ref valueRef, offset, size int64) {
 	dw.ensureOffset(ref)
 	if dw.offsets[ref].written || offset > int64(math.MaxUint32) {
 		return

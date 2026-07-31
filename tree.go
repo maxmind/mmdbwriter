@@ -939,5 +939,5 @@ func (t *Tree) writeMetadata(dw *dataWriter) (int64, error) {
 	defer t.valueStore.release(ref)
 	start := dw.Len()
 	_, err = dw.maybeWrite(ref)
-	return int64(dw.Len() - start), err
+	return dw.Len() - start, err
 }

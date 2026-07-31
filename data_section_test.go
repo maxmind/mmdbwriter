@@ -79,7 +79,7 @@ func TestSpoolWritesBufferedDataRepeatably(t *testing.T) {
 func TestSpoolWriteErrorIsSticky(t *testing.T) {
 	path := t.TempDir() + "/read-only"
 	require.NoError(t, os.WriteFile(path, []byte("existing"), 0o600))
-	file, err := os.Open(path)
+	file, err := os.Open(path) // #nosec G304 -- path is created in t.TempDir.
 	require.NoError(t, err)
 
 	spool := newSpool(t.TempDir())
