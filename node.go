@@ -60,6 +60,7 @@ type insertRecord struct {
 	value      valueRef
 	valueView  mmdbtype.DataType
 	memo       map[valueRef]valueRef
+	cursor     *sortedInsertCursor
 }
 
 // resolve returns a borrowed reference. Direct replacement reuses the one
@@ -165,10 +166,16 @@ func (t *Tree) materializePath(startDepth int, path compressedPath) record {
 }
 
 func (iRec insertRecord) insertNode(index nodeIndex, currentDepth int) error {
+	if iRec.cursor != nil {
+		iRec.cursor.recordNode(index, currentDepth)
+	}
 	newDepth := currentDepth + 1
 	node := iRec.tree.nodeAt(index)
 	// Check if we are inside the network already
 	if newDepth > iRec.prefixLen {
+		if iRec.cursor != nil {
+			iRec.cursor.branched()
+		}
 		// Data already exists for the network so insert into all the children.
 		// Identical child records are merged as recursion unwinds.
 		err := iRec.insertRecord(&node.children[0], newDepth)
@@ -305,6 +312,9 @@ func (iRec insertRecord) maybeMergeChildren(r *record) error {
 		r.recordType = child0.recordType
 		r.nodeIndex = noNodeIndex
 		iRec.tree.retireNode(retired)
+		if iRec.cursor != nil {
+			iRec.cursor.invalidated()
+		}
 		return nil
 	case recordTypeData:
 		if child0.value != child1.value {
@@ -317,6 +327,9 @@ func (iRec insertRecord) maybeMergeChildren(r *record) error {
 		iRec.store.release(child1.value)
 		r.nodeIndex = noNodeIndex
 		iRec.tree.retireNode(retired)
+		if iRec.cursor != nil {
+			iRec.cursor.invalidated()
+		}
 		return nil
 	default:
 		return fmt.Errorf("merging record type %d is not implemented", child0.recordType)

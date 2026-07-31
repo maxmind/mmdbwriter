@@ -121,6 +121,10 @@ type Tree struct {
 	freePaths []nodeIndex
 	root      nodeIndex
 	treeDepth int
+	cursor    sortedInsertCursor
+
+	// Tests use this to compare the optimized cursor with the root walk.
+	disableInsertCursor bool
 
 	nodeCount    int
 	inserterFunc inserter.Func
@@ -414,7 +418,7 @@ func (t *Tree) insertPreparedRef(
 		}
 	}()
 
-	return insertRecord{
+	iRec := insertRecord{
 		ip:           ip,
 		prefixLen:    prefixLen,
 		recordType:   recordType,
@@ -425,7 +429,30 @@ func (t *Tree) insertPreparedRef(
 		valueView:    valueView,
 		store:        t.valueStore,
 		memo:         memo,
-	}.insertNode(t.root, 0)
+	}
+	if t.disableInsertCursor || recordType != recordTypeData || inserterFunc != nil {
+		t.cursor.reset()
+		return iRec.insertNode(t.root, 0)
+	}
+	startNode, startDepth := t.cursor.start(ip, prefixLen, t.treeDepth, t.root)
+	iRec.cursor = &t.cursor
+	err := iRec.insertNode(startNode, startDepth)
+	if err == nil {
+		// insertNode cannot merge the record that owns the resume node, so
+		// unwind sibling merging through ancestors skipped by the cursor.
+		for depth := startDepth - 1; depth >= 0; depth-- {
+			parent := t.nodeAt(t.cursor.nextNodes[depth])
+			child := &parent.children[bitAt(ip, depth)]
+			if child.recordType == recordTypeNode {
+				if mergeErr := iRec.maybeMergeChildren(child); mergeErr != nil {
+					err = mergeErr
+					break
+				}
+			}
+		}
+	}
+	t.cursor.finish(err == nil)
+	return err
 }
 
 func (t *Tree) normalizeInsertPrefix(prefix netip.Prefix) (netip.Prefix, error) {
@@ -670,6 +697,7 @@ func (t *Tree) Get(ip netip.Addr) (netip.Prefix, mmdbtype.DataType) {
 
 // finalize prepares the tree for writing. It is not threadsafe.
 func (t *Tree) finalize() {
+	t.cursor.reset()
 	t.expandPaths(t.root, 0)
 	t.nodeNumbers = make([]uint32, t.nodeCountAllocated)
 	t.nodeCount = t.finalizeNode(t.root, 0)

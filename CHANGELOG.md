@@ -44,6 +44,9 @@
   `MMDBSource`, `Tree.Networks`, `SourceFunc`, `SortingSource`, `MergeFunc`, and
   `Compose`. Composition refines sorted disjoint layers in one pass and calls
   the merge function once per output prefix with every layer's active value.
+- Ascending disjoint replacement inserts now use a persistent path cursor and
+  resume from the previous path's divergence point. Unsorted or overlapping
+  inserts automatically fall back to the root walk.
 
 ## 1.2.0 (2026-01-14)
 

@@ -166,6 +166,37 @@ func BenchmarkTreeLoadOverlappingPasses(b *testing.B) {
 	}
 }
 
+func BenchmarkTreeInsertSortedCursor(b *testing.B) {
+	const networkCount = 16_384
+	for _, disableCursor := range []bool{false, true} {
+		name := "cursor"
+		if disableCursor {
+			name = "root-walk"
+		}
+		b.Run(name, func(b *testing.B) {
+			b.ReportAllocs()
+			for range b.N {
+				tree, err := New(Options{IPVersion: 4, IncludeReservedNetworks: true})
+				if err != nil {
+					b.Fatal(err)
+				}
+				tree.disableInsertCursor = disableCursor
+				for index := range networkCount {
+					address := netip.AddrFrom4([4]byte{
+						1, byte(index >> 16), byte(index >> 8), byte(index),
+					})
+					if err := tree.Insert(
+						netip.PrefixFrom(address, 32),
+						mmdbtype.Uint32(index),
+					); err != nil {
+						b.Fatal(err)
+					}
+				}
+			}
+		})
+	}
+}
+
 func reportOverlappingBenchmarkShape(
 	b *testing.B,
 	specs []benchmarkInsertSpec,
