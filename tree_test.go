@@ -66,26 +66,21 @@ func TestTreeInsertSplittingDataRecordMaintainsRefCounts(t *testing.T) {
 	initialValue := mmdbtype.String("initial")
 	require.NoError(t, tree.Insert(netip.MustParsePrefix("1.1.0.0/24"), initialValue))
 
-	keyBytes, err := tree.dataMap.keyWriter.Key(initialValue)
-	require.NoError(t, err)
-	key := dataMapKey(keyBytes)
-	initialMapValue := tree.dataMap.data[key]
-	require.NotNil(t, initialMapValue)
-	require.Equal(t, uint32(1), initialMapValue.refCount)
+	_, initialRecord := tree.getNode(tree.root, [16]byte{1, 1}, 0)
+	initialRef := initialRecord.value
+	initialRefCount := tree.valueStore.node(initialRef).refCount
 
 	require.NoError(t, tree.Insert(
 		netip.MustParsePrefix("1.1.0.128/25"),
 		mmdbtype.String("upper"),
 	))
-	assert.Equal(t, uint32(1), initialMapValue.refCount)
-	assert.Same(t, initialMapValue, tree.dataMap.data[key])
+	assert.Equal(t, initialRefCount, tree.valueStore.node(initialRef).refCount)
 
 	require.NoError(t, tree.Insert(
 		netip.MustParsePrefix("1.1.0.0/25"),
 		mmdbtype.String("lower"),
 	))
-	assert.Zero(t, initialMapValue.refCount)
-	assert.NotContains(t, tree.dataMap.data, key)
+	assert.Equal(t, valueKindInvalid, tree.valueStore.nodes[initialRef].kind)
 }
 
 func TestTreeNodeBlocksGrowAndWrite(t *testing.T) {

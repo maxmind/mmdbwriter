@@ -27,11 +27,18 @@
   `Load` completes and can increase peak memory for very large source databases.
   Source networks that reference the same data offset also share a decoded
   value, so custom inserters must copy values before modifying them.
-- Reworked tree storage to use an append-only indexed arena. This reduces
-  pointer overhead and keeps node references stable, but merged or abandoned
-  nodes and materialized sparse paths are retained until the `Tree` is
-  discarded. Workloads with heavy mutation churn may see higher peak memory than
-  v1.
+- Reworked tree storage to use an indexed block arena. This reduces pointer
+  overhead, keeps node references stable, and reuses merged nodes and
+  materialized sparse paths through freelists.
+- Replaced whole-record SHA-256 keys and retained Go value graphs with an
+  xxh3-indexed, collision-safe value store that interns every scalar and
+  container, serializes values once, and writes data through stable value
+  references. `Options.KeyGenerator` and the `KeyGenerator` interface were
+  removed. `Get` and inserters now receive immutable store-materialized values
+  that are equal to, but may not be pointer-identical with, inserted values.
+- Added `Options.ScratchPath`. Data and metadata sections spill from memory to a
+  temporary file in this directory after 64 MiB, reducing peak memory during
+  large writes.
 
 ## 1.2.0 (2026-01-14)
 

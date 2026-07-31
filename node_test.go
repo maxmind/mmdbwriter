@@ -23,7 +23,7 @@ func TestFinalizeNodeRejectsCompressedPath(t *testing.T) {
 	tree := &Tree{
 		nodeBlocks:         [][]node{make([]node, nodeBlockSize)},
 		nodeCountAllocated: 1,
-		nodeNumbers:        make([]int, 1),
+		nodeNumbers:        make([]uint32, 1),
 	}
 	tree.nodeAt(rootNodeIndex).children[0] = record{recordType: recordTypePath}
 

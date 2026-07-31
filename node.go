@@ -19,7 +19,7 @@ const (
 )
 
 type record struct {
-	value *dataMapValue
+	value valueRef
 	// nodeIndex indexes Tree node blocks for node-like records and Tree.paths
 	// for compressed-path records.
 	nodeIndex nodeIndex
@@ -49,7 +49,7 @@ const (
 type insertRecord struct {
 	inserter func(existingValue, newValue mmdbtype.DataType) (mmdbtype.DataType, error)
 
-	dataMap      *dataMap
+	store        *valueStore
 	tree         *Tree
 	insertedNode nodeIndex
 
@@ -57,14 +57,34 @@ type insertRecord struct {
 	prefixLen int
 
 	recordType recordType
-	value      mmdbtype.DataType
+	value      valueRef
+	valueView  mmdbtype.DataType
+	memo       map[valueRef]valueRef
 }
 
-func (iRec insertRecord) storeData(v mmdbtype.DataType) (*dataMapValue, error) {
+// resolve returns a borrowed reference. Direct replacement reuses the one
+// value interned at the start of the Insert call. Inserter results are memoized
+// by existing value for the duration of that call; inserter.Func is pure, so a
+// fixed (existing,new) pair always has the same result.
+func (iRec insertRecord) resolve(existing valueRef) (valueRef, error) {
 	if iRec.inserter == nil {
-		return iRec.dataMap.storeWithIdentity(v)
+		return iRec.value, nil
 	}
-	return iRec.dataMap.store(v)
+	if ref, ok := iRec.memo[existing]; ok {
+		return ref, nil
+	}
+	result, err := iRec.inserter(iRec.store.materialize(existing), iRec.valueView)
+	if err != nil {
+		return nilValueRef, err
+	}
+	ref, err := iRec.store.intern(result)
+	if err != nil {
+		return nilValueRef, err
+	}
+	// The memo owns the reference returned by intern. Assignments take their
+	// own references, and insertPrepared releases memo ownership at the end.
+	iRec.memo[existing] = ref
+	return ref, nil
 }
 
 func newNodeIndex(index int) nodeIndex {
@@ -78,6 +98,12 @@ func newNodeIndex(index int) nodeIndex {
 }
 
 func (t *Tree) newNode(children [2]record) nodeIndex {
+	if len(t.freeNodes) != 0 {
+		index := t.freeNodes[len(t.freeNodes)-1]
+		t.freeNodes = t.freeNodes[:len(t.freeNodes)-1]
+		*t.nodeAt(index) = node{children: children}
+		return index
+	}
 	index := newNodeIndex(t.nodeCountAllocated)
 	if t.nodeCountAllocated == len(t.nodeBlocks)*nodeBlockSize {
 		t.nodeBlocks = append(t.nodeBlocks, make([]node, nodeBlockSize))
@@ -97,13 +123,30 @@ func (t *Tree) nodeAt(index nodeIndex) *node {
 // allocating one node per remaining bit until a later insert reaches the path
 // or finalize expands it. Path entries are not reclaimed after materialization.
 func (t *Tree) newPath(ip [16]byte, endDepth int, record record) nodeIndex {
-	index := newNodeIndex(len(t.paths))
-	t.paths = append(t.paths, compressedPath{
+	path := compressedPath{
 		ip:       ip,
 		endDepth: endDepth,
 		record:   record,
-	})
+	}
+	if len(t.freePaths) != 0 {
+		index := t.freePaths[len(t.freePaths)-1]
+		t.freePaths = t.freePaths[:len(t.freePaths)-1]
+		t.paths[index] = path
+		return index
+	}
+	index := newNodeIndex(len(t.paths))
+	t.paths = append(t.paths, path)
 	return index
+}
+
+func (t *Tree) retireNode(index nodeIndex) {
+	*t.nodeAt(index) = node{}
+	t.freeNodes = append(t.freeNodes, index)
+}
+
+func (t *Tree) retirePath(index nodeIndex) {
+	t.paths[index] = compressedPath{}
+	t.freePaths = append(t.freePaths, index)
 }
 
 // materializePath expands a compressed path into ordinary nodes starting at
@@ -154,39 +197,30 @@ func (iRec insertRecord) insertRecord(
 	case recordTypeFixedNode:
 		return iRec.insertNode(r.nodeIndex, newDepth)
 	case recordTypePath:
-		path := iRec.tree.paths[r.nodeIndex]
+		pathIndex := r.nodeIndex
+		path := iRec.tree.paths[pathIndex]
 		*r = iRec.tree.materializePath(newDepth, path)
+		iRec.tree.retirePath(pathIndex)
 		return iRec.insertRecord(r, newDepth)
 	case recordTypeEmpty, recordTypeData:
 		if newDepth >= iRec.prefixLen {
 			if iRec.recordType == recordTypeData {
-				var oldData mmdbtype.DataType
-				if r.value != nil {
-					oldData = r.value.data
-				}
-				newData := iRec.value
-				if iRec.inserter != nil {
-					var err error
-					newData, err = iRec.inserter(oldData, iRec.value)
-					if err != nil {
-						return err
-					}
+				newValue, err := iRec.resolve(r.value)
+				if err != nil {
+					return err
 				}
 				switch {
-				case newData == nil:
-					iRec.dataMap.remove(r.value)
+				case newValue == nilValueRef:
+					iRec.store.release(r.value)
 					r.nodeIndex = iRec.insertedNode
 					r.recordType = recordTypeEmpty
-					r.value = nil
-				case oldData == nil || !oldData.Equal(newData):
-					value, err := iRec.storeData(newData)
-					if err != nil {
-						return err
-					}
-					iRec.dataMap.remove(r.value)
+					r.value = nilValueRef
+				case r.value != newValue:
+					iRec.store.retain(newValue)
+					iRec.store.release(r.value)
 					r.nodeIndex = iRec.insertedNode
 					r.recordType = iRec.recordType
-					r.value = value
+					r.value = newValue
 				default:
 					r.nodeIndex = iRec.insertedNode
 					r.recordType = iRec.recordType
@@ -195,30 +229,23 @@ func (iRec insertRecord) insertRecord(
 				oldValue := r.value
 				r.nodeIndex = iRec.insertedNode
 				r.recordType = iRec.recordType
-				r.value = nil
-				iRec.dataMap.remove(oldValue)
+				r.value = nilValueRef
+				iRec.store.release(oldValue)
 			}
 			return nil
 		}
 
 		if r.recordType == recordTypeEmpty && iRec.recordType == recordTypeData {
-			newData := iRec.value
-			if iRec.inserter != nil {
-				var err error
-				newData, err = iRec.inserter(nil, iRec.value)
-				if err != nil {
-					return err
-				}
-			}
-			if newData == nil {
-				return nil
-			}
-			value, err := iRec.storeData(newData)
+			newValue, err := iRec.resolve(nilValueRef)
 			if err != nil {
 				return err
 			}
+			if newValue == nilValueRef {
+				return nil
+			}
+			iRec.store.retain(newValue)
 			r.nodeIndex = iRec.tree.newPath(iRec.ip, iRec.prefixLen, record{
-				value:      value,
+				value:      newValue,
 				recordType: recordTypeData,
 			})
 			r.recordType = recordTypePath
@@ -228,10 +255,10 @@ func (iRec insertRecord) insertRecord(
 		// We are splitting this record so we create two duplicate child
 		// records.
 		if r.recordType == recordTypeData {
-			iRec.dataMap.addRef(r.value)
+			iRec.store.retain(r.value)
 		}
 		r.nodeIndex = iRec.tree.newNode([2]record{*r, *r})
-		r.value = nil
+		r.value = nilValueRef
 		r.recordType = recordTypeNode
 		err := iRec.insertNode(r.nodeIndex, newDepth)
 		if err != nil {
@@ -274,18 +301,22 @@ func (iRec insertRecord) maybeMergeChildren(r *record) error {
 	case recordTypeFixedNode, recordTypeNode, recordTypePath:
 		return nil
 	case recordTypeEmpty, recordTypeReserved:
+		retired := r.nodeIndex
 		r.recordType = child0.recordType
 		r.nodeIndex = noNodeIndex
+		iRec.tree.retireNode(retired)
 		return nil
 	case recordTypeData:
-		if child0.value.key != child1.value.key {
+		if child0.value != child1.value {
 			return nil
 		}
 		// Children have same data and can be merged
+		retired := r.nodeIndex
 		r.recordType = recordTypeData
 		r.value = child0.value
-		iRec.dataMap.remove(child1.value)
+		iRec.store.release(child1.value)
 		r.nodeIndex = noNodeIndex
+		iRec.tree.retireNode(retired)
 		return nil
 	default:
 		return fmt.Errorf("merging record type %d is not implemented", child0.recordType)
@@ -351,7 +382,9 @@ func (t *Tree) expandPaths(index nodeIndex, currentDepth int) {
 // this so compressed paths cannot be confused with node indexes.
 func (t *Tree) finalizeNode(index nodeIndex, currentNum int) int {
 	n := t.nodeAt(index)
-	t.nodeNumbers[index] = currentNum
+	// node indexes are limited to uint32, so a reachable node number is also
+	// representable here.
+	t.nodeNumbers[index] = uint32(currentNum) //nolint:gosec
 	currentNum++
 
 	for i := range 2 {

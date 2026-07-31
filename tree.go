@@ -76,6 +76,11 @@ type Options struct {
 	// use should primarily be limited to existing database types.
 	DisableMetadataPointers bool
 
+	// ScratchPath is the directory used for temporary data-section spool files
+	// after the in-memory spill threshold is reached. If empty, the system
+	// temporary directory is used.
+	ScratchPath string
+
 	// Inserter is the insert function used when calling `Insert`. Leaving it nil
 	// is equivalent to `inserter.Replace`, which replaces any conflicting old
 	// value entirely with the new, and allows Insert to use the default
@@ -86,29 +91,18 @@ type Options struct {
 	// other records, and Load reuses decoded values for source networks that
 	// reference the same data offset. Copy a value before modifying it.
 	Inserter inserter.Func
-
-	// KeyGenerator is used to generate unique keys for the top-level record
-	// values inserted into the database. This is used to deduplicate data
-	// in memory as the tree is being created. The KeyGenerator must
-	// generate a unique key for the value. If two different values have
-	// the same key, only one will be used.
-	//
-	// The default key generator serializes the value and generates a
-	// SHA-256 hash from it. Although this is relatively safe, it can be
-	// resource intensive for large data structures.
-	//
-	// Values passed to the key generator must not be modified after insertion as
-	// the tree may retain and deduplicate them.
-	KeyGenerator KeyGenerator
 }
 
-// Tree represents an MaxMind DB search tree.
+// Tree represents a MaxMind DB search tree. A Tree is single-goroutine: its
+// methods must not be called concurrently, including read methods while a
+// write is in progress.
 type Tree struct {
 	buildEpoch              int64
 	databaseType            string
-	dataMap                 *dataMap
+	valueStore              *valueStore
 	description             map[string]string
 	disableMetadataPointers bool
+	scratchPath             string
 	ipVersion               int
 	languages               []string
 	recordSize              int
@@ -119,10 +113,12 @@ type Tree struct {
 	nodeCountAllocated int
 	// nodeNumbers and nodeCount are invalidated by mutation and rebuilt lazily
 	// by finalize before writing.
-	nodeNumbers []int
+	nodeNumbers []uint32
 	// paths is an append-only arena for compressed sparse insertion paths. Path
 	// entries are not reclaimed after materialization.
 	paths     []compressedPath
+	freeNodes []nodeIndex
+	freePaths []nodeIndex
 	root      nodeIndex
 	treeDepth int
 
@@ -137,11 +133,13 @@ func New(opts Options) (*Tree, error) {
 		databaseType:            opts.DatabaseType,
 		description:             map[string]string{},
 		disableMetadataPointers: opts.DisableMetadataPointers,
+		scratchPath:             opts.ScratchPath,
 		ipVersion:               6,
 		recordSize:              28,
 		nodeBlocks:              [][]node{make([]node, nodeBlockSize)},
 		nodeCountAllocated:      1,
 		root:                    rootNodeIndex,
+		valueStore:              newValueStore(),
 	}
 
 	if opts.BuildEpoch != 0 {
@@ -154,12 +152,6 @@ func New(opts Options) (*Tree, error) {
 
 	if opts.IPVersion != 0 {
 		tree.ipVersion = opts.IPVersion
-	}
-
-	if opts.KeyGenerator == nil {
-		tree.dataMap = newDataMap(newKeyWriter())
-	} else {
-		tree.dataMap = newDataMap(opts.KeyGenerator)
 	}
 
 	if opts.Languages != nil {
@@ -381,6 +373,25 @@ func (t *Tree) insertPrepared(
 
 	ip, prefixLen := t.prefixInsertIP(prefix)
 
+	var newValueRef valueRef
+	var valueView mmdbtype.DataType
+	var err error
+	if recordType == recordTypeData && value != nil {
+		newValueRef, err = t.valueStore.intern(value)
+		if err != nil {
+			return err
+		}
+		defer t.valueStore.release(newValueRef)
+		valueView = t.valueStore.materialize(newValueRef)
+	}
+
+	memo := map[valueRef]valueRef{}
+	defer func() {
+		for _, ref := range memo {
+			t.valueStore.release(ref)
+		}
+	}()
+
 	return insertRecord{
 		ip:           ip,
 		prefixLen:    prefixLen,
@@ -388,9 +399,10 @@ func (t *Tree) insertPrepared(
 		inserter:     inserterFunc,
 		insertedNode: node,
 		tree:         t,
-		value:        value,
-
-		dataMap: t.dataMap,
+		value:        newValueRef,
+		valueView:    valueView,
+		store:        t.valueStore,
+		memo:         memo,
 	}.insertNode(t.root, 0)
 }
 
@@ -628,7 +640,7 @@ func (t *Tree) Get(ip netip.Addr) (netip.Prefix, mmdbtype.DataType) {
 
 	var value mmdbtype.DataType
 	if r.recordType == recordTypeData {
-		value = r.value.data
+		value = t.valueStore.materialize(r.value)
 	}
 
 	return t.getPrefixForAddr(ip, prefixLen), value
@@ -637,7 +649,7 @@ func (t *Tree) Get(ip netip.Addr) (netip.Prefix, mmdbtype.DataType) {
 // finalize prepares the tree for writing. It is not threadsafe.
 func (t *Tree) finalize() {
 	t.expandPaths(t.root, 0)
-	t.nodeNumbers = make([]int, t.nodeCountAllocated)
+	t.nodeNumbers = make([]uint32, t.nodeCountAllocated)
 	t.nodeCount = t.finalizeNode(t.root, 0)
 }
 
@@ -657,7 +669,8 @@ func (t *Tree) WriteTo(w io.Writer) (int64, error) {
 	recordBuf := make([]byte, 2*t.recordSize/8)
 
 	usePointers := true
-	dataWriter := newDataWriter(t.dataMap, usePointers)
+	dataWriter := newDataWriter(t.valueStore, usePointers, t.scratchPath)
+	defer dataWriter.Close() //nolint:errcheck // best-effort cleanup; write errors take precedence
 
 	nodeCount, numBytes, err := t.writeNode(buf, t.root, dataWriter, recordBuf)
 	if err != nil {
@@ -691,7 +704,8 @@ func (t *Tree) WriteTo(w io.Writer) (int64, error) {
 		return numBytes, fmt.Errorf("writing metadata start marker: %w", err)
 	}
 
-	metadataWriter := newDataWriter(dataWriter.dataMap, !t.disableMetadataPointers)
+	metadataWriter := newDataWriter(t.valueStore, !t.disableMetadataPointers, t.scratchPath)
+	defer metadataWriter.Close() //nolint:errcheck // best-effort cleanup; write errors take precedence
 	_, err = t.writeMetadata(metadataWriter)
 	if err != nil {
 		return numBytes, fmt.Errorf("writing metadata: %w", err)
@@ -765,7 +779,7 @@ func (t *Tree) recordValue(
 	case recordTypePath:
 		return 0, errors.New("compressed path record cannot be written before finalization")
 	default:
-		return t.nodeNumbers[r.nodeIndex], nil
+		return int(t.nodeNumbers[r.nodeIndex]), nil
 	}
 }
 
@@ -852,5 +866,12 @@ func (t *Tree) writeMetadata(dw *dataWriter) (int64, error) {
 		//nolint:gosec // recordSize is always 24, 28, or 32
 		"record_size": mmdbtype.Uint16(t.recordSize),
 	}
-	return metadata.WriteTo(dw)
+	ref, err := t.valueStore.intern(metadata)
+	if err != nil {
+		return 0, err
+	}
+	defer t.valueStore.release(ref)
+	start := dw.Len()
+	_, err = dw.maybeWrite(ref)
+	return int64(dw.Len() - start), err
 }
