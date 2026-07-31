@@ -420,12 +420,15 @@ func (t *Tree) insertPreparedRef(
 		valueView = t.valueStore.materialize(newValueRef)
 	}
 
-	memo := map[valueRef]valueRef{}
-	defer func() {
-		for _, ref := range memo {
-			t.valueStore.release(ref)
-		}
-	}()
+	var memo map[valueRef]valueRef
+	if inserterFunc != nil {
+		memo = map[valueRef]valueRef{}
+		defer func() {
+			for _, ref := range memo {
+				t.valueStore.release(ref)
+			}
+		}()
+	}
 
 	iRec := insertRecord{
 		ip:           ip,

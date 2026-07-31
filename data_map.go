@@ -177,9 +177,8 @@ type valueStore struct {
 	callerIdentityTail     int
 	callerIdentityLimit    int
 
-	hashFunc          func([]byte) uint64
-	hashScratch       []byte
-	lastInternCreated valueRef
+	hashFunc    func([]byte) uint64
+	hashScratch []byte
 }
 
 func newValueStore() *valueStore {
@@ -349,7 +348,8 @@ func (s *valueStore) internUncached(value mmdbtype.DataType) (valueRef, error) {
 		if _, err := value.WriteTo(&writer); err != nil {
 			return nilValueRef, fmt.Errorf("encoding %T for value store: %w", value, err)
 		}
-		return s.internNode(kind, writer.Bytes(), nil)
+		ref, _, err := s.internNode(kind, writer.Bytes(), nil)
+		return ref, err
 	}
 }
 
@@ -415,7 +415,7 @@ func (s *valueStore) internOwnedChildren(
 	kind valueKind,
 	children []valueRef,
 ) (valueRef, error) {
-	ref, err := s.internNode(kind, nil, children)
+	ref, created, err := s.internNode(kind, nil, children)
 	if err != nil {
 		for _, child := range children {
 			s.release(child)
@@ -424,7 +424,7 @@ func (s *valueStore) internOwnedChildren(
 	}
 	// internNode retains children only when it creates a new parent. A dedupe
 	// hit consumes the temporary tree by releasing it here.
-	if !s.nodeOwnsExactChildren(ref) {
+	if !created {
 		for _, child := range children {
 			s.release(child)
 		}
@@ -432,33 +432,25 @@ func (s *valueStore) internOwnedChildren(
 	return ref, nil
 }
 
-func (s *valueStore) nodeOwnsExactChildren(ref valueRef) bool {
-	// A freshly created node has refcount one and its arena slice is the exact
-	// input. Existing nodes can also have refcount one, so internNode records
-	// creation through lastInternCreated rather than relying on refcounts.
-	return s.lastInternCreated == ref
-}
-
 func (s *valueStore) internNode(
 	kind valueKind,
 	payload []byte,
 	children []valueRef,
-) (valueRef, error) {
+) (valueRef, bool, error) {
 	hash := s.hashNode(kind, payload, children)
-	s.lastInternCreated = nilValueRef
 	for _, ref := range s.buckets[hash] {
 		node := s.node(ref)
 		if node.kind == kind &&
 			bytes.Equal(s.payload(node), payload) &&
 			slices.Equal(s.childRefs(node), children) {
 			s.retain(ref)
-			return ref, nil
+			return ref, false, nil
 		}
 	}
 
 	payloadOffset, err := s.payloads.put(payload)
 	if err != nil {
-		return nilValueRef, err
+		return nilValueRef, false, err
 	}
 	childrenOffset, err := s.children.put(children)
 	if err != nil {
@@ -466,7 +458,7 @@ func (s *valueStore) internNode(
 			payloadOffset,
 			uint32(len(payload)), //nolint:gosec // payload arena accepted this length
 		)
-		return nilValueRef, err
+		return nilValueRef, false, err
 	}
 
 	var ref valueRef
@@ -483,7 +475,7 @@ func (s *valueStore) internNode(
 				childrenOffset,
 				uint32(len(children)), //nolint:gosec // child arena accepted this length
 			)
-			return nilValueRef, errors.New("value store contains too many live nodes")
+			return nilValueRef, false, errors.New("value store contains too many live nodes")
 		}
 		ref = valueRef(len(s.nodes)) //nolint:gosec // node count was bounded above
 		s.nodes = append(s.nodes, valueNode{})
@@ -498,8 +490,7 @@ func (s *valueStore) internNode(
 		kind:           kind,
 	}
 	s.buckets[hash] = append(s.buckets[hash], ref)
-	s.lastInternCreated = ref
-	return ref, nil
+	return ref, true, nil
 }
 
 func (s *valueStore) hashNode(kind valueKind, payload []byte, children []valueRef) uint64 {
