@@ -126,9 +126,12 @@ func (s *spool) spillIfNeeded(additional int64) error {
 	s.file = file
 	s.path = file.Name()
 	if _, err := io.Copy(file, bytes.NewReader(s.buffer.Bytes())); err != nil {
-		_ = s.Close()
+		closeErr := s.Close()
 		s.buffer = bytes.Buffer{}
 		s.err = fmt.Errorf("spilling data section: %w", err)
+		if closeErr != nil {
+			s.err = errors.Join(s.err, closeErr)
+		}
 		return s.err
 	}
 	s.buffer = bytes.Buffer{}

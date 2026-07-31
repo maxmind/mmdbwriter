@@ -720,14 +720,17 @@ func (t *Tree) finalize() {
 }
 
 // WriteTo writes the tree to the provided Writer.
-func (t *Tree) WriteTo(w io.Writer) (int64, error) {
+func (t *Tree) WriteTo(w io.Writer) (numBytes int64, returnErr error) {
 	if t.nodeCount == 0 {
 		t.finalize()
 	}
 
 	buf := bufio.NewWriter(w)
-	//nolint:errcheck // We check the error on flush the only place that matters.
-	defer buf.Flush()
+	defer func() {
+		if err := buf.Flush(); err != nil {
+			returnErr = errors.Join(returnErr, fmt.Errorf("flushing buffer to writer: %w", err))
+		}
+	}()
 
 	// We create this here so that we don't have to allocate millions of these. This
 	// may no longer make sense now that we are using a bufio.Writer anyway, which has
@@ -736,7 +739,9 @@ func (t *Tree) WriteTo(w io.Writer) (int64, error) {
 
 	usePointers := true
 	dataWriter := newDataWriter(t.valueStore, usePointers, t.scratchPath)
-	defer func() { _ = dataWriter.Close() }()
+	defer func() {
+		returnErr = errors.Join(returnErr, dataWriter.Close())
+	}()
 
 	nodeCount, numBytes, err := t.writeNode(buf, t.root, dataWriter, recordBuf)
 	if err != nil {
@@ -771,7 +776,9 @@ func (t *Tree) WriteTo(w io.Writer) (int64, error) {
 	}
 
 	metadataWriter := newDataWriter(t.valueStore, !t.disableMetadataPointers, t.scratchPath)
-	defer func() { _ = metadataWriter.Close() }()
+	defer func() {
+		returnErr = errors.Join(returnErr, metadataWriter.Close())
+	}()
 	_, err = t.writeMetadata(metadataWriter)
 	if err != nil {
 		return numBytes, fmt.Errorf("writing metadata: %w", err)
