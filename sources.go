@@ -203,11 +203,14 @@ func (s *SortingSource) AddSource(source NetworkSource) error {
 	if source == nil {
 		return errors.New("network source is nil")
 	}
+	initialLength := len(s.values)
 	for value, err := range source.Networks() {
 		if err != nil {
+			s.values = s.values[:initialLength]
 			return err
 		}
 		if err := s.Add(value); err != nil {
+			s.values = s.values[:initialLength]
 			return err
 		}
 	}

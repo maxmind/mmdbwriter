@@ -264,6 +264,29 @@ func TestSortingSourceDefaultsToReplace(t *testing.T) {
 	assert.Equal(t, mmdbtype.String("replacement"), values[0].Value)
 }
 
+func TestSortingSourceAddSourceRollsBackOnError(t *testing.T) {
+	source := NewSortingSource(nil)
+	require.NoError(t, source.Insert(
+		netip.MustParsePrefix("1.0.0.0/8"),
+		mmdbtype.String("existing"),
+	))
+	sourceErr := errors.New("source failed")
+	failingSource := SourceFunc(func(yield func(NetworkValue, error) bool) {
+		if !yield(NetworkValue{
+			Prefix: netip.MustParsePrefix("2.0.0.0/8"),
+			Value:  mmdbtype.String("partial"),
+		}, nil) {
+			return
+		}
+		yield(NetworkValue{}, sourceErr)
+	})
+
+	err := source.AddSource(failingSource)
+	require.ErrorIs(t, err, sourceErr)
+	require.Len(t, source.values, 1)
+	assert.Equal(t, netip.MustParsePrefix("1.0.0.0/8"), source.values[0].Prefix)
+}
+
 func TestComposeOrdersIPv4WithinLowIPv6Region(t *testing.T) {
 	var mergedPrefixes []netip.Prefix
 	tree, err := Compose(
