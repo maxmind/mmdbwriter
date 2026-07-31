@@ -40,6 +40,10 @@
 - Inserter functions are now documented as pure and repeated existing values
   are memoized within each insert call. `TopLevelMerge` and `DeepMerge` return
   the existing value without cloning when a merge makes no semantic change.
+- Added streaming composition with `NetworkSource`, `NetworkValue`,
+  `MMDBSource`, `Tree.Networks`, `SourceFunc`, `SortingSource`, `MergeFunc`, and
+  `Compose`. Composition refines sorted disjoint layers in one pass and calls
+  the merge function once per output prefix with every layer's active value.
 
 ## 1.2.0 (2026-01-14)
 
