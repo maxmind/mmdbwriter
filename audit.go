@@ -11,6 +11,7 @@ import (
 func (t *Tree) auditValueStore() error {
 	external := map[valueRef]uint64{}
 	seenNodes := map[nodeIndex]bool{}
+	seenPaths := map[nodeIndex]bool{}
 	var walkRecord func(record) error
 	var walkNode func(nodeIndex) error
 	walkRecord = func(record record) error {
@@ -20,6 +21,16 @@ func (t *Tree) auditValueStore() error {
 		case recordTypeNode, recordTypeFixedNode:
 			return walkNode(record.nodeIndex)
 		case recordTypePath:
+			if uint64(record.nodeIndex) >= uint64(len(t.paths)) {
+				return fmt.Errorf("refcount audit found invalid path %d", record.nodeIndex)
+			}
+			if seenPaths[record.nodeIndex] {
+				return fmt.Errorf(
+					"refcount audit found path %d with multiple owning paths",
+					record.nodeIndex,
+				)
+			}
+			seenPaths[record.nodeIndex] = true
 			return walkRecord(t.paths[record.nodeIndex].record)
 		case recordTypeEmpty, recordTypeReserved, recordTypeAlias:
 			return nil
@@ -29,6 +40,9 @@ func (t *Tree) auditValueStore() error {
 		return nil
 	}
 	walkNode = func(index nodeIndex) error {
+		if uint64(index) >= uint64(t.nodeCountAllocated) {
+			return fmt.Errorf("refcount audit found invalid node %d", index)
+		}
 		if seenNodes[index] {
 			return fmt.Errorf("refcount audit found node %d with multiple owning paths", index)
 		}
