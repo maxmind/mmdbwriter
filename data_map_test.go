@@ -140,3 +140,33 @@ func TestDataIdentityDistinguishesKindsAndRejectsNilUint128(t *testing.T) {
 	_, ok = dataIdentity(uint128)
 	assert.False(t, ok)
 }
+
+func TestValueStoreCallerIdentityCacheIsLRU(t *testing.T) {
+	store := newValueStore()
+	store.callerIdentityLimit = 2
+	first := mmdbtype.Map{"value": mmdbtype.String("first")}
+	second := mmdbtype.Map{"value": mmdbtype.String("second")}
+	third := mmdbtype.Map{"value": mmdbtype.String("third")}
+
+	firstRef, err := store.intern(first)
+	require.NoError(t, err)
+	store.release(firstRef)
+	secondRef, err := store.intern(second)
+	require.NoError(t, err)
+	store.release(secondRef)
+
+	// Refresh first so second becomes the least-recently-used entry.
+	firstRef, err = store.intern(first)
+	require.NoError(t, err)
+	store.release(firstRef)
+	thirdRef, err := store.intern(third)
+	require.NoError(t, err)
+	store.release(thirdRef)
+
+	firstIdentity, _ := dataIdentity(first)
+	secondIdentity, _ := dataIdentity(second)
+	thirdIdentity, _ := dataIdentity(third)
+	assert.Contains(t, store.callerByIdentity, firstIdentity)
+	assert.NotContains(t, store.callerByIdentity, secondIdentity)
+	assert.Contains(t, store.callerByIdentity, thirdIdentity)
+}

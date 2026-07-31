@@ -88,9 +88,10 @@ type Options struct {
 	// direct-value fast path. Passing `inserter.Replace` explicitly has the same
 	// behavior but skips that optimization.
 	//
-	// An Inserter must not modify either argument. Values may be shared with
-	// other records, and Load reuses decoded values for source networks that
-	// reference the same data offset. Copy a value before modifying it.
+	// An Inserter must be pure and must not modify either argument. Values are
+	// immutable store-materialized views that may be shared by many records.
+	// Copy a value before modifying it. Repeated argument pairs may be memoized,
+	// so an Inserter must not depend on invocation count or order.
 	Inserter inserter.Func
 }
 
@@ -849,8 +850,8 @@ func (t *Tree) copyNode(buf []byte, n *node, dataWriter *dataWriter) error {
 		return err
 	}
 
-	maxRecord := 1 << t.recordSize
-	if left >= maxRecord || right >= maxRecord {
+	maxRecord := int64(1) << t.recordSize
+	if int64(left) >= maxRecord || int64(right) >= maxRecord {
 		return fmt.Errorf(
 			"exceeded record capacity by attempting to write (%d, %d) to node with %d bit record size; "+
 				"try increasing RecordSize or reducing the size of the database",
@@ -901,7 +902,7 @@ func (t *Tree) writeMetadata(dw *dataWriter) (int64, error) {
 	for _, v := range t.languages {
 		languages = append(languages, mmdbtype.String(v))
 	}
-	if t.nodeCount > math.MaxUint32 {
+	if int64(t.nodeCount) > int64(math.MaxUint32) {
 		return 0, fmt.Errorf("node count of %d exceeds the maximum allowed value", t.nodeCount)
 	}
 	metadata := mmdbtype.Map{

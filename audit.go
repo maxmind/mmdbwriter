@@ -1,6 +1,9 @@
 package mmdbwriter
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+)
 
 // auditValueStore checks every ownership edge in the tree and value DAG. It is
 // intentionally expensive and runs after successful inserts only when
@@ -52,28 +55,55 @@ func (s *valueStore) audit(external map[valueRef]uint64) error {
 		}
 		expected[ref] += count
 	}
+	if err := s.auditCallerIdentity(); err != nil {
+		return err
+	}
 	for _, entry := range s.callerIdentity {
 		if entry.ref != nilValueRef {
 			expected[entry.ref]++
 		}
 	}
+	bucketCounts := make([]int, len(s.nodes))
+	for hash, bucket := range s.buckets {
+		for _, ref := range bucket {
+			if ref == nilValueRef || int(ref) >= len(s.nodes) {
+				return fmt.Errorf("refcount audit found invalid bucket ref %d", ref)
+			}
+			if s.nodes[ref].kind == valueKindInvalid || s.nodes[ref].hash != hash {
+				return fmt.Errorf("refcount audit found ref %d in the wrong hash bucket", ref)
+			}
+			bucketCounts[ref]++
+		}
+	}
+	freeCounts := make([]int, len(s.nodes))
+	for _, ref := range s.freeRefs {
+		if ref == nilValueRef || int(ref) >= len(s.nodes) {
+			return fmt.Errorf("refcount audit found invalid free ref %d", ref)
+		}
+		freeCounts[ref]++
+	}
 	for index := 1; index < len(s.nodes); index++ {
 		node := &s.nodes[index]
 		if node.kind == valueKindInvalid {
+			if freeCounts[index] != 1 {
+				return fmt.Errorf(
+					"refcount audit found free ref %d listed %d times",
+					index,
+					freeCounts[index],
+				)
+			}
 			continue
 		}
 		ref := valueRef(index)
-		found := false
-		for _, candidate := range s.buckets[node.hash] {
-			if candidate == ref {
-				if found {
-					return fmt.Errorf("refcount audit found duplicate bucket ref %d", ref)
-				}
-				found = true
-			}
+		if bucketCounts[index] != 1 {
+			return fmt.Errorf(
+				"refcount audit found live ref %d in %d hash buckets",
+				ref,
+				bucketCounts[index],
+			)
 		}
-		if !found {
-			return fmt.Errorf("refcount audit found ref %d missing from hash bucket", ref)
+		if freeCounts[index] != 0 {
+			return fmt.Errorf("refcount audit found live ref %d on the freelist", ref)
 		}
 		for _, child := range s.childRefs(node) {
 			if child == nilValueRef ||
@@ -104,6 +134,42 @@ func (s *valueStore) audit(external map[valueRef]uint64) error {
 				expected[index],
 			)
 		}
+	}
+	return nil
+}
+
+func (s *valueStore) auditCallerIdentity() error {
+	if len(s.callerIdentity) != len(s.callerByIdentity) {
+		return fmt.Errorf(
+			"caller identity audit has %d entries but %d indexes",
+			len(s.callerIdentity),
+			len(s.callerByIdentity),
+		)
+	}
+	if len(s.callerIdentity) == 0 {
+		if s.callerIdentityHead != -1 || s.callerIdentityTail != -1 {
+			return errors.New("caller identity audit found a head or tail in an empty cache")
+		}
+		return nil
+	}
+	seen := make([]bool, len(s.callerIdentity))
+	previous := -1
+	count := 0
+	for index := s.callerIdentityHead; index >= 0; index = s.callerIdentity[index].next {
+		if index >= len(s.callerIdentity) || seen[index] {
+			return fmt.Errorf("caller identity audit found an invalid LRU link at %d", index)
+		}
+		entry := s.callerIdentity[index]
+		mappedIndex, ok := s.callerByIdentity[entry.key]
+		if entry.prev != previous || !ok || mappedIndex != index {
+			return fmt.Errorf("caller identity audit found an inconsistent entry at %d", index)
+		}
+		seen[index] = true
+		previous = index
+		count++
+	}
+	if count != len(s.callerIdentity) || previous != s.callerIdentityTail {
+		return errors.New("caller identity audit found an incomplete LRU chain")
 	}
 	return nil
 }

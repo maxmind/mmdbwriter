@@ -154,6 +154,8 @@ type callerIdentityEntry struct {
 	key   dataIdentityKey
 	value mmdbtype.DataType // strong reference; prevents pointer-address reuse
 	ref   valueRef          // separately retained while the entry is present
+	prev  int
+	next  int
 }
 
 const callerIdentityCacheSize = 4096
@@ -171,7 +173,9 @@ type valueStore struct {
 	materializedByIdentity map[dataIdentityKey]valueRef
 	callerByIdentity       map[dataIdentityKey]int
 	callerIdentity         []callerIdentityEntry
-	callerIdentityNext     int
+	callerIdentityHead     int
+	callerIdentityTail     int
+	callerIdentityLimit    int
 
 	hashFunc          func([]byte) uint64
 	hashScratch       []byte
@@ -191,6 +195,9 @@ func newValueStoreWithHash(hashFunc func([]byte) uint64) *valueStore {
 		buckets:                map[uint64][]valueRef{},
 		materializedByIdentity: map[dataIdentityKey]valueRef{},
 		callerByIdentity:       map[dataIdentityKey]int{},
+		callerIdentityHead:     -1,
+		callerIdentityTail:     -1,
+		callerIdentityLimit:    callerIdentityCacheSize,
 		hashFunc:               hashFunc,
 	}
 }
@@ -311,6 +318,7 @@ func (s *valueStore) intern(value mmdbtype.DataType) (valueRef, error) {
 		if index, ok := s.callerByIdentity[identity]; ok {
 			entry := &s.callerIdentity[index]
 			if entry.value != nil && entry.ref != nilValueRef {
+				s.touchCallerIdentity(index)
 				s.retain(entry.ref)
 				return entry.ref, nil
 			}
@@ -522,21 +530,62 @@ func (s *valueStore) rememberCallerIdentity(value mmdbtype.DataType, ref valueRe
 	if _, exists := s.callerByIdentity[identity]; exists {
 		return
 	}
-	entry := callerIdentityEntry{key: identity, value: value, ref: ref}
+	if s.callerIdentityLimit <= 0 {
+		return
+	}
+	entry := callerIdentityEntry{key: identity, value: value, ref: ref, prev: -1, next: -1}
 	s.retain(ref)
-	if len(s.callerIdentity) < callerIdentityCacheSize {
+	if len(s.callerIdentity) < s.callerIdentityLimit {
 		index := len(s.callerIdentity)
 		s.callerIdentity = append(s.callerIdentity, entry)
 		s.callerByIdentity[identity] = index
+		s.linkCallerIdentityHead(index)
 		return
 	}
-	index := s.callerIdentityNext
-	s.callerIdentityNext = (s.callerIdentityNext + 1) % callerIdentityCacheSize
+	index := s.callerIdentityTail
 	old := s.callerIdentity[index]
 	delete(s.callerByIdentity, old.key)
+	s.unlinkCallerIdentity(index)
 	s.callerIdentity[index] = entry
 	s.callerByIdentity[identity] = index
+	s.linkCallerIdentityHead(index)
 	s.release(old.ref)
+}
+
+func (s *valueStore) touchCallerIdentity(index int) {
+	if index == s.callerIdentityHead {
+		return
+	}
+	s.unlinkCallerIdentity(index)
+	s.linkCallerIdentityHead(index)
+}
+
+func (s *valueStore) unlinkCallerIdentity(index int) {
+	entry := &s.callerIdentity[index]
+	if entry.prev >= 0 {
+		s.callerIdentity[entry.prev].next = entry.next
+	} else {
+		s.callerIdentityHead = entry.next
+	}
+	if entry.next >= 0 {
+		s.callerIdentity[entry.next].prev = entry.prev
+	} else {
+		s.callerIdentityTail = entry.prev
+	}
+	entry.prev = -1
+	entry.next = -1
+}
+
+func (s *valueStore) linkCallerIdentityHead(index int) {
+	entry := &s.callerIdentity[index]
+	entry.prev = -1
+	entry.next = s.callerIdentityHead
+	if s.callerIdentityHead >= 0 {
+		s.callerIdentity[s.callerIdentityHead].prev = index
+	} else {
+		s.callerIdentityTail = index
+	}
+	s.callerIdentityHead = index
 }
 
 func kindOf(value mmdbtype.DataType) (valueKind, error) {

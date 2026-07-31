@@ -7,8 +7,9 @@ import (
 )
 
 func TestNewNodeIndexRejectsSentinel(t *testing.T) {
+	sentinel := uint64(noNodeIndex)
 	require.Panics(t, func() {
-		newNodeIndex(int(noNodeIndex))
+		newNodeIndex(int(sentinel)) //nolint:gosec // intentional boundary conversion
 	})
 }
 
