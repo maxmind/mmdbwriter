@@ -32,8 +32,9 @@
   xxh3-indexed, collision-safe value store that interns every scalar and
   container, serializes values once, and writes data through stable value
   references. `Options.KeyGenerator` and the `KeyGenerator` interface were
-  removed. `Get` and inserters now receive immutable store-materialized values
-  that are equal to, but may not be pointer-identical with, inserted values.
+  removed. `Get` and inserters now receive shared, read-only store-materialized
+  values that are equal to, but may not be pointer-identical with, inserted
+  values.
 - Added `Options.ScratchPath`. Data and metadata sections spill from memory to a
   temporary file in this directory after 64 MiB, reducing peak memory during
   large writes.
