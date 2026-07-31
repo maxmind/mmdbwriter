@@ -77,9 +77,9 @@ type Options struct {
 	// use should primarily be limited to existing database types.
 	DisableMetadataPointers bool
 
-	// ScratchPath is the directory used for temporary data-section spool files
-	// after the in-memory spill threshold is reached. If empty, the system
-	// temporary directory is used.
+	// ScratchPath is the directory used for temporary data and metadata section
+	// spool files after the in-memory spill threshold is reached. If empty, the
+	// system temporary directory is used.
 	ScratchPath string
 
 	// Inserter is the insert function used when calling `Insert`. Leaving it nil
@@ -828,17 +828,17 @@ func (t *Tree) writeNode(
 func (t *Tree) recordValue(
 	r *record,
 	dataWriter *dataWriter,
-) (int, error) {
+) (int64, error) {
 	switch r.recordType {
 	case recordTypeData:
 		offset, err := dataWriter.maybeWrite(r.value)
-		return t.nodeCount + len(dataSectionSeparator) + offset, err
+		return int64(t.nodeCount) + int64(len(dataSectionSeparator)) + offset, err
 	case recordTypeEmpty, recordTypeReserved:
-		return t.nodeCount, nil
+		return int64(t.nodeCount), nil
 	case recordTypePath:
 		return 0, errors.New("compressed path record cannot be written before finalization")
 	default:
-		return int(t.nodeNumbers[r.nodeIndex]), nil
+		return int64(t.nodeNumbers[r.nodeIndex]), nil
 	}
 }
 
@@ -853,7 +853,7 @@ func (t *Tree) copyNode(buf []byte, n *node, dataWriter *dataWriter) error {
 	}
 
 	maxRecord := int64(1) << t.recordSize
-	if int64(left) >= maxRecord || int64(right) >= maxRecord {
+	if left >= maxRecord || right >= maxRecord {
 		return fmt.Errorf(
 			"exceeded record capacity by attempting to write (%d, %d) to node with %d bit record size; "+
 				"try increasing RecordSize or reducing the size of the database",

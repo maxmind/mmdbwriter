@@ -2,6 +2,7 @@ package mmdbwriter
 
 import (
 	"bytes"
+	"math"
 	"os"
 	"strings"
 	"testing"
@@ -47,6 +48,7 @@ func TestSpoolSpillsAndRemovesTemporaryFile(t *testing.T) {
 	_, err := spool.WriteString("abcdef")
 	require.NoError(t, err)
 	require.NotNil(t, spool.file)
+	assert.Zero(t, cap(spool.buffer.Bytes()))
 	path := spool.path
 	_, err = os.Stat(path)
 	require.NoError(t, err)
@@ -59,6 +61,48 @@ func TestSpoolSpillsAndRemovesTemporaryFile(t *testing.T) {
 	require.NoError(t, spool.Close())
 	_, err = os.Stat(path)
 	assert.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func TestSpoolWritesBufferedDataRepeatably(t *testing.T) {
+	spool := newSpool(t.TempDir())
+	_, err := spool.WriteString("buffered")
+	require.NoError(t, err)
+
+	for range 2 {
+		var output bytes.Buffer
+		_, err := spool.WriteTo(&output)
+		require.NoError(t, err)
+		assert.Equal(t, "buffered", output.String())
+	}
+}
+
+func TestSpoolWriteErrorIsSticky(t *testing.T) {
+	path := t.TempDir() + "/read-only"
+	require.NoError(t, os.WriteFile(path, []byte("existing"), 0o600))
+	file, err := os.Open(path)
+	require.NoError(t, err)
+
+	spool := newSpool(t.TempDir())
+	spool.file = file
+	spool.path = path
+	_, firstErr := spool.WriteString("cannot write")
+	require.Error(t, firstErr)
+	_, err = spool.WriteString("still cannot write")
+	require.ErrorIs(t, err, firstErr)
+	require.NoError(t, spool.Close())
+}
+
+func TestDataWriterRejectsOversizedOffset(t *testing.T) {
+	store := newValueStore()
+	ref, err := store.intern(mmdbtype.String("value"))
+	require.NoError(t, err)
+	defer store.release(ref)
+
+	writer := newDataWriter(store, true)
+	writer.size = int64(math.MaxUint32) + 1
+	writer.threshold = math.MaxInt64
+	_, err = writer.maybeWrite(ref)
+	require.ErrorContains(t, err, "exceeds maximum")
 }
 
 func TestSpoolReportsInvalidScratchPath(t *testing.T) {

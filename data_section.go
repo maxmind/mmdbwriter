@@ -30,15 +30,19 @@ type spool struct {
 	scratchPath string
 	size        int64
 	threshold   int64
+	err         error
 }
 
 func newSpool(scratchPath string) *spool {
 	return &spool{scratchPath: scratchPath, threshold: dataSpillThreshold}
 }
 
-func (s *spool) Len() int { return int(s.size) }
+func (s *spool) Len() int64 { return s.size }
 
 func (s *spool) Write(value []byte) (int, error) {
+	if s.err != nil {
+		return 0, s.err
+	}
 	if err := s.spillIfNeeded(int64(len(value))); err != nil {
 		return 0, err
 	}
@@ -53,7 +57,8 @@ func (s *spool) Write(value []byte) (int, error) {
 	}
 	s.size += int64(written)
 	if err != nil {
-		return written, fmt.Errorf("writing data spool: %w", err)
+		s.err = fmt.Errorf("writing data spool: %w", err)
+		return written, s.err
 	}
 	return written, nil
 }
@@ -66,6 +71,9 @@ func (s *spool) WriteByte(value byte) error {
 }
 
 func (s *spool) WriteString(value string) (int, error) { //nolint:unparam // writer interface
+	if s.err != nil {
+		return 0, s.err
+	}
 	if err := s.spillIfNeeded(int64(len(value))); err != nil {
 		return 0, err
 	}
@@ -80,12 +88,16 @@ func (s *spool) WriteString(value string) (int, error) { //nolint:unparam // wri
 	}
 	s.size += int64(written)
 	if err != nil {
-		return written, fmt.Errorf("writing string to data spool: %w", err)
+		s.err = fmt.Errorf("writing string to data spool: %w", err)
+		return written, s.err
 	}
 	return written, nil
 }
 
 func (s *spool) spillIfNeeded(additional int64) error {
+	if s.err != nil {
+		return s.err
+	}
 	if s.file != nil || s.size+additional <= s.threshold {
 		return nil
 	}
@@ -101,20 +113,34 @@ func (s *spool) spillIfNeeded(additional int64) error {
 	}
 	file, err := os.CreateTemp(directory, "mmdbwriter-data-*.tmp")
 	if err != nil {
-		return fmt.Errorf("creating data spool in %s: %w", filepath.Clean(directory), err)
+		reportedDirectory := directory
+		if reportedDirectory == "" {
+			reportedDirectory = os.TempDir()
+		}
+		return fmt.Errorf(
+			"creating data spool in %s: %w",
+			filepath.Clean(reportedDirectory),
+			err,
+		)
 	}
 	s.file = file
 	s.path = file.Name()
-	if _, err := s.buffer.WriteTo(file); err != nil {
+	if _, err := io.Copy(file, bytes.NewReader(s.buffer.Bytes())); err != nil {
 		_ = s.Close()
-		return fmt.Errorf("spilling data section: %w", err)
+		s.buffer = bytes.Buffer{}
+		s.err = fmt.Errorf("spilling data section: %w", err)
+		return s.err
 	}
+	s.buffer = bytes.Buffer{}
 	return nil
 }
 
 func (s *spool) WriteTo(writer io.Writer) (int64, error) {
+	if s.err != nil {
+		return 0, s.err
+	}
 	if s.file == nil {
-		written, err := s.buffer.WriteTo(writer)
+		written, err := io.Copy(writer, bytes.NewReader(s.buffer.Bytes()))
 		if err != nil {
 			return written, fmt.Errorf("copying buffered data section: %w", err)
 		}
@@ -174,10 +200,10 @@ func (dw *dataWriter) ensureOffset(ref valueRef) {
 	dw.offsets = append(dw.offsets, make([]writtenType, int(ref)-len(dw.offsets)+1)...)
 }
 
-func (dw *dataWriter) maybeWrite(ref valueRef) (int, error) {
+func (dw *dataWriter) maybeWrite(ref valueRef) (int64, error) {
 	dw.ensureOffset(ref)
 	if written := dw.offsets[ref]; written.written {
-		return int(written.pointer), nil
+		return int64(written.pointer), nil
 	}
 
 	offset := dw.Len()
@@ -185,7 +211,7 @@ func (dw *dataWriter) maybeWrite(ref valueRef) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	if int64(offset) > int64(math.MaxUint32) {
+	if offset > int64(math.MaxUint32) {
 		return 0, fmt.Errorf("offset of %d exceeds maximum when writing data", offset)
 	}
 	dw.offsets[ref] = writtenType{
@@ -226,9 +252,9 @@ func (dw *dataWriter) writeValue(ref valueRef, remember bool) (int64, error) {
 	return written, nil
 }
 
-func (dw *dataWriter) rememberOffset(ref valueRef, offset int, size int64) {
+func (dw *dataWriter) rememberOffset(ref valueRef, offset int64, size int64) {
 	dw.ensureOffset(ref)
-	if dw.offsets[ref].written || int64(offset) > int64(math.MaxUint32) {
+	if dw.offsets[ref].written || offset > int64(math.MaxUint32) {
 		return
 	}
 	dw.offsets[ref] = writtenType{
