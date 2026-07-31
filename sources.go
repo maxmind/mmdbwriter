@@ -18,8 +18,9 @@ type NetworkValue struct {
 	Value  mmdbtype.DataType
 }
 
-// NetworkSource produces masked, ascending, disjoint networks. Whether a
-// source can be enumerated more than once is source-specific.
+// NetworkSource produces masked, ascending, disjoint networks. Yielded values
+// must be treated as read-only; call Copy before modifying one. Whether a source
+// can be enumerated more than once is source-specific.
 type NetworkSource interface {
 	Networks() iter.Seq2[NetworkValue, error]
 }
