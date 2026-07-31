@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/netip"
 	"reflect"
+	"slices"
 	"testing"
 
 	"github.com/oschwald/maxminddb-golang/v2"
@@ -128,8 +129,14 @@ func TestComposeNilMergeUsesHighestLayer(t *testing.T) {
 	tree, err := Compose(
 		Options{IPVersion: 4, IncludeReservedNetworks: true},
 		[]NetworkSource{
-			networkSource(NetworkValue{Prefix: netip.MustParsePrefix("10.0.0.0/8"), Value: mmdbtype.String("base")}),
-			networkSource(NetworkValue{Prefix: netip.MustParsePrefix("10.1.0.0/16"), Value: mmdbtype.String("top")}),
+			networkSource(NetworkValue{
+				Prefix: netip.MustParsePrefix("10.0.0.0/8"),
+				Value:  mmdbtype.String("base"),
+			}),
+			networkSource(NetworkValue{
+				Prefix: netip.MustParsePrefix("10.1.0.0/16"),
+				Value:  mmdbtype.String("top"),
+			}),
 		},
 		nil,
 	)
@@ -144,8 +151,14 @@ func TestComposeRejectsUnsortedOrOverlappingLayer(t *testing.T) {
 	_, err := Compose(
 		Options{IPVersion: 4, IncludeReservedNetworks: true},
 		[]NetworkSource{networkSource(
-			NetworkValue{Prefix: netip.MustParsePrefix("2.0.0.0/8"), Value: mmdbtype.String("later")},
-			NetworkValue{Prefix: netip.MustParsePrefix("1.0.0.0/8"), Value: mmdbtype.String("earlier")},
+			NetworkValue{
+				Prefix: netip.MustParsePrefix("2.0.0.0/8"),
+				Value:  mmdbtype.String("later"),
+			},
+			NetworkValue{
+				Prefix: netip.MustParsePrefix("1.0.0.0/8"),
+				Value:  mmdbtype.String("earlier"),
+			},
 		)},
 		nil,
 	)
@@ -162,7 +175,10 @@ func TestComposePropagatesSourceAndMergeErrors(t *testing.T) {
 
 	mergeErr := errors.New("merge failed")
 	_, err = Compose(Options{IPVersion: 4, IncludeReservedNetworks: true}, []NetworkSource{
-		networkSource(NetworkValue{Prefix: netip.MustParsePrefix("1.0.0.0/8"), Value: mmdbtype.String("value")}),
+		networkSource(NetworkValue{
+			Prefix: netip.MustParsePrefix("1.0.0.0/8"),
+			Value:  mmdbtype.String("value"),
+		}),
 	}, func(netip.Prefix, []mmdbtype.DataType) (mmdbtype.DataType, error) {
 		return nil, mergeErr
 	})
@@ -198,14 +214,20 @@ func TestComposeOrdersIPv4WithinLowIPv6Region(t *testing.T) {
 	tree, err := Compose(
 		Options{DisableIPv4Aliasing: true, IncludeReservedNetworks: true},
 		[]NetworkSource{
-			networkSource(NetworkValue{Prefix: netip.MustParsePrefix("::/96"), Value: mmdbtype.String("base")}),
-			networkSource(NetworkValue{Prefix: netip.MustParsePrefix("128.0.0.0/1"), Value: mmdbtype.String("top")}),
+			networkSource(NetworkValue{
+				Prefix: netip.MustParsePrefix("::/96"),
+				Value:  mmdbtype.String("base"),
+			}),
+			networkSource(NetworkValue{
+				Prefix: netip.MustParsePrefix("128.0.0.0/1"),
+				Value:  mmdbtype.String("top"),
+			}),
 		},
 		func(prefix netip.Prefix, values []mmdbtype.DataType) (mmdbtype.DataType, error) {
 			mergedPrefixes = append(mergedPrefixes, prefix)
-			for index := len(values) - 1; index >= 0; index-- {
-				if values[index] != nil {
-					return values[index], nil
+			for _, value := range slices.Backward(values) {
+				if value != nil {
+					return value, nil
 				}
 			}
 			return nil, nil

@@ -228,7 +228,11 @@ func BenchmarkEnterpriseLoadThenOverlay(b *testing.B) {
 		}
 		for _, layer := range overlays {
 			for _, value := range layer {
-				if err := tree.InsertFunc(value.Prefix, value.Value, inserter.DeepMerge); err != nil {
+				if err := tree.InsertFunc(
+					value.Prefix,
+					value.Value,
+					inserter.DeepMerge,
+				); err != nil {
 					b.Fatal(err)
 				}
 			}
@@ -241,7 +245,6 @@ func BenchmarkComposeEnterpriseLayers(b *testing.B) {
 	layerValues := append([][]NetworkValue{base}, overlays...)
 	layers := make([]NetworkSource, len(layerValues))
 	for index, values := range layerValues {
-		values := values
 		layers[index] = SourceFunc(func(yield func(NetworkValue, error) bool) {
 			for _, value := range values {
 				if !yield(value, nil) {
@@ -292,7 +295,11 @@ func BenchmarkComposeEnterpriseLayers(b *testing.B) {
 				}
 				for _, layer := range overlays {
 					for _, value := range layer {
-						if err := tree.InsertFunc(value.Prefix, value.Value, inserter.DeepMerge); err != nil {
+						if err := tree.InsertFunc(
+							value.Prefix,
+							value.Value,
+							inserter.DeepMerge,
+						); err != nil {
 							b.Fatal(err)
 						}
 					}
@@ -350,7 +357,7 @@ func enterpriseBenchmarkLayers(networkCount int) ([]NetworkValue, [][]NetworkVal
 			Value: benchmarkDeepMergeValue(
 				[]string{"GB", "US", "DE", "JP"}[index%4],
 				"city",
-				uint16(index%100), //nolint:gosec // bounded above
+				uint16(index%100),
 			),
 		}
 		overlays[0][index] = NetworkValue{Prefix: prefix, Value: mmdbtype.Map{

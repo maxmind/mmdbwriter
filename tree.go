@@ -220,7 +220,6 @@ func Load(path string, opts Options) (*Tree, error) {
 	}
 
 	if opts.IPVersion == 0 {
-		//nolint:gosec // IPVersion is always 4 or 6
 		opts.IPVersion = int(metadata.IPVersion)
 	}
 
@@ -229,7 +228,6 @@ func Load(path string, opts Options) (*Tree, error) {
 	}
 
 	if opts.RecordSize == 0 {
-		//nolint:gosec // RecordSize is always 24, 28, or 32
 		opts.RecordSize = int(metadata.RecordSize)
 	}
 
@@ -263,7 +261,13 @@ func Load(path string, opts Options) (*Tree, error) {
 			return nil, err
 		}
 
-		err = tree.insertNormalizedRef(prefix, recordTypeData, tree.inserterFunc, noNodeIndex, value)
+		err = tree.insertNormalizedRef(
+			prefix,
+			recordTypeData,
+			tree.inserterFunc,
+			noNodeIndex,
+			value,
+		)
 		tree.valueStore.release(value)
 		if err != nil {
 			return nil, fmt.Errorf("loading network %s: %w", prefix, err)
@@ -355,19 +359,6 @@ func (t *Tree) insert(
 		if err := t.checkInsertPrefixFamily(prefix); err != nil {
 			return err
 		}
-	}
-	return t.insertPrepared(prefix, recordType, inserterFunc, node, value)
-}
-
-func (t *Tree) insertNormalized(
-	prefix netip.Prefix,
-	recordType recordType,
-	inserterFunc inserter.Func,
-	node nodeIndex,
-	value mmdbtype.DataType,
-) error {
-	if t.treeDepth == 32 && !prefix.Addr().Is4() {
-		return errors.New("IPv6 prefixes cannot be inserted into an IPv4 tree")
 	}
 	return t.insertPrepared(prefix, recordType, inserterFunc, node, value)
 }
@@ -735,7 +726,7 @@ func (t *Tree) WriteTo(w io.Writer) (int64, error) {
 
 	usePointers := true
 	dataWriter := newDataWriter(t.valueStore, usePointers, t.scratchPath)
-	defer dataWriter.Close() //nolint:errcheck // best-effort cleanup; write errors take precedence
+	defer func() { _ = dataWriter.Close() }()
 
 	nodeCount, numBytes, err := t.writeNode(buf, t.root, dataWriter, recordBuf)
 	if err != nil {
@@ -770,7 +761,7 @@ func (t *Tree) WriteTo(w io.Writer) (int64, error) {
 	}
 
 	metadataWriter := newDataWriter(t.valueStore, !t.disableMetadataPointers, t.scratchPath)
-	defer metadataWriter.Close() //nolint:errcheck // best-effort cleanup; write errors take precedence
+	defer func() { _ = metadataWriter.Close() }()
 	_, err = t.writeMetadata(metadataWriter)
 	if err != nil {
 		return numBytes, fmt.Errorf("writing metadata: %w", err)

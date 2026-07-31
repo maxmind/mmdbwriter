@@ -408,7 +408,7 @@ func (t *Tree) finalizeNode(index nodeIndex, currentNum int) int {
 	n := t.nodeAt(index)
 	// node indexes are limited to uint32, so a reachable node number is also
 	// representable here.
-	t.nodeNumbers[index] = uint32(currentNum) //nolint:gosec
+	t.nodeNumbers[index] = uint32(currentNum) //nolint:gosec // node indexes bound the count
 	currentNum++
 
 	for i := range 2 {

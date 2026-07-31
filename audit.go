@@ -76,7 +76,9 @@ func (s *valueStore) audit(external map[valueRef]uint64) error {
 			return fmt.Errorf("refcount audit found ref %d missing from hash bucket", ref)
 		}
 		for _, child := range s.childRefs(node) {
-			if child == nilValueRef || int(child) >= len(s.nodes) || s.nodes[child].kind == valueKindInvalid {
+			if child == nilValueRef ||
+				int(child) >= len(s.nodes) ||
+				s.nodes[child].kind == valueKindInvalid {
 				return fmt.Errorf("refcount audit found invalid child ref %d from %d", child, ref)
 			}
 			expected[child]++
@@ -86,7 +88,11 @@ func (s *valueStore) audit(external map[valueRef]uint64) error {
 		node := &s.nodes[index]
 		if node.kind == valueKindInvalid {
 			if expected[index] != 0 {
-				return fmt.Errorf("refcount audit expected %d references to free ref %d", expected[index], index)
+				return fmt.Errorf(
+					"refcount audit expected %d references to free ref %d",
+					expected[index],
+					index,
+				)
 			}
 			continue
 		}

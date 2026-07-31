@@ -2,11 +2,13 @@ package mmdbwriter
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"iter"
 	"math"
 	"math/bits"
 	"net/netip"
+	"slices"
 
 	"github.com/maxmind/mmdbwriter/v2/mmdbtype"
 )
@@ -31,13 +33,19 @@ func Compose(opts Options, layers []NetworkSource, merge MergeFunc) (*Tree, erro
 	}
 
 	cursors := make([]*sourceCursor, len(layers))
+	stops := make([]func(), 0, len(layers))
+	defer func() {
+		for _, stop := range stops {
+			stop()
+		}
+	}()
 	for index, layer := range layers {
 		if layer == nil {
 			return nil, fmt.Errorf("composition layer %d is nil", index)
 		}
 		cursor := newSourceCursor(index, layer.Networks())
 		cursors[index] = cursor
-		defer cursor.stop()
+		stops = append(stops, cursor.stop)
 		if err := cursor.pull(); err != nil {
 			return nil, err
 		}
@@ -74,7 +82,8 @@ func Compose(opts Options, layers []NetworkSource, merge MergeFunc) (*Tree, erro
 				active = true
 				values[index] = cursor.value.Value
 				preferIPv4 = preferIPv4 || interval.ipv4
-				if next, exists := interval.end.increment(); exists && (!hasBoundary || next.less(boundary)) {
+				if next, exists := interval.end.increment(); exists &&
+					(!hasBoundary || next.less(boundary)) {
 					boundary = next
 					hasBoundary = true
 				}
@@ -122,9 +131,9 @@ func composeRange(
 			err   error
 		)
 		if merge == nil {
-			for index := len(values) - 1; index >= 0; index-- {
-				if values[index] != nil {
-					value = values[index]
+			for _, candidate := range slices.Backward(values) {
+				if candidate != nil {
+					value = candidate
 					break
 				}
 			}
@@ -205,7 +214,7 @@ func (u uint128) blockEnd(hostBits int) uint128 {
 
 func uint128FromPrefix(prefix netip.Prefix) (sourceInterval, error) {
 	if !prefix.IsValid() {
-		return sourceInterval{}, fmt.Errorf("prefix is invalid")
+		return sourceInterval{}, errors.New("prefix is invalid")
 	}
 	prefix = prefix.Masked()
 	address := prefix.Addr()
@@ -243,12 +252,15 @@ func prefixesForRange(start, end uint128, ipv4 bool) []netip.Prefix {
 		if ipv4 && hostBits > 32 {
 			hostBits = 32
 		}
-		for start.blockEnd(hostBits).less(end) == false && start.blockEnd(hostBits) != end {
+		for end.less(start.blockEnd(hostBits)) {
 			hostBits--
 		}
 		if ipv4 {
 			address := [4]byte{
-				byte(start.lo >> 24), byte(start.lo >> 16), byte(start.lo >> 8), byte(start.lo),
+				byte(start.lo >> 24), //nolint:gosec // selecting one address byte
+				byte(start.lo >> 16), //nolint:gosec // selecting one address byte
+				byte(start.lo >> 8),  //nolint:gosec // selecting one address byte
+				byte(start.lo),       //nolint:gosec // selecting one address byte
 			}
 			prefixes = append(prefixes, netip.PrefixFrom(netip.AddrFrom4(address), 32-hostBits))
 		} else {

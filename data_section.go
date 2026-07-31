@@ -52,7 +52,10 @@ func (s *spool) Write(value []byte) (int, error) {
 		written, err = s.file.Write(value)
 	}
 	s.size += int64(written)
-	return written, err
+	if err != nil {
+		return written, fmt.Errorf("writing data spool: %w", err)
+	}
+	return written, nil
 }
 
 func (s *spool) WriteByte(value byte) error {
@@ -62,7 +65,7 @@ func (s *spool) WriteByte(value byte) error {
 	return err
 }
 
-func (s *spool) WriteString(value string) (int, error) {
+func (s *spool) WriteString(value string) (int, error) { //nolint:unparam // writer interface
 	if err := s.spillIfNeeded(int64(len(value))); err != nil {
 		return 0, err
 	}
@@ -76,7 +79,10 @@ func (s *spool) WriteString(value string) (int, error) {
 		written, err = s.file.WriteString(value)
 	}
 	s.size += int64(written)
-	return written, err
+	if err != nil {
+		return written, fmt.Errorf("writing string to data spool: %w", err)
+	}
+	return written, nil
 }
 
 func (s *spool) spillIfNeeded(additional int64) error {
@@ -108,7 +114,11 @@ func (s *spool) spillIfNeeded(additional int64) error {
 
 func (s *spool) WriteTo(writer io.Writer) (int64, error) {
 	if s.file == nil {
-		return s.buffer.WriteTo(writer)
+		written, err := s.buffer.WriteTo(writer)
+		if err != nil {
+			return written, fmt.Errorf("copying buffered data section: %w", err)
+		}
+		return written, nil
 	}
 	if _, err := s.file.Seek(0, io.SeekStart); err != nil {
 		return 0, fmt.Errorf("rewinding data spool: %w", err)
@@ -128,10 +138,10 @@ func (s *spool) Close() error {
 	removeErr := os.Remove(s.path)
 	s.file = nil
 	if closeErr != nil {
-		return closeErr
+		return fmt.Errorf("closing data spool: %w", closeErr)
 	}
 	if removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
-		return removeErr
+		return fmt.Errorf("removing data spool: %w", removeErr)
 	}
 	return nil
 }
@@ -175,7 +185,7 @@ func (dw *dataWriter) maybeWrite(ref valueRef) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	if uint64(offset) > math.MaxUint32 {
+	if int64(offset) > int64(math.MaxUint32) {
 		return 0, fmt.Errorf("offset of %d exceeds maximum when writing data", offset)
 	}
 	dw.offsets[ref] = writtenType{
@@ -218,7 +228,7 @@ func (dw *dataWriter) writeValue(ref valueRef, remember bool) (int64, error) {
 
 func (dw *dataWriter) rememberOffset(ref valueRef, offset int, size int64) {
 	dw.ensureOffset(ref)
-	if dw.offsets[ref].written || uint64(offset) > math.MaxUint32 {
+	if dw.offsets[ref].written || int64(offset) > int64(math.MaxUint32) {
 		return
 	}
 	dw.offsets[ref] = writtenType{
@@ -261,7 +271,11 @@ func (dw *dataWriter) WriteOrWritePointerString(value mmdbtype.String) (int64, e
 	return dw.WriteOrWritePointer(value)
 }
 
-func writeContainerHeader(writer interface{ WriteByte(byte) error }, kind valueKind, size int) error {
+func writeContainerHeader(
+	writer interface{ WriteByte(byte) error },
+	kind valueKind,
+	size int,
+) error {
 	typeNumber := byte(7) // map
 	if kind == valueKindSlice {
 		typeNumber = 11
@@ -278,7 +292,7 @@ func writeContainerHeader(writer interface{ WriteByte(byte) error }, kind valueK
 	remainingSize := 0
 	switch {
 	case size < 29:
-		first |= byte(size)
+		first |= byte(size) //nolint:gosec // this branch bounds size below 29
 	case size < 285:
 		first |= 29
 		remaining = size - 29
@@ -295,16 +309,17 @@ func writeContainerHeader(writer interface{ WriteByte(byte) error }, kind valueK
 		return fmt.Errorf("cannot store %d container entries", size)
 	}
 	if err := writer.WriteByte(first); err != nil {
-		return err
+		return fmt.Errorf("writing container control byte: %w", err)
 	}
 	if second != 0 {
 		if err := writer.WriteByte(second); err != nil {
-			return err
+			return fmt.Errorf("writing extended container type: %w", err)
 		}
 	}
 	for index := remainingSize - 1; index >= 0; index-- {
-		if err := writer.WriteByte(byte(remaining >> (8 * index))); err != nil {
-			return err
+		value := byte(remaining >> (8 * index)) //nolint:gosec // one encoded size byte
+		if err := writer.WriteByte(value); err != nil {
+			return fmt.Errorf("writing container size: %w", err)
 		}
 	}
 	return nil

@@ -148,7 +148,7 @@ func (d *storeDecoder) decodeRef(decoder *mmdbdata.Decoder) (valueRef, error) {
 func (d *storeDecoder) decodeMap(decoder *mmdbdata.Decoder) (valueRef, error) {
 	iterator, size, err := decoder.ReadMap()
 	if err != nil {
-		return nilValueRef, err
+		return nilValueRef, fmt.Errorf("reading map: %w", err)
 	}
 	type mapPair struct {
 		key      string
@@ -172,13 +172,13 @@ func (d *storeDecoder) decodeMap(decoder *mmdbdata.Decoder) (valueRef, error) {
 			release()
 			return nilValueRef, keyErr
 		}
-		valueRef, valueErr := d.decodeRef(decoder)
+		childRef, valueErr := d.decodeRef(decoder)
 		if valueErr != nil {
 			d.store.release(keyRef)
 			release()
 			return nilValueRef, valueErr
 		}
-		pairs = append(pairs, mapPair{key: string(key), keyRef: keyRef, valueRef: valueRef})
+		pairs = append(pairs, mapPair{key: string(key), keyRef: keyRef, valueRef: childRef})
 	}
 	slices.SortFunc(pairs, func(left, right mapPair) int {
 		if left.key < right.key {
@@ -193,13 +193,13 @@ func (d *storeDecoder) decodeMap(decoder *mmdbdata.Decoder) (valueRef, error) {
 	for _, pair := range pairs {
 		children = append(children, pair.keyRef, pair.valueRef)
 	}
-	return d.store.internOwnedChildren(valueKindMap, nil, children)
+	return d.store.internOwnedChildren(valueKindMap, children)
 }
 
 func (d *storeDecoder) decodeSlice(decoder *mmdbdata.Decoder) (valueRef, error) {
 	iterator, size, err := decoder.ReadSlice()
 	if err != nil {
-		return nilValueRef, err
+		return nilValueRef, fmt.Errorf("reading slice: %w", err)
 	}
 	children := make([]valueRef, 0, int(size))
 	for iteratorErr := range iterator {
@@ -218,5 +218,5 @@ func (d *storeDecoder) decodeSlice(decoder *mmdbdata.Decoder) (valueRef, error) 
 		}
 		children = append(children, ref)
 	}
-	return d.store.internOwnedChildren(valueKindSlice, nil, children)
+	return d.store.internOwnedChildren(valueKindSlice, children)
 }

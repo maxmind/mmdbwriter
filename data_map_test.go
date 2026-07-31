@@ -84,7 +84,7 @@ func TestValueStoreCascadeReleaseAndFreelistReuse(t *testing.T) {
 	require.NoError(t, err)
 	second, err := store.internUncached(mmdbtype.Uint32(42))
 	require.NoError(t, err)
-	ref, err := store.internOwnedChildren(valueKindSlice, nil, []valueRef{first, second})
+	ref, err := store.internOwnedChildren(valueKindSlice, []valueRef{first, second})
 	require.NoError(t, err)
 	nodeCount := len(store.nodes)
 	store.release(ref)

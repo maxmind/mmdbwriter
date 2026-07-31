@@ -26,7 +26,7 @@ func TestSortedInsertCursorResumesBelowRoot(t *testing.T) {
 			mmdbtype.Uint32(index+1),
 		))
 	}
-	assert.Greater(t, tree.cursor.lastResumeDepth, 0)
+	assert.Positive(t, tree.cursor.lastResumeDepth)
 }
 
 func FuzzSortedInsertCursorMatchesRootWalk(f *testing.F) {

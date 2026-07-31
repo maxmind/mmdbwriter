@@ -1,6 +1,7 @@
 package mmdbwriter
 
 import (
+	"errors"
 	"fmt"
 	"iter"
 	"net/netip"
@@ -35,7 +36,7 @@ func SourceFunc(sequence iter.Seq2[NetworkValue, error]) NetworkSource {
 func (s sequenceSource) Networks() iter.Seq2[NetworkValue, error] {
 	if s.sequence == nil {
 		return func(yield func(NetworkValue, error) bool) {
-			yield(NetworkValue{}, fmt.Errorf("network sequence is nil"))
+			yield(NetworkValue{}, errors.New("network sequence is nil"))
 		}
 	}
 	return s.sequence
@@ -55,7 +56,7 @@ func MMDBSource(reader *maxminddb.Reader, options ...maxminddb.NetworksOption) N
 func (s *mmdbSource) Networks() iter.Seq2[NetworkValue, error] {
 	return func(yield func(NetworkValue, error) bool) {
 		if s == nil || s.reader == nil {
-			yield(NetworkValue{}, fmt.Errorf("MMDB source has a nil reader"))
+			yield(NetworkValue{}, errors.New("MMDB source has a nil reader"))
 			return
 		}
 		unmarshaler := mmdbtype.NewUnmarshaler()
@@ -101,11 +102,11 @@ func (t *Tree) walkNetworks(
 ) bool {
 	switch record.recordType {
 	case recordTypeData:
-		prefix, err := t.internalPrefix(ip, depth)
-		if err != nil {
-			return yield(NetworkValue{}, err)
-		}
-		return yield(NetworkValue{Prefix: prefix, Value: t.valueStore.materialize(record.value)}, nil)
+		prefix := t.internalPrefix(ip, depth)
+		return yield(NetworkValue{
+			Prefix: prefix,
+			Value:  t.valueStore.materialize(record.value),
+		}, nil)
 	case recordTypeNode, recordTypeFixedNode:
 		node := t.nodeAt(record.nodeIndex)
 		for side := range 2 {
@@ -121,16 +122,19 @@ func (t *Tree) walkNetworks(
 	case recordTypeEmpty, recordTypeReserved, recordTypeAlias:
 		return true
 	default:
-		return yield(NetworkValue{}, fmt.Errorf("enumerating record type %d is not implemented", record.recordType))
+		return yield(NetworkValue{}, fmt.Errorf(
+			"enumerating record type %d is not implemented",
+			record.recordType,
+		))
 	}
 	return true
 }
 
-func (t *Tree) internalPrefix(ip [16]byte, depth int) (netip.Prefix, error) {
+func (t *Tree) internalPrefix(ip [16]byte, depth int) netip.Prefix {
 	if t.treeDepth == 32 {
 		var address [4]byte
 		copy(address[:], ip[:4])
-		return netip.PrefixFrom(netip.AddrFrom4(address), depth), nil
+		return netip.PrefixFrom(netip.AddrFrom4(address), depth)
 	}
 	if depth >= 96 {
 		allZero := true
@@ -143,10 +147,10 @@ func (t *Tree) internalPrefix(ip [16]byte, depth int) (netip.Prefix, error) {
 		if allZero {
 			var address [4]byte
 			copy(address[:], ip[12:])
-			return netip.PrefixFrom(netip.AddrFrom4(address), depth-96), nil
+			return netip.PrefixFrom(netip.AddrFrom4(address), depth-96)
 		}
 	}
-	return netip.PrefixFrom(netip.AddrFrom16(ip), depth), nil
+	return netip.PrefixFrom(netip.AddrFrom16(ip), depth)
 }
 
 func setBit(ip *[16]byte, depth int, value byte) {
@@ -174,11 +178,11 @@ func NewSortingSource(resolve inserter.Func) *SortingSource {
 // Insert adds a value to the unsorted source.
 func (s *SortingSource) Insert(prefix netip.Prefix, value mmdbtype.DataType) error {
 	if !prefix.IsValid() {
-		return fmt.Errorf("prefix is invalid")
+		return errors.New("prefix is invalid")
 	}
 	if prefix.Addr().Is4In6() {
 		if prefix.Bits() < 96 {
-			return fmt.Errorf("IPv4-mapped prefixes shorter than /96 cannot be inserted")
+			return errors.New("IPv4-mapped prefixes shorter than /96 cannot be inserted")
 		}
 		prefix = netip.PrefixFrom(prefix.Addr().Unmap(), prefix.Bits()-96)
 	}
@@ -194,7 +198,7 @@ func (s *SortingSource) Add(value NetworkValue) error {
 // AddSource consumes another source in its yielded order.
 func (s *SortingSource) AddSource(source NetworkSource) error {
 	if source == nil {
-		return fmt.Errorf("network source is nil")
+		return errors.New("network source is nil")
 	}
 	for value, err := range source.Networks() {
 		if err != nil {
@@ -207,6 +211,8 @@ func (s *SortingSource) AddSource(source NetworkSource) error {
 	return nil
 }
 
+// Networks sorts and resolves all values added to the source, then yields
+// ascending disjoint networks.
 func (s *SortingSource) Networks() iter.Seq2[NetworkValue, error] {
 	return func(yield func(NetworkValue, error) bool) {
 		tree, err := New(Options{

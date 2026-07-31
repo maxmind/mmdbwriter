@@ -70,7 +70,7 @@ func (a *byteArena) put(value []byte) (uint32, error) {
 	if uint64(len(value)) > math.MaxUint32 {
 		return 0, errors.New("value payload exceeds the value-store limit")
 	}
-	length := uint32(len(value))
+	length := uint32(len(value)) //nolint:gosec // length was bounded above
 	var offset uint32
 	if offsets := a.free[length]; len(offsets) != 0 {
 		offset = offsets[len(offsets)-1]
@@ -81,7 +81,7 @@ func (a *byteArena) put(value []byte) (uint32, error) {
 	if uint64(len(a.data))+uint64(length) > math.MaxUint32 {
 		return 0, errors.New("value payload arena exceeds the value-store limit")
 	}
-	offset = uint32(len(a.data))
+	offset = uint32(len(a.data)) //nolint:gosec // arena length was bounded above
 	a.data = append(a.data, value...)
 	return offset, nil
 }
@@ -108,7 +108,7 @@ func (a *refArena) put(value []valueRef) (uint32, error) {
 	if uint64(len(value)) > math.MaxUint32 {
 		return 0, errors.New("value child list exceeds the value-store limit")
 	}
-	length := uint32(len(value))
+	length := uint32(len(value)) //nolint:gosec // length was bounded above
 	var offset uint32
 	if offsets := a.free[length]; len(offsets) != 0 {
 		offset = offsets[len(offsets)-1]
@@ -119,7 +119,7 @@ func (a *refArena) put(value []valueRef) (uint32, error) {
 	if uint64(len(a.data))+uint64(length) > math.MaxUint32 {
 		return 0, errors.New("value child arena exceeds the value-store limit")
 	}
-	offset = uint32(len(a.data))
+	offset = uint32(len(a.data)) //nolint:gosec // arena length was bounded above
 	a.data = append(a.data, value...)
 	return offset, nil
 }
@@ -201,22 +201,30 @@ func dataIdentity(value mmdbtype.DataType) (dataIdentityKey, bool) {
 		if len(value) == 0 {
 			return dataIdentityKey{kind: dataIdentityBytes}, true
 		}
-		return dataIdentityKey{ptr: reflect.ValueOf(value).Pointer(), kind: dataIdentityBytes, size: len(value)}, true
+		return dataIdentityKey{
+			ptr: reflect.ValueOf(value).Pointer(), kind: dataIdentityBytes, size: len(value),
+		}, true
 	case mmdbtype.Map:
 		if len(value) == 0 {
 			return dataIdentityKey{kind: dataIdentityMap}, true
 		}
-		return dataIdentityKey{ptr: reflect.ValueOf(value).Pointer(), kind: dataIdentityMap, size: len(value)}, true
+		return dataIdentityKey{
+			ptr: reflect.ValueOf(value).Pointer(), kind: dataIdentityMap, size: len(value),
+		}, true
 	case mmdbtype.Slice:
 		if len(value) == 0 {
 			return dataIdentityKey{kind: dataIdentitySlice}, true
 		}
-		return dataIdentityKey{ptr: reflect.ValueOf(value).Pointer(), kind: dataIdentitySlice, size: len(value)}, true
+		return dataIdentityKey{
+			ptr: reflect.ValueOf(value).Pointer(), kind: dataIdentitySlice, size: len(value),
+		}, true
 	case *mmdbtype.Uint128:
 		if value == nil {
 			return dataIdentityKey{}, false
 		}
-		return dataIdentityKey{ptr: reflect.ValueOf(value).Pointer(), kind: dataIdentityUint128}, true
+		return dataIdentityKey{
+			ptr: reflect.ValueOf(value).Pointer(), kind: dataIdentityUint128,
+		}, true
 	default:
 		return dataIdentityKey{}, false
 	}
@@ -362,14 +370,14 @@ func (s *valueStore) internMap(value mmdbtype.Map) (valueRef, error) {
 			releaseChildren()
 			return nilValueRef, fmt.Errorf("map key %q has a nil value", key)
 		}
-		valueRef, err := s.intern(child)
+		childRef, err := s.intern(child)
 		if err != nil {
 			releaseChildren()
 			return nilValueRef, err
 		}
-		children = append(children, valueRef)
+		children = append(children, childRef)
 	}
-	return s.internOwnedChildren(valueKindMap, nil, children)
+	return s.internOwnedChildren(valueKindMap, children)
 }
 
 func (s *valueStore) internSlice(value mmdbtype.Slice) (valueRef, error) {
@@ -390,13 +398,16 @@ func (s *valueStore) internSlice(value mmdbtype.Slice) (valueRef, error) {
 		}
 		children = append(children, ref)
 	}
-	return s.internOwnedChildren(valueKindSlice, nil, children)
+	return s.internOwnedChildren(valueKindSlice, children)
 }
 
 // internOwnedChildren consumes one reference to every child, whether it
 // creates a node or finds an existing canonical node.
-func (s *valueStore) internOwnedChildren(kind valueKind, payload []byte, children []valueRef) (valueRef, error) {
-	ref, err := s.internNode(kind, payload, children)
+func (s *valueStore) internOwnedChildren(
+	kind valueKind,
+	children []valueRef,
+) (valueRef, error) {
+	ref, err := s.internNode(kind, nil, children)
 	if err != nil {
 		for _, child := range children {
 			s.release(child)
@@ -405,7 +416,7 @@ func (s *valueStore) internOwnedChildren(kind valueKind, payload []byte, childre
 	}
 	// internNode retains children only when it creates a new parent. A dedupe
 	// hit consumes the temporary tree by releasing it here.
-	if !s.nodeOwnsExactChildren(ref, children) {
+	if !s.nodeOwnsExactChildren(ref) {
 		for _, child := range children {
 			s.release(child)
 		}
@@ -413,19 +424,25 @@ func (s *valueStore) internOwnedChildren(kind valueKind, payload []byte, childre
 	return ref, nil
 }
 
-func (s *valueStore) nodeOwnsExactChildren(ref valueRef, children []valueRef) bool {
+func (s *valueStore) nodeOwnsExactChildren(ref valueRef) bool {
 	// A freshly created node has refcount one and its arena slice is the exact
 	// input. Existing nodes can also have refcount one, so internNode records
 	// creation through lastInternCreated rather than relying on refcounts.
 	return s.lastInternCreated == ref
 }
 
-func (s *valueStore) internNode(kind valueKind, payload []byte, children []valueRef) (valueRef, error) {
+func (s *valueStore) internNode(
+	kind valueKind,
+	payload []byte,
+	children []valueRef,
+) (valueRef, error) {
 	hash := s.hashNode(kind, payload, children)
 	s.lastInternCreated = nilValueRef
 	for _, ref := range s.buckets[hash] {
 		node := s.node(ref)
-		if node.kind == kind && bytes.Equal(s.payload(node), payload) && slices.Equal(s.childRefs(node), children) {
+		if node.kind == kind &&
+			bytes.Equal(s.payload(node), payload) &&
+			slices.Equal(s.childRefs(node), children) {
 			s.retain(ref)
 			return ref, nil
 		}
@@ -437,7 +454,10 @@ func (s *valueStore) internNode(kind valueKind, payload []byte, children []value
 	}
 	childrenOffset, err := s.children.put(children)
 	if err != nil {
-		s.payloads.release(payloadOffset, uint32(len(payload)))
+		s.payloads.release(
+			payloadOffset,
+			uint32(len(payload)), //nolint:gosec // payload arena accepted this length
+		)
 		return nilValueRef, err
 	}
 
@@ -447,19 +467,25 @@ func (s *valueStore) internNode(kind valueKind, payload []byte, children []value
 		s.freeRefs = s.freeRefs[:len(s.freeRefs)-1]
 	} else {
 		if uint64(len(s.nodes)) > math.MaxUint32 {
-			s.payloads.release(payloadOffset, uint32(len(payload)))
-			s.children.release(childrenOffset, uint32(len(children)))
+			s.payloads.release(
+				payloadOffset,
+				uint32(len(payload)), //nolint:gosec // payload arena accepted this length
+			)
+			s.children.release(
+				childrenOffset,
+				uint32(len(children)), //nolint:gosec // child arena accepted this length
+			)
 			return nilValueRef, errors.New("value store contains too many live nodes")
 		}
-		ref = valueRef(len(s.nodes))
+		ref = valueRef(len(s.nodes)) //nolint:gosec // node count was bounded above
 		s.nodes = append(s.nodes, valueNode{})
 	}
 	s.nodes[ref] = valueNode{
 		hash:           hash,
 		payloadOffset:  payloadOffset,
-		payloadLen:     uint32(len(payload)),
+		payloadLen:     uint32(len(payload)), //nolint:gosec // payload arena accepted this length
 		childrenOffset: childrenOffset,
-		childrenLen:    uint32(len(children)),
+		childrenLen:    uint32(len(children)), //nolint:gosec // child arena accepted this length
 		refCount:       1,
 		kind:           kind,
 	}

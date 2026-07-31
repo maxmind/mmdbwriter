@@ -21,8 +21,8 @@ func TestValueStoreRefcountAudit(t *testing.T) {
 	}))
 	require.NoError(t, tree.auditValueStore())
 
-	_, record := tree.getNode(tree.root, [16]byte{1, 3}, 0)
-	ref := record.value
+	_, foundRecord := tree.getNode(tree.root, [16]byte{1, 3}, 0)
+	ref := foundRecord.value
 	tree.valueStore.nodes[ref].refCount++
 	err = tree.auditValueStore()
 	require.ErrorContains(t, err, "stored")
