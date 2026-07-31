@@ -7,6 +7,7 @@ import (
 	"math/big"
 	"net/netip"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -595,6 +596,40 @@ func TestLoadDecodeErrorIncludesNetwork(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unmarshaling record for network 1.2.3.0/24")
+}
+
+func TestLoadInternsDirectlyAndSharesNestedValues(t *testing.T) {
+	source, err := New(Options{
+		BuildEpoch:              1,
+		DatabaseType:            "direct-load-test",
+		IPVersion:               4,
+		IncludeReservedNetworks: true,
+	})
+	require.NoError(t, err)
+	names := mmdbtype.Map{"en": mmdbtype.String("London")}
+	require.NoError(t, source.Insert(netip.MustParsePrefix("1.0.0.0/24"), mmdbtype.Map{
+		"id": mmdbtype.Uint32(1), "names": names,
+	}))
+	require.NoError(t, source.Insert(netip.MustParsePrefix("1.0.1.0/24"), mmdbtype.Map{
+		"id": mmdbtype.Uint32(2), "names": names,
+	}))
+
+	file, err := os.CreateTemp(t.TempDir(), "mmdbwriter-direct-load-*.mmdb")
+	require.NoError(t, err)
+	_, err = source.WriteTo(file)
+	require.NoError(t, err)
+	require.NoError(t, file.Close())
+
+	loaded, err := Load(file.Name(), Options{IncludeReservedNetworks: true})
+	require.NoError(t, err)
+	assert.Empty(t, loaded.valueStore.callerIdentity,
+		"direct decoding must not retain source Go graphs in the caller cache")
+
+	_, firstValue := loaded.Get(netip.MustParseAddr("1.0.0.1"))
+	_, secondValue := loaded.Get(netip.MustParseAddr("1.0.1.1"))
+	firstNames := firstValue.(mmdbtype.Map)["names"].(mmdbtype.Map)
+	secondNames := secondValue.(mmdbtype.Map)["names"].(mmdbtype.Map)
+	assert.Equal(t, reflect.ValueOf(firstNames).Pointer(), reflect.ValueOf(secondNames).Pointer())
 }
 
 func TestTreeInsertAndGet(t *testing.T) {

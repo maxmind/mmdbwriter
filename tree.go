@@ -229,8 +229,8 @@ func Load(path string, opts Options) (*Tree, error) {
 		return nil, err
 	}
 
-	unmarshaler := mmdbtype.NewUnmarshaler()
-	dataByOffset := map[uintptr]mmdbtype.DataType{}
+	decoder := newStoreDecoder(tree.valueStore)
+	defer decoder.close()
 
 	var networkOpts []maxminddb.NetworksOption
 	if opts.IPVersion == 6 && opts.DisableIPv4Aliasing {
@@ -243,24 +243,19 @@ func Load(path string, opts Options) (*Tree, error) {
 			return nil, fmt.Errorf("loading network %s: %w", prefix, err)
 		}
 
-		offset := res.Offset()
-		value, ok := dataByOffset[offset]
-		if !ok {
-			unmarshaler.Clear()
-			err := res.Decode(unmarshaler)
-			if err != nil {
-				return nil, fmt.Errorf("unmarshaling record for network %s: %w", prefix, err)
-			}
-			value = unmarshaler.Result()
-			dataByOffset[offset] = value
+		if err := res.Decode(decoder); err != nil {
+			return nil, fmt.Errorf("unmarshaling record for network %s: %w", prefix, err)
 		}
+		value := decoder.takeResult()
 
 		prefix, err := tree.normalizeLoadPrefix(prefix)
 		if err != nil {
+			tree.valueStore.release(value)
 			return nil, err
 		}
 
-		err = tree.insertNormalized(prefix, recordTypeData, tree.inserterFunc, noNodeIndex, value)
+		err = tree.insertNormalizedRef(prefix, recordTypeData, tree.inserterFunc, noNodeIndex, value)
+		tree.valueStore.release(value)
 		if err != nil {
 			return nil, fmt.Errorf("loading network %s: %w", prefix, err)
 		}
@@ -366,15 +361,7 @@ func (t *Tree) insertPrepared(
 	node nodeIndex,
 	value mmdbtype.DataType,
 ) error {
-	// Any insert can change the reachable node graph, so cached finalization
-	// state must be rebuilt before the next write.
-	t.nodeCount = 0
-	t.nodeNumbers = nil
-
-	ip, prefixLen := t.prefixInsertIP(prefix)
-
 	var newValueRef valueRef
-	var valueView mmdbtype.DataType
 	var err error
 	if recordType == recordTypeData && value != nil {
 		newValueRef, err = t.valueStore.intern(value)
@@ -382,6 +369,38 @@ func (t *Tree) insertPrepared(
 			return err
 		}
 		defer t.valueStore.release(newValueRef)
+	}
+	return t.insertPreparedRef(prefix, recordType, inserterFunc, node, newValueRef)
+}
+
+func (t *Tree) insertNormalizedRef(
+	prefix netip.Prefix,
+	recordType recordType,
+	inserterFunc inserter.Func,
+	node nodeIndex,
+	value valueRef,
+) error {
+	if t.treeDepth == 32 && !prefix.Addr().Is4() {
+		return errors.New("IPv6 prefixes cannot be inserted into an IPv4 tree")
+	}
+	return t.insertPreparedRef(prefix, recordType, inserterFunc, node, value)
+}
+
+func (t *Tree) insertPreparedRef(
+	prefix netip.Prefix,
+	recordType recordType,
+	inserterFunc inserter.Func,
+	node nodeIndex,
+	newValueRef valueRef,
+) error {
+	// Any insert can change the reachable node graph, so cached finalization
+	// state must be rebuilt before the next write.
+	t.nodeCount = 0
+	t.nodeNumbers = nil
+
+	ip, prefixLen := t.prefixInsertIP(prefix)
+	var valueView mmdbtype.DataType
+	if inserterFunc != nil {
 		valueView = t.valueStore.materialize(newValueRef)
 	}
 

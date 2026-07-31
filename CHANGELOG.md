@@ -22,11 +22,9 @@
   argument.
 - Reduced allocations on the tree insert and serialization hot paths, lowering
   memory pressure and GC overhead during large builds.
-- `Load` now caches decoded source records by data offset during loading. This
-  speeds up databases with repeated records, but the cache is retained until
-  `Load` completes and can increase peak memory for very large source databases.
-  Source networks that reference the same data offset also share a decoded
-  value, so custom inserters must copy values before modifying them.
+- `Load` now decodes directly into the interned value store and caches value
+  references by source offset, avoiding intermediate Go map and slice graphs.
+  Source networks that reference the same data offset share a store value.
 - Reworked tree storage to use an indexed block arena. This reduces pointer
   overhead, keeps node references stable, and reuses merged nodes and
   materialized sparse paths through freelists.
