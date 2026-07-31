@@ -1,6 +1,7 @@
 package mmdbwriter
 
 import (
+	"math"
 	"math/big"
 	"testing"
 
@@ -13,23 +14,16 @@ import (
 func TestDataMap(t *testing.T) {
 	v := mmdbtype.String("test")
 
-	dm := newDataMap(newKeyWriter())
+	dm := newDataMap()
 
 	dmv, err := dm.store(v)
 	require.NoError(t, err)
 
-	assert.Equal(
-		t,
-		&dataMapValue{
-			data: v,
-			key: "\x87\x02\xf53\x8b\x96\xfdǻQ\x97\x9c\xe2\xcc\\\xda\xf2\xb1\xd7" +
-				"\xc1L\xc5l\xfd\x83\xfc\x97\xd6\x03\xf5\xedr",
-			refCount: 1,
-		},
-		dmv,
-	)
+	assert.Equal(t, v, dmv.data)
+	assert.Equal(t, uint32(1), dmv.refCount)
+	assert.Nil(t, dmv.next)
 
-	mapDMV := dm.data[dmv.key]
+	mapDMV := dm.data[dmv.hash]
 
 	assert.Equal(t, dmv, mapDMV)
 
@@ -40,12 +34,12 @@ func TestDataMap(t *testing.T) {
 
 	dm.remove(dmv)
 
-	mapDMV = dm.data[dmv.key]
+	mapDMV = dm.data[dmv.hash]
 
 	assert.Equal(t, uint32(1), mapDMV.refCount, "refCount decremented on remove")
 
 	dm.remove(dmv)
-	_, ok := dm.data[dmv.key]
+	_, ok := dm.data[dmv.hash]
 	assert.False(t, ok, "map value removed when refCount drops to 0")
 }
 
@@ -57,12 +51,12 @@ func TestDataMapCachesDefaultComplexValueIdentity(t *testing.T) {
 	identity, ok := keyIdentity(v)
 	require.True(t, ok)
 
-	dm := newDataMap(newKeyWriter())
+	dm := newDataMap()
 
 	dmv, err := dm.storeWithIdentity(v)
 	require.NoError(t, err)
 
-	assert.Equal(t, dmv.key, dm.keyByDataIdentity[identity])
+	assert.Same(t, dmv, dm.valueByDataIdentity[identity])
 
 	sameDMV, err := dm.storeWithIdentity(v)
 	require.NoError(t, err)
@@ -71,10 +65,10 @@ func TestDataMapCachesDefaultComplexValueIdentity(t *testing.T) {
 	assert.Equal(t, uint32(2), dmv.refCount)
 
 	dm.remove(dmv)
-	assert.Equal(t, dmv.key, dm.keyByDataIdentity[identity])
+	assert.Same(t, dmv, dm.valueByDataIdentity[identity])
 
 	dm.remove(dmv)
-	assert.NotContains(t, dm.keyByDataIdentity, identity)
+	assert.NotContains(t, dm.valueByDataIdentity, identity)
 }
 
 func TestDataMapOnlyCachesRetainedComplexValueIdentity(t *testing.T) {
@@ -112,7 +106,7 @@ func TestDataMapOnlyCachesRetainedComplexValueIdentity(t *testing.T) {
 			require.True(t, ok)
 			require.NotEqual(t, firstIdentity, secondIdentity)
 
-			dm := newDataMap(newKeyWriter())
+			dm := newDataMap()
 			dmv, err := dm.storeWithIdentity(first)
 			require.NoError(t, err)
 
@@ -120,8 +114,8 @@ func TestDataMapOnlyCachesRetainedComplexValueIdentity(t *testing.T) {
 			require.NoError(t, err)
 
 			assert.Same(t, dmv, sameDMV, "equal content returns retained dataMapValue")
-			assert.Equal(t, dmv.key, dm.keyByDataIdentity[firstIdentity])
-			assert.NotContains(t, dm.keyByDataIdentity, secondIdentity)
+			assert.Same(t, dmv, dm.valueByDataIdentity[firstIdentity])
+			assert.NotContains(t, dm.valueByDataIdentity, secondIdentity)
 		})
 	}
 }
@@ -130,7 +124,7 @@ func TestDataMapDoesNotUseStaleIdentityForMutatedNonRetainedValue(t *testing.T) 
 	first := mmdbtype.Bytes{1, 2, 3}
 	second := mmdbtype.Bytes{1, 2, 3}
 
-	dm := newDataMap(newKeyWriter())
+	dm := newDataMap()
 	firstDMV, err := dm.storeWithIdentity(first)
 	require.NoError(t, err)
 
@@ -150,20 +144,20 @@ func TestDataMapDoesNotUseStaleIdentityEntry(t *testing.T) {
 	retained := mmdbtype.Bytes{1, 2, 3}
 	requested := mmdbtype.Bytes{4, 5, 6}
 
-	dm := newDataMap(newKeyWriter())
+	dm := newDataMap()
 	retainedDMV, err := dm.storeWithIdentity(retained)
 	require.NoError(t, err)
 
 	requestedIdentity, ok := keyIdentity(requested)
 	require.True(t, ok)
-	dm.keyByDataIdentity[requestedIdentity] = retainedDMV.key
+	dm.valueByDataIdentity[requestedIdentity] = retainedDMV
 
 	requestedDMV, err := dm.storeWithIdentity(requested)
 	require.NoError(t, err)
 
 	assert.NotSame(t, retainedDMV, requestedDMV)
 	assert.Equal(t, requested, requestedDMV.data)
-	assert.Equal(t, requestedDMV.key, dm.keyByDataIdentity[requestedIdentity])
+	assert.Same(t, requestedDMV, dm.valueByDataIdentity[requestedIdentity])
 }
 
 func TestDataMapCachesUint128PointerIdentity(t *testing.T) {
@@ -172,7 +166,7 @@ func TestDataMapCachesUint128PointerIdentity(t *testing.T) {
 	identity, ok := keyIdentity(valuePointer)
 	require.True(t, ok)
 
-	dm := newDataMap(newKeyWriter())
+	dm := newDataMap()
 	dmv, err := dm.storeWithIdentity(valuePointer)
 	require.NoError(t, err)
 
@@ -181,7 +175,7 @@ func TestDataMapCachesUint128PointerIdentity(t *testing.T) {
 
 	assert.Same(t, dmv, sameDMV)
 	assert.Equal(t, uint32(2), dmv.refCount)
-	assert.Equal(t, dmv.key, dm.keyByDataIdentity[identity])
+	assert.Same(t, dmv, dm.valueByDataIdentity[identity])
 }
 
 func TestKeyIdentityDistinguishesKinds(t *testing.T) {
@@ -209,34 +203,197 @@ func TestKeyIdentityCollapsesEmptyMaps(t *testing.T) {
 	assert.Equal(t, nilIdentity, emptyIdentity)
 }
 
-func TestDataMapDoesNotCacheCustomKeyGenerator(t *testing.T) {
-	v := mmdbtype.Map{
-		"test": mmdbtype.String("value"),
+func TestDataMapResolvesHashCollisionsByExactValue(t *testing.T) {
+	dm := newDataMap()
+	first := mmdbtype.Map{"value": mmdbtype.String("first")}
+	second := mmdbtype.Map{"value": mmdbtype.String("second")}
+
+	firstValue := dm.storeByHash(first, 1)
+	secondValue := dm.storeByHash(second, 1)
+
+	assert.NotSame(t, firstValue, secondValue)
+	assert.Same(t, secondValue, dm.data[1])
+	assert.Same(t, firstValue, secondValue.next)
+
+	duplicate := dm.storeByHash(first.Copy(), 1)
+	assert.Same(t, firstValue, duplicate)
+
+	dm.remove(secondValue)
+	assert.Same(t, firstValue, dm.data[1])
+}
+
+func TestDataMapRemovesNonHeadCollisionEntry(t *testing.T) {
+	dm := newDataMap()
+	firstValue := dm.storeByHash(mmdbtype.String("first"), 1)
+	secondValue := dm.storeByHash(mmdbtype.String("second"), 1)
+
+	dm.remove(firstValue)
+
+	assert.Same(t, secondValue, dm.data[1])
+	assert.Nil(t, secondValue.next)
+}
+
+func TestDataMapRejectsReferenceCountUnderflow(t *testing.T) {
+	dm := newDataMap()
+	value := dm.storeByHash(mmdbtype.String("value"), 1)
+	dm.remove(value)
+
+	assert.PanicsWithValue(
+		t,
+		"mmdbwriter: dataMap.remove called on a value with no references",
+		func() { dm.remove(value) },
+	)
+}
+
+func TestDataMapCollisionComparisonPreservesFloatEncoding(t *testing.T) {
+	dm := newDataMap()
+	positiveZero := mmdbtype.Map{"value": mmdbtype.Float64(0)}
+	negativeZero := mmdbtype.Map{"value": mmdbtype.Float64(math.Copysign(0, -1))}
+
+	positiveValue := dm.storeByHash(positiveZero, 1)
+	negativeValue := dm.storeByHash(negativeZero, 1)
+
+	assert.NotSame(t, positiveValue, negativeValue)
+}
+
+// TestWireDataEqualRejectsUnequalValues covers the negative branches of the
+// exact comparison that hash matches are confirmed against.
+func TestWireDataEqualRejectsUnequalValues(t *testing.T) {
+	tests := []struct {
+		name   string
+		first  mmdbtype.DataType
+		second mmdbtype.DataType
+	}{
+		{
+			name:   "slice length mismatch",
+			first:  mmdbtype.Slice{mmdbtype.Uint32(1)},
+			second: mmdbtype.Slice{mmdbtype.Uint32(1), mmdbtype.Uint32(2)},
+		},
+		{
+			name:   "slice element mismatch",
+			first:  mmdbtype.Slice{mmdbtype.Uint32(1)},
+			second: mmdbtype.Slice{mmdbtype.Uint32(2)},
+		},
+		{
+			name:   "map length mismatch",
+			first:  mmdbtype.Map{"a": mmdbtype.Uint32(1)},
+			second: mmdbtype.Map{"a": mmdbtype.Uint32(1), "b": mmdbtype.Uint32(2)},
+		},
+		{
+			name:   "map key mismatch",
+			first:  mmdbtype.Map{"a": mmdbtype.Uint32(1)},
+			second: mmdbtype.Map{"b": mmdbtype.Uint32(1)},
+		},
+		{
+			name:   "map value mismatch",
+			first:  mmdbtype.Map{"a": mmdbtype.Uint32(1)},
+			second: mmdbtype.Map{"a": mmdbtype.Uint32(2)},
+		},
+		{
+			name:   "float64 signed zero",
+			first:  mmdbtype.Float64(0),
+			second: mmdbtype.Float64(math.Copysign(0, -1)),
+		},
+		{
+			name:   "float32 signed zero",
+			first:  mmdbtype.Float32(0),
+			second: mmdbtype.Float32(float32(math.Copysign(0, -1))),
+		},
+		{
+			name:   "nil operand",
+			first:  nil,
+			second: mmdbtype.Uint32(1),
+		},
+		{
+			name:   "nil pointer form",
+			first:  (*mmdbtype.Map)(nil),
+			second: mmdbtype.Map{},
+		},
+		{
+			name:   "different types with the same value",
+			first:  mmdbtype.Uint32(1),
+			second: mmdbtype.Int32(1),
+		},
 	}
-	keyGenerator := newCountingKeyGenerator()
 
-	dm := newDataMap(keyGenerator)
-	require.Nil(t, dm.keyByDataIdentity)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			assert.False(t, wireDataEqual(test.first, test.second))
+			assert.False(t, wireDataEqual(test.second, test.first))
+		})
+	}
+}
 
-	_, err := dm.storeWithIdentity(v)
+// TestWireDataEqualAcceptsEqualValues covers the positive branches, including
+// the empty-container short circuits.
+func TestWireDataEqualAcceptsEqualValues(t *testing.T) {
+	nested := mmdbtype.Slice{mmdbtype.Map{"a": mmdbtype.String("x")}}
+
+	assert.True(t, wireDataEqual(nested, nested.Copy()))
+	assert.True(t, wireDataEqual(mmdbtype.Slice{}, mmdbtype.Slice{}))
+	assert.True(t, wireDataEqual(mmdbtype.Map{}, mmdbtype.Map{}))
+	assert.True(t, wireDataEqual(nil, nil))
+}
+
+// TestDataMapCollisionComparisonPreservesFloat32Encoding is the Float32 twin of
+// TestDataMapCollisionComparisonPreservesFloatEncoding. Go treats the two zeros
+// as equal, but they have different wire encodings.
+func TestDataMapCollisionComparisonPreservesFloat32Encoding(t *testing.T) {
+	dm := newDataMap()
+	positiveZero := mmdbtype.Map{"value": mmdbtype.Float32(0)}
+	negativeZero := mmdbtype.Map{
+		"value": mmdbtype.Float32(float32(math.Copysign(0, -1))),
+	}
+
+	positiveValue := dm.storeByHash(positiveZero, 1)
+	negativeValue := dm.storeByHash(negativeZero, 1)
+
+	assert.NotSame(t, positiveValue, negativeValue)
+}
+
+// TestDataMapRemovesMiddleCollisionEntry removes an entry with entries on both
+// sides of it, so the unlink has a tail it must preserve.
+func TestDataMapRemovesMiddleCollisionEntry(t *testing.T) {
+	dm := newDataMap()
+	first := dm.storeByHash(mmdbtype.String("first"), 1)
+	middle := dm.storeByHash(mmdbtype.String("middle"), 1)
+	last := dm.storeByHash(mmdbtype.String("last"), 1)
+
+	// Entries are prepended, so the chain is last -> middle -> first.
+	require.Same(t, last, dm.data[1])
+	require.Same(t, middle, last.next)
+
+	dm.remove(middle)
+
+	assert.Same(t, last, dm.data[1])
+	assert.Same(t, first, last.next, "the entries after the removed one were lost")
+	assert.Nil(t, first.next)
+}
+
+// TestDataMapIgnoresStaleIdentityForReleasedValue covers the reference count
+// guard on the identity fast path. A cached identity may outlive the value it
+// points at, and a released value must never be resurrected.
+func TestDataMapIgnoresStaleIdentityForReleasedValue(t *testing.T) {
+	dm := newDataMap()
+	slice := mmdbtype.Slice{mmdbtype.String("a")}
+	identity, ok := keyIdentity(slice)
+	require.True(t, ok)
+
+	first, err := dm.storeWithIdentity(slice)
+	require.NoError(t, err)
+	dm.remove(first)
+	require.Zero(t, first.refCount)
+
+	// Simulate an identity entry left behind pointing at the released value.
+	if dm.valueByDataIdentity == nil {
+		dm.valueByDataIdentity = map[dataMapIdentityKey]*dataMapValue{}
+	}
+	dm.valueByDataIdentity[identity] = first
+
+	second, err := dm.storeWithIdentity(slice)
 	require.NoError(t, err)
 
-	_, err = dm.storeWithIdentity(v)
-	require.NoError(t, err)
-
-	assert.Equal(t, 2, keyGenerator.calls)
-}
-
-type countingKeyGenerator struct {
-	keyWriter *keyWriter
-	calls     int
-}
-
-func newCountingKeyGenerator() *countingKeyGenerator {
-	return &countingKeyGenerator{keyWriter: newKeyWriter()}
-}
-
-func (kg *countingKeyGenerator) Key(v mmdbtype.DataType) ([]byte, error) {
-	kg.calls++
-	return kg.keyWriter.Key(v)
+	assert.NotSame(t, first, second,
+		"a released value was resurrected from the identity cache")
+	assert.NotZero(t, second.refCount)
 }

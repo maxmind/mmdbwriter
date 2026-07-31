@@ -86,20 +86,6 @@ type Options struct {
 	// other records, and Load reuses decoded values for source networks that
 	// reference the same data offset. Copy a value before modifying it.
 	Inserter inserter.Func
-
-	// KeyGenerator is used to generate unique keys for the top-level record
-	// values inserted into the database. This is used to deduplicate data
-	// in memory as the tree is being created. The KeyGenerator must
-	// generate a unique key for the value. If two different values have
-	// the same key, only one will be used.
-	//
-	// The default key generator serializes the value and generates a
-	// SHA-256 hash from it. Although this is relatively safe, it can be
-	// resource intensive for large data structures.
-	//
-	// Values passed to the key generator must not be modified after insertion as
-	// the tree may retain and deduplicate them.
-	KeyGenerator KeyGenerator
 }
 
 // Tree represents an MaxMind DB search tree.
@@ -156,11 +142,7 @@ func New(opts Options) (*Tree, error) {
 		tree.ipVersion = opts.IPVersion
 	}
 
-	if opts.KeyGenerator == nil {
-		tree.dataMap = newDataMap(newKeyWriter())
-	} else {
-		tree.dataMap = newDataMap(opts.KeyGenerator)
-	}
+	tree.dataMap = newDataMap()
 
 	if opts.Languages != nil {
 		tree.languages = opts.Languages

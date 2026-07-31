@@ -42,7 +42,6 @@ type writer interface {
 	WriteByte(byte) error
 	WriteString(string) (int, error)
 	WriteOrWritePointer(DataType) (int64, error)
-	WriteOrWritePointerString(String) (int64, error)
 }
 
 // DataType represents a MaxMind DB data type.
@@ -392,9 +391,8 @@ func (t Map) WriteTo(w writer) (int64, error) {
 	//
 	// For maps with a small number of keys (the common case for record
 	// schemas), use a stack-allocated buffer to avoid a per-WriteTo
-	// allocation. Map.WriteTo is on the hot path of every
-	// keyWriter.Key call during inserts, so this is amortized across
-	// the full build.
+	// allocation. Map.WriteTo is on the data-section serialization hot path, so
+	// this is amortized across the full write.
 	var stackKeys [16]string
 	var keys []string
 	if len(t) <= len(stackKeys) {
@@ -409,7 +407,7 @@ func (t Map) WriteTo(w writer) (int64, error) {
 
 	for _, ks := range keys {
 		k := String(ks)
-		written, err := w.WriteOrWritePointerString(k)
+		written, err := w.WriteOrWritePointer(k)
 		numBytes += written
 		if err != nil {
 			return numBytes, err

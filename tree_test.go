@@ -66,9 +66,9 @@ func TestTreeInsertSplittingDataRecordMaintainsRefCounts(t *testing.T) {
 	initialValue := mmdbtype.String("initial")
 	require.NoError(t, tree.Insert(netip.MustParsePrefix("1.1.0.0/24"), initialValue))
 
-	keyBytes, err := tree.dataMap.keyWriter.Key(initialValue)
+	hash, err := tree.dataMap.hasher.Hash(initialValue)
 	require.NoError(t, err)
-	key := dataMapKey(keyBytes)
+	key := dataMapHash(hash)
 	initialMapValue := tree.dataMap.data[key]
 	require.NotNil(t, initialMapValue)
 	require.Equal(t, uint32(1), initialMapValue.refCount)

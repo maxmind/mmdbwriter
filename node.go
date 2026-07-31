@@ -278,7 +278,9 @@ func (iRec insertRecord) maybeMergeChildren(r *record) error {
 		r.nodeIndex = noNodeIndex
 		return nil
 	case recordTypeData:
-		if child0.value.key != child1.value.key {
+		// dataMap keeps exactly one live value per wire-equal value, so
+		// pointer equality here is value equality.
+		if child0.value != child1.value {
 			return nil
 		}
 		// Children have same data and can be merged
