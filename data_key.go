@@ -15,6 +15,7 @@ import (
 // an exact comparison, so correctness does not depend on collision resistance.
 type dataHasher struct {
 	bytes.Buffer
+
 	seed     maphash.Seed
 	hashFunc func([]byte) uint64
 }
