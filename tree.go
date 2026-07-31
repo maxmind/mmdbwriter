@@ -91,7 +91,8 @@ type Options struct {
 	// An Inserter must be pure and must not modify either argument. Values are
 	// immutable store-materialized views that may be shared by many records.
 	// Copy a value before modifying it. Repeated argument pairs may be memoized,
-	// so an Inserter must not depend on invocation count or order.
+	// so an Inserter must not depend on invocation count or order. The returned
+	// value must not be modified after the Inserter returns.
 	Inserter inserter.Func
 }
 
@@ -108,16 +109,15 @@ type Tree struct {
 	ipVersion               int
 	languages               []string
 	recordSize              int
-	// nodeBlocks is an append-only arena split into fixed-size blocks. Blocks
-	// preserve pointer stability during inserts but grow monotonically; merged
-	// or abandoned nodes are not reclaimed until the Tree is discarded.
+	// nodeBlocks is an arena split into fixed-size blocks. Blocks preserve pointer
+	// stability during inserts and grow only when no retired slot is available.
 	nodeBlocks         [][]node
 	nodeCountAllocated int
 	// nodeNumbers and nodeCount are invalidated by mutation and rebuilt lazily
 	// by finalize before writing.
 	nodeNumbers []uint32
-	// paths is an append-only arena for compressed sparse insertion paths. Path
-	// entries are not reclaimed after materialization.
+	// paths is an arena for compressed sparse insertion paths. Retired entries are
+	// reused before the arena grows.
 	paths     []compressedPath
 	freeNodes []nodeIndex
 	freePaths []nodeIndex
@@ -318,6 +318,9 @@ func (t *Tree) Insert(prefix netip.Prefix, value mmdbtype.DataType) error {
 // passed to InsertFunc. The inserter function should return the
 // mmdbtype.DataType to be inserted. In all cases, a nil value means an empty
 // record.
+//
+// You must never modify value after insertion or the function's returned value
+// after it returns, as values may be shared with other records.
 //
 // You must never modify arguments passed to the function as values may be
 // shared with other records. If you want a copy of the mmdbtype.DataType to
@@ -691,7 +694,8 @@ func (t *Tree) insertReservedNetworks() error {
 // Get the value for the given IP address from the tree. If the nil interface
 // is returned, that means the tree does not have a value for the IP. If ip is
 // invalid or cannot be looked up in this tree's IP version, the returned prefix
-// is the zero value.
+// is the zero value. Mutable returned values are shared, read-only views. Call
+// Copy before modifying one.
 func (t *Tree) Get(ip netip.Addr) (netip.Prefix, mmdbtype.DataType) {
 	lookupIP, ok := t.lookupIP(ip)
 	if !ok {

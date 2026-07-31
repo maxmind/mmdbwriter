@@ -110,7 +110,7 @@ func (t *Tree) newNode(children [2]record) nodeIndex {
 		t.nodeBlocks = append(t.nodeBlocks, make([]node, nodeBlockSize))
 	}
 	// Node blocks are never reallocated, which keeps node pointers stable while
-	// insertion allocates more nodes. Dead nodes are not reclaimed.
+	// insertion allocates more nodes. Retired slots are reused by newNode.
 	t.nodeCountAllocated++
 	*t.nodeAt(index) = node{children: children}
 	return index
@@ -122,7 +122,7 @@ func (t *Tree) nodeAt(index nodeIndex) *node {
 
 // newPath stores a compressed path for a sparse insertion. This avoids
 // allocating one node per remaining bit until a later insert reaches the path
-// or finalize expands it. Path entries are not reclaimed after materialization.
+// or finalize expands it. Retired path entries are reused by newPath.
 func (t *Tree) newPath(ip [16]byte, endDepth int, record record) nodeIndex {
 	path := compressedPath{
 		ip:       ip,
