@@ -188,6 +188,44 @@ func TestTreeInsertFuncMemoizesDistinctExistingValues(t *testing.T) {
 	}
 }
 
+func TestTreeInsertFuncReleasesPureMemoAfterPartialError(t *testing.T) {
+	tree, err := New(Options{IPVersion: 4, IncludeReservedNetworks: true})
+	require.NoError(t, err)
+	require.NoError(t, tree.Insert(
+		netip.MustParsePrefix("1.2.3.0/25"),
+		mmdbtype.String("first"),
+	))
+	require.NoError(t, tree.Insert(
+		netip.MustParsePrefix("1.2.3.128/25"),
+		mmdbtype.String("second"),
+	))
+
+	insertErr := errors.New("insert failed")
+	result := mmdbtype.String("resolved")
+	err = tree.InsertFunc(
+		netip.MustParsePrefix("1.2.3.0/24"),
+		mmdbtype.String("new"),
+		inserter.PureFunc(func(existing, _ mmdbtype.DataType) (mmdbtype.DataType, error) {
+			if existing == mmdbtype.String("second") {
+				return nil, insertErr
+			}
+			return result, nil
+		}),
+	)
+	require.ErrorIs(t, err, insertErr)
+
+	hash, err := tree.dataMap.hasher.Hash(result)
+	require.NoError(t, err)
+	stored := tree.dataMap.data[dataMapHash(hash)]
+	require.NotNil(t, stored)
+	assert.Equal(t, uint32(1), stored.refCount, "the pure memo retained a result reference")
+
+	_, got := tree.Get(netip.MustParseAddr("1.2.3.1"))
+	assert.Equal(t, result, got)
+	_, got = tree.Get(netip.MustParseAddr("1.2.3.129"))
+	assert.Equal(t, mmdbtype.String("second"), got)
+}
+
 func TestTreeInsertFuncEvaluatesOrdinaryFuncForEveryRecord(t *testing.T) {
 	tree, err := New(Options{IPVersion: 4, IncludeReservedNetworks: true})
 	require.NoError(t, err)
