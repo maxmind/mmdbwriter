@@ -33,8 +33,9 @@
   discarded. Workloads with heavy mutation churn may see higher peak memory than
   v1.
 - Removed `Options.KeyGenerator` and the `KeyGenerator` interface. Record values
-  are now indexed by a seeded content hash and compared exactly before
-  deduplication, so hash collisions cannot substitute a different value.
+  are now indexed by a seeded structural content hash with bounded caching for
+  shared nested containers. Values are compared exactly before deduplication, so
+  hash collisions cannot substitute a different value.
 
 ## 1.2.0 (2026-01-14)
 

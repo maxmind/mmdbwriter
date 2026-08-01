@@ -2,9 +2,11 @@ package mmdbwriter
 
 import (
 	"maps"
+	"net/netip"
 	"strconv"
 	"testing"
 
+	"github.com/maxmind/mmdbwriter/v2/inserter"
 	"github.com/maxmind/mmdbwriter/v2/mmdbtype"
 )
 
@@ -19,7 +21,7 @@ func BenchmarkDataHasherEnterpriseValue(b *testing.B) {
 			}
 		}
 	})
-	b.Run("maphash", func(b *testing.B) {
+	b.Run("structural", func(b *testing.B) {
 		hasher := newDataHasher()
 		b.ReportAllocs()
 		for range b.N {
@@ -28,6 +30,55 @@ func BenchmarkDataHasherEnterpriseValue(b *testing.B) {
 			}
 		}
 	})
+}
+
+func BenchmarkDataHasherEnterpriseDeepCopies(b *testing.B) {
+	const valueCount = 512
+	value := benchmarkEnterpriseValue()
+	values := make([]mmdbtype.DataType, valueCount)
+	for index := range values {
+		values[index] = value.Copy()
+	}
+	hasher := newDataHasher()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for index := range b.N {
+		if _, err := hasher.Hash(values[index%len(values)]); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkEnterpriseKeyPipeline(b *testing.B) {
+	const networkCount = 2_048
+	base := benchmarkUniqueValues(benchmarkEnterpriseValue(), networkCount)
+	overlays := []mmdbtype.DataType{
+		mmdbtype.Map{"traits": mmdbtype.Map{"connection_type": mmdbtype.String("Corporate")}},
+		mmdbtype.Map{"traits": mmdbtype.Map{"user_type": mmdbtype.String("business")}},
+		mmdbtype.Map{"traits": mmdbtype.Map{"isp": mmdbtype.String("Example ISP")}},
+		mmdbtype.Map{"traits": mmdbtype.Map{"domain": mmdbtype.String("overlay.test")}},
+	}
+	b.ReportMetric(float64(networkCount*(1+len(overlays))), "insertions/op")
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		tree, err := New(Options{IPVersion: 4, IncludeReservedNetworks: true})
+		if err != nil {
+			b.Fatal(err)
+		}
+		for index, value := range base {
+			address := netip.AddrFrom4([4]byte{1, byte(index >> 16), byte(index >> 8), byte(index)})
+			prefix := netip.PrefixFrom(address, 32)
+			if err := tree.Insert(prefix, value); err != nil {
+				b.Fatal(err)
+			}
+			for _, overlay := range overlays {
+				if err := tree.InsertFunc(prefix, overlay, inserter.DeepMerge); err != nil {
+					b.Fatal(err)
+				}
+			}
+		}
+	}
 }
 
 func BenchmarkDataMapEnterpriseValue(b *testing.B) {

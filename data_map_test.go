@@ -204,21 +204,18 @@ func TestKeyIdentityCollapsesEmptyMaps(t *testing.T) {
 }
 
 func TestDataMapResolvesHashCollisionsByExactValue(t *testing.T) {
-	dm := newDataMapWithHasher(newDataHasherWithHash(func([]byte) uint64 { return 1 }))
+	dm := newDataMap()
 	first := mmdbtype.Map{"value": mmdbtype.String("first")}
 	second := mmdbtype.Map{"value": mmdbtype.String("second")}
 
-	firstValue, err := dm.store(first)
-	require.NoError(t, err)
-	secondValue, err := dm.store(second)
-	require.NoError(t, err)
+	firstValue := dm.storeByHash(first, 1)
+	secondValue := dm.storeByHash(second, 1)
 
 	assert.NotSame(t, firstValue, secondValue)
 	assert.Same(t, secondValue, dm.data[1])
 	assert.Same(t, firstValue, secondValue.next)
 
-	duplicate, err := dm.store(first.Copy())
-	require.NoError(t, err)
+	duplicate := dm.storeByHash(first.Copy(), 1)
 	assert.Same(t, firstValue, duplicate)
 
 	dm.remove(secondValue)
@@ -226,14 +223,12 @@ func TestDataMapResolvesHashCollisionsByExactValue(t *testing.T) {
 }
 
 func TestDataMapCollisionComparisonPreservesFloatEncoding(t *testing.T) {
-	dm := newDataMapWithHasher(newDataHasherWithHash(func([]byte) uint64 { return 1 }))
+	dm := newDataMap()
 	positiveZero := mmdbtype.Map{"value": mmdbtype.Float64(0)}
 	negativeZero := mmdbtype.Map{"value": mmdbtype.Float64(math.Copysign(0, -1))}
 
-	positiveValue, err := dm.store(positiveZero)
-	require.NoError(t, err)
-	negativeValue, err := dm.store(negativeZero)
-	require.NoError(t, err)
+	positiveValue := dm.storeByHash(positiveZero, 1)
+	negativeValue := dm.storeByHash(negativeZero, 1)
 
 	assert.NotSame(t, positiveValue, negativeValue)
 }

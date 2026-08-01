@@ -106,12 +106,14 @@ func (dm *dataMap) storeByGeneratedKey(v mmdbtype.DataType) (*dataMapValue, erro
 	if err != nil {
 		return nil, err
 	}
+	return dm.storeByHash(v, dataMapHash(hash)), nil
+}
 
-	dmHash := dataMapHash(hash)
+func (dm *dataMap) storeByHash(v mmdbtype.DataType, dmHash dataMapHash) *dataMapValue {
 	for dmv := dm.data[dmHash]; dmv != nil; dmv = dmv.next {
 		if wireDataEqual(dmv.data, v) {
 			dmv.refCount++
-			return dmv, nil
+			return dmv
 		}
 	}
 
@@ -122,7 +124,7 @@ func (dm *dataMap) storeByGeneratedKey(v mmdbtype.DataType) (*dataMapValue, erro
 		refCount: 1,
 	}
 	dm.data[dmHash] = dmv
-	return dmv, nil
+	return dmv
 }
 
 // wireDataEqual compares the data that will be written to the MMDB. The
@@ -145,6 +147,9 @@ func wireDataEqual(first, second mmdbtype.DataType) bool {
 		if !ok || len(first) != len(second) {
 			return false
 		}
+		if reflect.ValueOf(first).Pointer() == reflect.ValueOf(second).Pointer() {
+			return true
+		}
 		for key, firstValue := range first {
 			secondValue, ok := second[key]
 			if !ok || !wireDataEqual(firstValue, secondValue) {
@@ -156,6 +161,9 @@ func wireDataEqual(first, second mmdbtype.DataType) bool {
 		second, ok := second.(mmdbtype.Slice)
 		if !ok || len(first) != len(second) {
 			return false
+		}
+		if len(first) == 0 || &first[0] == &second[0] {
+			return true
 		}
 		for index, firstValue := range first {
 			if !wireDataEqual(firstValue, second[index]) {
