@@ -161,6 +161,71 @@ func TestTreeInsertFunc(t *testing.T) {
 	}, got)
 }
 
+func TestTreeInsertFuncMemoizesDistinctExistingValues(t *testing.T) {
+	tree, err := New(Options{IPVersion: 4, IncludeReservedNetworks: true})
+	require.NoError(t, err)
+	for index, value := range []mmdbtype.String{"a", "b", "a", "b"} {
+		//nolint:gosec // index is bounded by the four-element literal
+		prefix := netip.PrefixFrom(netip.AddrFrom4([4]byte{1, 2, 3, byte(index * 64)}), 26)
+		require.NoError(t, tree.Insert(prefix, value))
+	}
+
+	calls := map[mmdbtype.String]int{}
+	err = tree.InsertFunc(
+		netip.MustParsePrefix("1.2.3.0/24"),
+		mmdbtype.String("new"),
+		func(existing, newValue mmdbtype.DataType) (mmdbtype.DataType, error) {
+			calls[existing.(mmdbtype.String)]++
+			return newValue, nil
+		},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, map[mmdbtype.String]int{"a": 1, "b": 1}, calls)
+}
+
+func TestTreeInsertFuncReleasesPureMemoAfterPartialError(t *testing.T) {
+	tree, err := New(Options{IPVersion: 4, IncludeReservedNetworks: true})
+	require.NoError(t, err)
+	require.NoError(t, tree.Insert(
+		netip.MustParsePrefix("1.2.3.0/25"),
+		mmdbtype.String("first"),
+	))
+	require.NoError(t, tree.Insert(
+		netip.MustParsePrefix("1.2.3.128/25"),
+		mmdbtype.String("second"),
+	))
+
+	insertErr := errors.New("insert failed")
+	result := mmdbtype.String("resolved")
+	err = tree.InsertFunc(
+		netip.MustParsePrefix("1.2.3.0/24"),
+		mmdbtype.String("new"),
+		func(existing, _ mmdbtype.DataType) (mmdbtype.DataType, error) {
+			if existing == mmdbtype.String("second") {
+				return nil, insertErr
+			}
+			return result, nil
+		},
+	)
+	require.ErrorIs(t, err, insertErr)
+
+	hash, err := tree.dataMap.hasher.Hash(result)
+	require.NoError(t, err)
+	stored := tree.dataMap.data[dataMapHash(hash)]
+	require.NotNil(t, stored)
+	assert.Equal(
+		t,
+		uint32(1),
+		stored.refCount,
+		"only the inserted record should hold a reference after the memo is released",
+	)
+
+	_, got := tree.Get(netip.MustParseAddr("1.2.3.1"))
+	assert.Equal(t, result, got)
+	_, got = tree.Get(netip.MustParseAddr("1.2.3.129"))
+	assert.Equal(t, mmdbtype.String("second"), got)
+}
+
 func TestTreeOptionsInserter(t *testing.T) {
 	tree, err := New(Options{
 		IPVersion:               4,
@@ -249,6 +314,61 @@ func TestTreeInsertFuncErrorLeavesExistingRecordUnchanged(t *testing.T) {
 	network, got := tree.Get(netip.MustParseAddr("1.2.3.4"))
 	assert.Equal(t, prefix, network)
 	assert.Equal(t, base, got)
+}
+
+func TestTreeInsertFuncReturnsErrorForNilUint128Result(t *testing.T) {
+	tests := []struct {
+		name          string
+		existing      func(*mmdbtype.Uint128) mmdbtype.DataType
+		result        func(*mmdbtype.Uint128) mmdbtype.DataType
+		expectedError string
+	}{
+		{
+			name: "direct",
+			existing: func(value *mmdbtype.Uint128) mmdbtype.DataType {
+				return value
+			},
+			result: func(value *mmdbtype.Uint128) mmdbtype.DataType {
+				return value
+			},
+			expectedError: "cannot hash a nil *mmdbtype.Uint128",
+		},
+		{
+			name: "nested",
+			existing: func(value *mmdbtype.Uint128) mmdbtype.DataType {
+				return mmdbtype.Map{"value": value}
+			},
+			result: func(value *mmdbtype.Uint128) mmdbtype.DataType {
+				return mmdbtype.Map{"value": value}
+			},
+			expectedError: `hashing map key "value": cannot hash a nil *mmdbtype.Uint128`,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			tree, err := New(Options{IPVersion: 4, IncludeReservedNetworks: true})
+			require.NoError(t, err)
+
+			value := mmdbtype.Uint128(*big.NewInt(42))
+			existing := test.existing(&value)
+			prefix := netip.MustParsePrefix("1.2.3.0/24")
+			require.NoError(t, tree.Insert(prefix, existing))
+
+			var nilUint128 *mmdbtype.Uint128
+			err = tree.InsertFunc(
+				prefix,
+				nil,
+				inserter.Func(func(_, _ mmdbtype.DataType) (mmdbtype.DataType, error) {
+					return test.result(nilUint128), nil
+				}),
+			)
+			require.EqualError(t, err, test.expectedError)
+
+			_, got := tree.Get(netip.MustParseAddr("1.2.3.4"))
+			assert.Equal(t, existing, got)
+		})
+	}
 }
 
 func TestTreeInsertCompressedPathBeforeFinalize(t *testing.T) {

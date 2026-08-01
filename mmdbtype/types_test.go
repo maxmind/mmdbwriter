@@ -451,6 +451,24 @@ func TestEqual(t *testing.T) {
 			expect: false,
 		},
 		{
+			name:   "Uint128 compared to nil Uint128",
+			a:      (*Uint128)(big.NewInt(1)),
+			b:      (*Uint128)(nil),
+			expect: false,
+		},
+		{
+			name:   "nil Uint128 compared to Uint128",
+			a:      (*Uint128)(nil),
+			b:      (*Uint128)(big.NewInt(1)),
+			expect: false,
+		},
+		{
+			name:   "nil Uint128 compared to nil Uint128",
+			a:      (*Uint128)(nil),
+			b:      (*Uint128)(nil),
+			expect: false,
+		},
+		{
 			name:   "Int32 and Uint32 with same value are not equal",
 			a:      Int32(1),
 			b:      Uint32(1),

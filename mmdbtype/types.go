@@ -839,10 +839,11 @@ func (t *Uint128) Copy() DataType {
 	return &uv
 }
 
-// Equal checks for equality.
+// Equal reports whether other is a non-nil *Uint128 with the same value. A nil
+// *Uint128 is not equal to any value, including another nil *Uint128.
 func (t *Uint128) Equal(other DataType) bool {
 	otherT, ok := other.(*Uint128)
-	return ok && (*big.Int)(t).Cmp((*big.Int)(otherT)) == 0
+	return ok && t != nil && otherT != nil && (*big.Int)(t).Cmp((*big.Int)(otherT)) == 0
 }
 
 func (t *Uint128) size() int {

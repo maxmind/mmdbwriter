@@ -78,6 +78,40 @@ func BenchmarkTreeInsertDeepMergeOverlappingPasses(b *testing.B) {
 	}
 }
 
+func BenchmarkTreeInsertDeepMergeFragmentedNetwork(b *testing.B) {
+	const networkCount = 4_096
+	values := benchmarkUniqueValues(benchmarkEnterpriseValue(), 16)
+	overlay := mmdbtype.Map{
+		"traits": mmdbtype.Map{"new_field": mmdbtype.String("overlay")},
+	}
+	b.ReportMetric(networkCount, "records/op")
+	b.ReportAllocs()
+
+	for range b.N {
+		b.StopTimer()
+		tree := newBenchmarkTree(b)
+		for index := range networkCount {
+			address := netip.AddrFrom4(
+				[4]byte{1, byte(index >> 16), byte(index >> 8), byte(index)},
+			)
+			if err := tree.Insert(
+				netip.PrefixFrom(address, 32),
+				values[index%len(values)],
+			); err != nil {
+				b.Fatal(err)
+			}
+		}
+		b.StartTimer()
+		if err := tree.InsertFunc(
+			netip.MustParsePrefix("1.0.0.0/20"),
+			overlay,
+			inserter.DeepMerge,
+		); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 func BenchmarkTreeInsertRangeFragmentedPasses(b *testing.B) {
 	specs := fragmentedRangeBenchmarkSpecs()
 	b.ReportMetric(float64(len(specs)), "ranges/op")

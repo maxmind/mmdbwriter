@@ -58,13 +58,79 @@ type insertRecord struct {
 
 	recordType recordType
 	value      mmdbtype.DataType
+	memo       map[*dataMapValue]*dataMapValue
+	memoFirst  *dataMapValue
+	memoResult *dataMapValue
+	memoSet    bool
 }
 
-func (iRec insertRecord) storeData(v mmdbtype.DataType) (*dataMapValue, error) {
-	if iRec.inserter == nil {
-		return iRec.dataMap.storeWithIdentity(v)
+func (iRec *insertRecord) storeData(v mmdbtype.DataType) (*dataMapValue, error) {
+	return iRec.dataMap.storeWithIdentity(v)
+}
+
+// resolve returns a borrowed value. The memo owns one reference to each
+// non-nil result until the insertion finishes.
+func (iRec *insertRecord) resolve(existing *dataMapValue) (*dataMapValue, error) {
+	if iRec.memo != nil {
+		if value, ok := iRec.memo[existing]; ok {
+			return value, nil
+		}
+	} else if iRec.memoSet && iRec.memoFirst == existing {
+		return iRec.memoResult, nil
 	}
-	return iRec.dataMap.store(v)
+	var existingData mmdbtype.DataType
+	if existing != nil {
+		existingData = existing.data
+	}
+	result, err := iRec.inserter(existingData, iRec.value)
+	if err != nil {
+		return nil, err
+	}
+	if result == nil {
+		iRec.rememberResolved(existing, nil)
+		return nil, nil
+	}
+
+	// Preserve the existing InsertFunc behavior for semantically equal values,
+	// including floating-point signed zero.
+	if existingData != nil && existingData.Equal(result) {
+		iRec.dataMap.addRef(existing)
+		iRec.rememberResolved(existing, existing)
+		return existing, nil
+	}
+	value, err := iRec.dataMap.store(result)
+	if err != nil {
+		return nil, err
+	}
+	iRec.rememberResolved(existing, value)
+	return value, nil
+}
+
+func (iRec *insertRecord) rememberResolved(existing, result *dataMapValue) {
+	if !iRec.memoSet {
+		iRec.memoFirst = existing
+		iRec.memoResult = result
+		iRec.memoSet = true
+		return
+	}
+	if iRec.memo == nil {
+		iRec.memo = map[*dataMapValue]*dataMapValue{
+			iRec.memoFirst: iRec.memoResult,
+		}
+	}
+	iRec.memo[existing] = result
+}
+
+func (iRec *insertRecord) releaseResolved() {
+	if iRec.memo != nil {
+		for _, value := range iRec.memo {
+			iRec.dataMap.remove(value)
+		}
+		return
+	}
+	if iRec.memoSet {
+		iRec.dataMap.remove(iRec.memoResult)
+	}
 }
 
 func newNodeIndex(index int) nodeIndex {
@@ -121,7 +187,7 @@ func (t *Tree) materializePath(startDepth int, path compressedPath) record {
 	return child
 }
 
-func (iRec insertRecord) insertNode(index nodeIndex, currentDepth int) error {
+func (iRec *insertRecord) insertNode(index nodeIndex, currentDepth int) error {
 	newDepth := currentDepth + 1
 	node := iRec.tree.nodeAt(index)
 	// Check if we are inside the network already
@@ -140,7 +206,7 @@ func (iRec insertRecord) insertNode(index nodeIndex, currentDepth int) error {
 	return iRec.insertRecord(&node.children[pos], newDepth)
 }
 
-func (iRec insertRecord) insertRecord(
+func (iRec *insertRecord) insertRecord(
 	r *record,
 	newDepth int,
 ) error {
@@ -160,18 +226,34 @@ func (iRec insertRecord) insertRecord(
 	case recordTypeEmpty, recordTypeData:
 		if newDepth >= iRec.prefixLen {
 			if iRec.recordType == recordTypeData {
+				if iRec.inserter != nil {
+					value, err := iRec.resolve(r.value)
+					if err != nil {
+						return err
+					}
+					switch {
+					case value == nil:
+						iRec.dataMap.remove(r.value)
+						r.nodeIndex = iRec.insertedNode
+						r.recordType = recordTypeEmpty
+						r.value = nil
+					case r.value != value:
+						iRec.dataMap.addRef(value)
+						iRec.dataMap.remove(r.value)
+						r.nodeIndex = iRec.insertedNode
+						r.recordType = iRec.recordType
+						r.value = value
+					default:
+						r.nodeIndex = iRec.insertedNode
+						r.recordType = iRec.recordType
+					}
+					return nil
+				}
 				var oldData mmdbtype.DataType
 				if r.value != nil {
 					oldData = r.value.data
 				}
 				newData := iRec.value
-				if iRec.inserter != nil {
-					var err error
-					newData, err = iRec.inserter(oldData, iRec.value)
-					if err != nil {
-						return err
-					}
-				}
 				switch {
 				case newData == nil:
 					iRec.dataMap.remove(r.value)
@@ -202,14 +284,23 @@ func (iRec insertRecord) insertRecord(
 		}
 
 		if r.recordType == recordTypeEmpty && iRec.recordType == recordTypeData {
-			newData := iRec.value
 			if iRec.inserter != nil {
-				var err error
-				newData, err = iRec.inserter(nil, iRec.value)
+				value, err := iRec.resolve(nil)
 				if err != nil {
 					return err
 				}
+				if value == nil {
+					return nil
+				}
+				iRec.dataMap.addRef(value)
+				r.nodeIndex = iRec.tree.newPath(iRec.ip, iRec.prefixLen, record{
+					value:      value,
+					recordType: recordTypeData,
+				})
+				r.recordType = recordTypePath
+				return nil
 			}
+			newData := iRec.value
 			if newData == nil {
 				return nil
 			}
@@ -258,7 +349,7 @@ func (iRec insertRecord) insertRecord(
 	}
 }
 
-func (iRec insertRecord) maybeMergeChildren(r *record) error {
+func (iRec *insertRecord) maybeMergeChildren(r *record) error {
 	// Check to see if the children are the same and can be merged.
 	// Use pointer access to avoid copying the record struct; this is
 	// called from every node-level insert, so the copies add up across
