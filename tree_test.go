@@ -652,6 +652,37 @@ func TestTreeInsertRangeInvalidBounds(t *testing.T) {
 	}
 }
 
+func TestTreeInsertRangeFuncNonPrefixAligned(t *testing.T) {
+	tree, err := New(Options{IPVersion: 4, IncludeReservedNetworks: true})
+	require.NoError(t, err)
+
+	base := mmdbtype.Map{"base": mmdbtype.String("value")}
+	merged := mmdbtype.Map{
+		"base":  mmdbtype.String("value"),
+		"extra": mmdbtype.String("value"),
+	}
+	require.NoError(t, tree.Insert(netip.MustParsePrefix("1.2.3.0/24"), base))
+	require.NoError(t, tree.InsertRangeFunc(
+		netip.MustParseAddr("1.2.3.10"),
+		netip.MustParseAddr("1.2.3.20"),
+		mmdbtype.Map{"extra": mmdbtype.String("value")},
+		inserter.TopLevelMerge,
+	))
+
+	for _, test := range []struct {
+		address  string
+		expected mmdbtype.Map
+	}{
+		{address: "1.2.3.9", expected: base},
+		{address: "1.2.3.10", expected: merged},
+		{address: "1.2.3.20", expected: merged},
+		{address: "1.2.3.21", expected: base},
+	} {
+		_, got := tree.Get(netip.MustParseAddr(test.address))
+		assert.Equal(t, test.expected, got, test.address)
+	}
+}
+
 func TestTreeInsertIPv4TreeReservedNetworkError(t *testing.T) {
 	tree, err := New(Options{IPVersion: 4})
 	require.NoError(t, err)
