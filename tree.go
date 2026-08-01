@@ -645,7 +645,13 @@ func (t *Tree) WriteTo(w io.Writer) (int64, error) {
 	recordBuf := make([]byte, 2*t.recordSize/8)
 
 	usePointers := true
-	dataWriter := newDataWriter(t.dataMap, usePointers)
+	offsetCapacity := len(t.dataMap.data)
+	// Small capacity hints can make the offset map larger than natural growth.
+	// Preallocation pays off only once the tree has a substantial value set.
+	if offsetCapacity < 256 {
+		offsetCapacity = 0
+	}
+	dataWriter := newDataWriterWithCapacity(t.dataMap, usePointers, offsetCapacity)
 
 	nodeCount, numBytes, err := t.writeNode(buf, t.root, dataWriter, recordBuf)
 	if err != nil {
