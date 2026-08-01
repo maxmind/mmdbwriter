@@ -160,6 +160,7 @@ func (dw *dataWriter) findOffset(
 	data mmdbtype.DataType,
 ) (writtenType, bool) {
 	index, ok := dw.offsets[hash]
+	// next == -1 terminates a chain; every nonnegative next is a live arena index.
 	for ok {
 		offset := &dw.offsetArena[index]
 		if offset.matches(data) {
@@ -176,6 +177,7 @@ func (dw *dataWriter) findStringOffset(
 	data mmdbtype.String,
 ) (writtenType, bool) {
 	index, ok := dw.offsets[hash]
+	// next == -1 terminates a chain; every nonnegative next is a live arena index.
 	for ok {
 		offset := &dw.offsetArena[index]
 		if offset.matchesString(data) {
@@ -192,22 +194,14 @@ func (dw *dataWriter) rememberOffset(
 	data mmdbtype.DataType,
 	written writtenType,
 ) {
-	if normalized, ok := dereferenceDataType(data); ok {
-		if stringValue, ok := normalized.(mmdbtype.String); ok {
-			dw.rememberStringOffset(hash, stringValue, written)
-			return
-		}
+	if stringValue, ok := normalizedString(data); ok {
+		dw.rememberStringOffset(hash, stringValue, written)
+		return
 	}
-	next := -1
-	if index, ok := dw.offsets[hash]; ok {
-		next = index
-	}
-	dw.offsetArena = append(dw.offsetArena, dataOffset{
+	dw.appendOffset(hash, dataOffset{
 		data:    data,
 		written: written,
-		next:    next,
 	})
-	dw.offsets[hash] = len(dw.offsetArena) - 1
 }
 
 func (dw *dataWriter) rememberStringOffset(
@@ -215,16 +209,19 @@ func (dw *dataWriter) rememberStringOffset(
 	data mmdbtype.String,
 	written writtenType,
 ) {
-	next := -1
-	if index, ok := dw.offsets[hash]; ok {
-		next = index
-	}
-	dw.offsetArena = append(dw.offsetArena, dataOffset{
+	dw.appendOffset(hash, dataOffset{
 		stringValue: data,
 		written:     written,
-		next:        next,
 		isString:    true,
 	})
+}
+
+func (dw *dataWriter) appendOffset(hash dataMapHash, entry dataOffset) {
+	entry.next = -1
+	if index, ok := dw.offsets[hash]; ok {
+		entry.next = index
+	}
+	dw.offsetArena = append(dw.offsetArena, entry)
 	dw.offsets[hash] = len(dw.offsetArena) - 1
 }
 
@@ -232,11 +229,7 @@ func (offset *dataOffset) matches(data mmdbtype.DataType) bool {
 	if !offset.isString {
 		return wireDataEqual(offset.data, data)
 	}
-	normalized, ok := dereferenceDataType(data)
-	if !ok {
-		return false
-	}
-	stringValue, ok := normalized.(mmdbtype.String)
+	stringValue, ok := normalizedString(data)
 	return ok && offset.stringValue == stringValue
 }
 
@@ -244,10 +237,15 @@ func (offset *dataOffset) matchesString(data mmdbtype.String) bool {
 	if offset.isString {
 		return offset.stringValue == data
 	}
-	normalized, ok := dereferenceDataType(offset.data)
+	stringValue, ok := normalizedString(offset.data)
+	return ok && stringValue == data
+}
+
+func normalizedString(data mmdbtype.DataType) (mmdbtype.String, bool) {
+	normalized, ok := dereferenceDataType(data)
 	if !ok {
-		return false
+		return "", false
 	}
 	stringValue, ok := normalized.(mmdbtype.String)
-	return ok && stringValue == data
+	return stringValue, ok
 }

@@ -23,6 +23,8 @@ var (
 	dataSectionSeparator = []byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
 )
 
+const minOffsetPrealloc = 256
+
 // Options holds configuration parameters for the writer.
 type Options struct {
 	// BuildEpoch is the database build timestamp as a Unix epoch value. It
@@ -653,7 +655,7 @@ func (t *Tree) WriteTo(w io.Writer) (int64, error) {
 	offsetCapacity := len(t.dataMap.data)
 	// Small capacity hints can make the offset map larger than natural growth.
 	// Preallocation pays off only once the tree has a substantial value set.
-	if offsetCapacity < 256 {
+	if offsetCapacity < minOffsetPrealloc {
 		offsetCapacity = 0
 	}
 	dataWriter := newDataWriterWithCapacity(t.dataMap, usePointers, offsetCapacity)
