@@ -3,6 +3,7 @@ package mmdbwriter
 import (
 	"math"
 	"reflect"
+	"unsafe"
 
 	"github.com/maxmind/mmdbwriter/v2/mmdbtype"
 )
@@ -220,6 +221,13 @@ func keyIdentity(v mmdbtype.DataType) (dataMapIdentityKey, bool) {
 	default:
 		return dataMapIdentityKey{}, false
 	}
+}
+
+func sliceIdentityPointer[T any](value []T) uintptr {
+	// The pointer is used only as an identity while a typed strong reference
+	// keeps the slice live. It is never dereferenced or converted back.
+	//nolint:gosec // converting to uintptr is intentional for the identity key
+	return uintptr(unsafe.Pointer(unsafe.SliceData(value)))
 }
 
 // addRef adds a reference to the value.

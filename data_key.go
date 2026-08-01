@@ -7,17 +7,11 @@ import (
 	"math"
 	"math/big"
 	"math/bits"
-	"reflect"
-	"unsafe"
 
 	"github.com/maxmind/mmdbwriter/v2/mmdbtype"
 )
 
-const (
-	dataHashCacheSize     = 4_096
-	dataHashProbationSize = 256
-	dataHashMix           = uint64(0x9e3779b97f4a7c15)
-)
+const dataHashMix = uint64(0x9e3779b97f4a7c15)
 
 type dataHashKind byte
 
@@ -38,39 +32,16 @@ const (
 	dataHashKindCount
 )
 
-type dataHashCacheEntry struct {
-	identity dataMapIdentityKey
-	hash     uint64
-	used     bool
-
-	// Typed strong references prevent an identity from being reused by the Go
-	// runtime while its cached hash remains live.
-	mapValue   mmdbtype.Map
-	sliceValue mmdbtype.Slice
-}
-
-// dataHasher hashes the typed structure of an MMDB value. Nested containers
-// are cached by identity because inserted values are immutable. A small
-// probation cache prevents one-off containers from displacing reused values in
-// the bounded clock cache. Hash matches are always followed by an exact
-// comparison, so correctness does not depend on collision resistance.
+// dataHasher hashes the typed structure of an MMDB value. Hash matches are
+// always followed by an exact comparison, so correctness does not depend on
+// collision resistance.
 type dataHasher struct {
-	seed            maphash.Seed
-	typeSalts       [dataHashKindCount]uint64
-	cacheByIdentity map[dataMapIdentityKey]int
-	cache           []dataHashCacheEntry
-	cacheHand       int
-	probationByID   map[dataMapIdentityKey]int
-	probation       []dataHashCacheEntry
-	probationHand   int
+	seed      maphash.Seed
+	typeSalts [dataHashKindCount]uint64
 }
 
 func newDataHasher() *dataHasher {
-	hasher := &dataHasher{
-		seed:            maphash.MakeSeed(),
-		cacheByIdentity: map[dataMapIdentityKey]int{},
-		probationByID:   map[dataMapIdentityKey]int{},
-	}
+	hasher := &dataHasher{seed: maphash.MakeSeed()}
 	for kind := dataHashBool; kind < dataHashKindCount; kind++ {
 		hasher.typeSalts[kind] = maphash.Comparable(hasher.seed, kind)
 	}
@@ -78,30 +49,7 @@ func newDataHasher() *dataHasher {
 }
 
 func (h *dataHasher) Hash(value mmdbtype.DataType) (uint64, error) {
-	var ok bool
-	original := value
-	value, ok = dereferenceDataType(value)
-	if !ok {
-		return 0, fmt.Errorf("cannot hash a nil %T", original)
-	}
-	// Top-level identities and repeated merge results are cached outside the
-	// hasher. Avoid retaining every distinct record in the nested-container
-	// cache as well.
-	switch value := value.(type) {
-	case mmdbtype.Map:
-		return h.hashMapContents(value)
-	case mmdbtype.Slice:
-		return h.hashSliceContents(value)
-	case mmdbtype.Bytes:
-		return h.hashBytes(dataHashBytes, value), nil
-	case *mmdbtype.Uint128:
-		if value == nil {
-			return 0, errors.New("cannot hash a nil *mmdbtype.Uint128")
-		}
-		return h.hashBytes(dataHashUint128, (*big.Int)(value).Bytes()), nil
-	default:
-		return h.hashValue(value)
-	}
+	return h.hashValue(value)
 }
 
 func (h *dataHasher) hashValue(value mmdbtype.DataType) (uint64, error) {
@@ -127,11 +75,11 @@ func (h *dataHasher) hashValue(value mmdbtype.DataType) (uint64, error) {
 		//nolint:gosec // the signed bit pattern is part of the encoded value
 		return h.hashScalar(dataHashInt32, uint64(uint32(value))), nil
 	case mmdbtype.Map:
-		return h.hashMap(value)
+		return h.hashMapContents(value)
 	case mmdbtype.Pointer:
 		return h.hashScalar(dataHashPointer, uint64(value)), nil
 	case mmdbtype.Slice:
-		return h.hashSlice(value)
+		return h.hashSliceContents(value)
 	case mmdbtype.String:
 		return h.hashScalar(dataHashString, maphash.String(h.seed, string(value))), nil
 	case mmdbtype.Uint16:
@@ -156,24 +104,6 @@ func (h *dataHasher) hashScalar(kind dataHashKind, value uint64) uint64 {
 
 func (h *dataHasher) hashBytes(kind dataHashKind, value []byte) uint64 {
 	return h.hashScalar(kind, maphash.Bytes(h.seed, value))
-}
-
-func (h *dataHasher) hashMap(value mmdbtype.Map) (uint64, error) {
-	identity := mapDataIdentity(value)
-	if digest, ok := h.cachedHash(identity); ok {
-		return digest, nil
-	}
-	if entry, ok := h.probationHash(identity); ok {
-		h.rememberHash(entry)
-		return entry.hash, nil
-	}
-
-	digest, err := h.hashMapContents(value)
-	if err != nil {
-		return 0, err
-	}
-	h.rememberProbation(dataHashCacheEntry{identity: identity, hash: digest, mapValue: value})
-	return digest, nil
 }
 
 func (h *dataHasher) hashMapContents(value mmdbtype.Map) (uint64, error) {
@@ -201,24 +131,6 @@ func (h *dataHasher) hashMapContents(value mmdbtype.Map) (uint64, error) {
 	return digest, nil
 }
 
-func (h *dataHasher) hashSlice(value mmdbtype.Slice) (uint64, error) {
-	identity := sliceDataIdentity(value)
-	if hash, ok := h.cachedHash(identity); ok {
-		return hash, nil
-	}
-	if entry, ok := h.probationHash(identity); ok {
-		h.rememberHash(entry)
-		return entry.hash, nil
-	}
-
-	hash, err := h.hashSliceContents(value)
-	if err != nil {
-		return 0, err
-	}
-	h.rememberProbation(dataHashCacheEntry{identity: identity, hash: hash, sliceValue: value})
-	return hash, nil
-}
-
 func (h *dataHasher) hashSliceContents(value mmdbtype.Slice) (uint64, error) {
 	hash := dataHashMix64(h.typeSalts[dataHashSlice] ^ uint64(len(value)))
 	for index, child := range value {
@@ -229,62 +141,6 @@ func (h *dataHasher) hashSliceContents(value mmdbtype.Slice) (uint64, error) {
 		hash = dataHashMix64(hash ^ dataHashMix64(uint64(index)*dataHashMix^childHash))
 	}
 	return hash, nil
-}
-
-func (h *dataHasher) cachedHash(identity dataMapIdentityKey) (uint64, bool) {
-	index, ok := h.cacheByIdentity[identity]
-	if !ok {
-		return 0, false
-	}
-	h.cache[index].used = true
-	return h.cache[index].hash, true
-}
-
-func (h *dataHasher) probationHash(identity dataMapIdentityKey) (dataHashCacheEntry, bool) {
-	index, ok := h.probationByID[identity]
-	if !ok {
-		return dataHashCacheEntry{}, false
-	}
-	delete(h.probationByID, identity)
-	entry := h.probation[index]
-	h.probation[index] = dataHashCacheEntry{}
-	return entry, true
-}
-
-func (h *dataHasher) rememberProbation(entry dataHashCacheEntry) {
-	if len(h.probation) < dataHashProbationSize {
-		index := len(h.probation)
-		h.probation = append(h.probation, entry)
-		h.probationByID[entry.identity] = index
-		return
-	}
-
-	oldIdentity := h.probation[h.probationHand].identity
-	if index, ok := h.probationByID[oldIdentity]; ok && index == h.probationHand {
-		delete(h.probationByID, oldIdentity)
-	}
-	h.probation[h.probationHand] = entry
-	h.probationByID[entry.identity] = h.probationHand
-	h.probationHand = (h.probationHand + 1) % len(h.probation)
-}
-
-func (h *dataHasher) rememberHash(entry dataHashCacheEntry) {
-	entry.used = true
-	if len(h.cache) < dataHashCacheSize {
-		index := len(h.cache)
-		h.cache = append(h.cache, entry)
-		h.cacheByIdentity[entry.identity] = index
-		return
-	}
-
-	for h.cache[h.cacheHand].used {
-		h.cache[h.cacheHand].used = false
-		h.cacheHand = (h.cacheHand + 1) % len(h.cache)
-	}
-	delete(h.cacheByIdentity, h.cache[h.cacheHand].identity)
-	h.cache[h.cacheHand] = entry
-	h.cacheByIdentity[entry.identity] = h.cacheHand
-	h.cacheHand = (h.cacheHand + 1) % len(h.cache)
 }
 
 func dataHashMix64(value uint64) uint64 {
@@ -342,31 +198,4 @@ func dereference[T mmdbtype.DataType](value *T) (mmdbtype.DataType, bool) {
 		return nil, false
 	}
 	return *value, true
-}
-
-func mapDataIdentity(value mmdbtype.Map) dataMapIdentityKey {
-	if len(value) == 0 {
-		return dataMapIdentityKey{kind: dataMapIdentityMap}
-	}
-	return dataMapIdentityKey{
-		ptr: reflect.ValueOf(value).Pointer(), kind: dataMapIdentityMap, size: len(value),
-	}
-}
-
-func sliceDataIdentity(value mmdbtype.Slice) dataMapIdentityKey {
-	if len(value) == 0 {
-		return dataMapIdentityKey{kind: dataMapIdentitySlice}
-	}
-	return dataMapIdentityKey{
-		ptr:  sliceIdentityPointer(value),
-		kind: dataMapIdentitySlice,
-		size: len(value),
-	}
-}
-
-func sliceIdentityPointer[T any](value []T) uintptr {
-	// The pointer is used only as an identity while a typed strong reference
-	// keeps the slice live. It is never dereferenced or converted back.
-	//nolint:gosec // converting to uintptr is intentional for the identity key
-	return uintptr(unsafe.Pointer(unsafe.SliceData(value)))
 }

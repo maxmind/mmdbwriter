@@ -38,9 +38,9 @@
   discarded. Workloads with heavy mutation churn may see higher peak memory than
   v1.
 - Removed `Options.KeyGenerator` and the `KeyGenerator` interface. Record values
-  are now indexed by a seeded structural content hash with bounded caching for
-  shared nested containers. Values are compared exactly before deduplication, so
-  hash collisions cannot substitute a different value.
+  are now indexed by a seeded structural content hash. Values are compared
+  exactly before deduplication, so hash collisions cannot substitute a different
+  value.
 - Added `inserter.PureFunc` for resolvers whose output depends only on their
   arguments. Repeated existing values are memoized within each insert call for
   these resolvers. `DeepMerge` also reuses existing maps and slices when a merge
