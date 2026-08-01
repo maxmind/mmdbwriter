@@ -23,9 +23,12 @@
   as in v1. Added `Tree.InsertPureFunc` and `Tree.InsertRangePureFunc` for
   functions whose result and error depend only on their arguments. These methods
   may memoize repeated argument pairs within an insertion;
-  `Tree.InsertRangePureFunc` shares the memo across the entire range. Explicit
-  nil functions are rejected. Non-nil results become tree-owned and must not be
-  modified after the function returns.
+  `Tree.InsertRangePureFunc` shares the memo across the entire range. A nil
+  function passed to `Tree.InsertFunc`, `Tree.InsertRangeFunc`,
+  `Tree.InsertPureFunc`, or `Tree.InsertRangePureFunc` now returns an error;
+  `Options.Inserter` may still be nil, which is equivalent to
+  `inserter.Replace`. Non-nil results become tree-owned and must not be modified
+  after the function returns.
 - Reduced allocations on the tree insert and serialization hot paths, lowering
   memory pressure and GC overhead during large builds.
 - `Load` now caches decoded source records by data offset during loading. This
@@ -46,6 +49,10 @@
   does not change their contents and retain unchanged nested containers,
   avoiding unnecessary cloning and reindexing. Its result must therefore be
   treated as immutable.
+- `Load` now returns an error when a database's metadata declares an unsupported
+  `ip_version` or `record_size` rather than using the value unchecked.
+- `mmdbtype.Uint128.Equal` now returns false when either value is a nil
+  `*Uint128`. Previously a nil argument caused a panic.
 
 ## 1.2.0 (2026-01-14)
 

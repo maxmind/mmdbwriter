@@ -203,7 +203,14 @@ func Load(path string, opts Options) (*Tree, error) {
 	}
 
 	if opts.IPVersion == 0 {
-		opts.IPVersion = int(metadata.IPVersion)
+		switch metadata.IPVersion {
+		case 4:
+			opts.IPVersion = 4
+		case 6:
+			opts.IPVersion = 6
+		default:
+			return nil, fmt.Errorf("unsupported IPVersion in metadata: %d", metadata.IPVersion)
+		}
 	}
 
 	if opts.Languages == nil {
@@ -211,7 +218,16 @@ func Load(path string, opts Options) (*Tree, error) {
 	}
 
 	if opts.RecordSize == 0 {
-		opts.RecordSize = int(metadata.RecordSize)
+		switch metadata.RecordSize {
+		case 24:
+			opts.RecordSize = 24
+		case 28:
+			opts.RecordSize = 28
+		case 32:
+			opts.RecordSize = 32
+		default:
+			return nil, fmt.Errorf("unsupported RecordSize in metadata: %d", metadata.RecordSize)
+		}
 	}
 
 	tree, err := New(opts)

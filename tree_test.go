@@ -1720,6 +1720,7 @@ func TestInsertFuncReleasesRedundantStoredReference(t *testing.T) {
 	assert.Len(t, tree.dataMap.data, 1)
 	assert.EqualValues(t, 1, stored.refCount, "a redundant stored reference leaked")
 }
+
 // TestInsertPureFuncMatchesInsertFuncOutput is the differential that most
 // directly encodes the contract of the pure insert methods: memoizing a pure
 // function must not change the database.
@@ -1813,4 +1814,76 @@ func TestInsertPureFuncCreatesPathFromEmptySpace(t *testing.T) {
 	_, err = tree.WriteTo(&buf)
 	require.NoError(t, err)
 	assert.NotZero(t, buf.Len())
+}
+
+// writeMetadataPatchedDB writes a valid database with one metadata value
+// replaced. Both ip_version and record_size are encoded as a uint16 with a
+// one-byte payload, so the byte after the key and its control byte is the
+// value.
+func writeMetadataPatchedDB(t *testing.T, key string, value byte) string {
+	t.Helper()
+
+	tree, err := New(Options{
+		DatabaseType:            "mmdbwriter-metadata",
+		Description:             map[string]string{"en": "Test database"},
+		IPVersion:               4,
+		RecordSize:              24,
+		IncludeReservedNetworks: true,
+	})
+	require.NoError(t, err)
+	require.NoError(t, tree.Insert(
+		netip.MustParsePrefix("1.2.3.0/24"),
+		mmdbtype.String("value"),
+	))
+
+	var buf bytes.Buffer
+	_, err = tree.WriteTo(&buf)
+	require.NoError(t, err)
+
+	dbBytes := append([]byte(nil), buf.Bytes()...)
+	i := bytes.LastIndex(dbBytes, []byte(key))
+	require.GreaterOrEqual(t, i, 0)
+	dbBytes[i+len(key)+1] = value
+
+	f, err := os.CreateTemp(t.TempDir(), "mmdbwriter-metadata-*.mmdb")
+	require.NoError(t, err)
+	_, err = f.Write(dbBytes)
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	return f.Name()
+}
+
+// TestLoadRejectsUnsupportedMetadataDimensions covers the metadata validation
+// added for loaded databases.
+func TestLoadRejectsUnsupportedMetadataDimensions(t *testing.T) {
+	t.Run("unsupported ip version", func(t *testing.T) {
+		path := writeMetadataPatchedDB(t, "ip_version", 5)
+
+		_, err := Load(path, Options{IncludeReservedNetworks: true})
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "unsupported IPVersion in metadata: 5")
+	})
+
+	t.Run("unsupported record size", func(t *testing.T) {
+		path := writeMetadataPatchedDB(t, "record_size", 20)
+
+		_, err := Load(path, Options{IncludeReservedNetworks: true})
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "unsupported RecordSize in metadata: 20")
+	})
+
+	t.Run("explicit options bypass the metadata values", func(t *testing.T) {
+		path := writeMetadataPatchedDB(t, "ip_version", 5)
+
+		_, err := Load(path, Options{
+			IPVersion:               4,
+			RecordSize:              24,
+			IncludeReservedNetworks: true,
+		})
+
+		require.NoError(t, err)
+	})
 }
