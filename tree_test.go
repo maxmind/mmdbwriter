@@ -161,7 +161,7 @@ func TestTreeInsertFunc(t *testing.T) {
 	}, got)
 }
 
-func TestTreeInsertFuncMemoizesDistinctExistingValues(t *testing.T) {
+func TestTreeInsertPureFuncMemoizesDistinctExistingValues(t *testing.T) {
 	tree, err := New(Options{IPVersion: 4, IncludeReservedNetworks: true})
 	require.NoError(t, err)
 	for index, value := range []mmdbtype.String{"a", "b", "a", "b"} {
@@ -171,7 +171,7 @@ func TestTreeInsertFuncMemoizesDistinctExistingValues(t *testing.T) {
 	}
 
 	calls := map[mmdbtype.String]int{}
-	err = tree.InsertFunc(
+	err = tree.InsertPureFunc(
 		netip.MustParsePrefix("1.2.3.0/24"),
 		mmdbtype.String("new"),
 		func(existing, newValue mmdbtype.DataType) (mmdbtype.DataType, error) {
@@ -181,9 +181,14 @@ func TestTreeInsertFuncMemoizesDistinctExistingValues(t *testing.T) {
 	)
 	require.NoError(t, err)
 	assert.Equal(t, map[mmdbtype.String]int{"a": 1, "b": 1}, calls)
+	for index := range 4 {
+		//nolint:gosec // index is bounded by the four-iteration loop
+		_, value := tree.Get(netip.AddrFrom4([4]byte{1, 2, 3, byte(index * 64)}))
+		assert.Equal(t, mmdbtype.String("new"), value)
+	}
 }
 
-func TestTreeInsertFuncReleasesPureMemoAfterPartialError(t *testing.T) {
+func TestTreeInsertPureFuncReleasesMemoAfterPartialError(t *testing.T) {
 	tree, err := New(Options{IPVersion: 4, IncludeReservedNetworks: true})
 	require.NoError(t, err)
 	require.NoError(t, tree.Insert(
@@ -197,7 +202,7 @@ func TestTreeInsertFuncReleasesPureMemoAfterPartialError(t *testing.T) {
 
 	insertErr := errors.New("insert failed")
 	result := mmdbtype.String("resolved")
-	err = tree.InsertFunc(
+	err = tree.InsertPureFunc(
 		netip.MustParsePrefix("1.2.3.0/24"),
 		mmdbtype.String("new"),
 		func(existing, _ mmdbtype.DataType) (mmdbtype.DataType, error) {
@@ -224,6 +229,37 @@ func TestTreeInsertFuncReleasesPureMemoAfterPartialError(t *testing.T) {
 	assert.Equal(t, result, got)
 	_, got = tree.Get(netip.MustParseAddr("1.2.3.129"))
 	assert.Equal(t, mmdbtype.String("second"), got)
+}
+
+func TestTreeInsertFuncEvaluatesOrdinaryFuncForEveryRecord(t *testing.T) {
+	tree, err := New(Options{IPVersion: 4, IncludeReservedNetworks: true})
+	require.NoError(t, err)
+	for index, value := range []mmdbtype.String{"a", "b", "a", "b"} {
+		//nolint:gosec // index is bounded by the four-iteration loop
+		prefix := netip.PrefixFrom(netip.AddrFrom4([4]byte{1, 2, 3, byte(index * 64)}), 26)
+		require.NoError(t, tree.Insert(prefix, value))
+	}
+
+	calls := 0
+	err = tree.InsertFunc(
+		netip.MustParsePrefix("1.2.3.0/24"),
+		mmdbtype.String("new"),
+		inserter.Func(func(_, _ mmdbtype.DataType) (mmdbtype.DataType, error) {
+			calls++
+			//nolint:gosec // calls is bounded by the four covered records
+			return mmdbtype.Uint32(calls), nil
+		}),
+	)
+	require.NoError(t, err)
+	assert.Equal(t, 4, calls)
+
+	values := map[mmdbtype.DataType]struct{}{}
+	for index := range 4 {
+		//nolint:gosec // index is bounded by the four-iteration loop
+		_, value := tree.Get(netip.AddrFrom4([4]byte{1, 2, 3, byte(index * 64)}))
+		values[value] = struct{}{}
+	}
+	assert.Len(t, values, 4)
 }
 
 func TestTreeOptionsInserter(t *testing.T) {
@@ -258,6 +294,38 @@ func TestTreeOptionsInserter(t *testing.T) {
 	assert.Equal(t, mmdbtype.Map{"base": mmdbtype.String("value")}, got)
 }
 
+func TestTreeRejectsNilInserterFunc(t *testing.T) {
+	tree, err := New(Options{IPVersion: 4, IncludeReservedNetworks: true})
+	require.NoError(t, err)
+
+	var insertFunc inserter.Func
+	prefix := netip.MustParsePrefix("1.2.3.0/24")
+	start := netip.MustParseAddr("1.2.3.1")
+	end := netip.MustParseAddr("1.2.3.2")
+	value := mmdbtype.String("value")
+
+	require.EqualError(
+		t,
+		tree.InsertFunc(prefix, value, insertFunc),
+		"inserter function must not be nil",
+	)
+	require.EqualError(
+		t,
+		tree.InsertPureFunc(prefix, value, insertFunc),
+		"inserter function must not be nil",
+	)
+	require.EqualError(
+		t,
+		tree.InsertRangeFunc(start, end, value, insertFunc),
+		"inserter function must not be nil",
+	)
+	require.EqualError(
+		t,
+		tree.InsertRangePureFunc(start, end, value, insertFunc),
+		"inserter function must not be nil",
+	)
+}
+
 func TestTreeInsertFuncErrorDoesNotMutateEmptySiblingRecord(t *testing.T) {
 	tree, err := New(Options{
 		IPVersion:               4,
@@ -274,9 +342,9 @@ func TestTreeInsertFuncErrorDoesNotMutateEmptySiblingRecord(t *testing.T) {
 	err = tree.InsertFunc(
 		netip.MustParsePrefix("1.2.2.0/24"),
 		mmdbtype.String("value"),
-		func(_, _ mmdbtype.DataType) (mmdbtype.DataType, error) {
+		inserter.Func(func(_, _ mmdbtype.DataType) (mmdbtype.DataType, error) {
 			return nil, insertErr
-		},
+		}),
 	)
 	require.ErrorIs(t, err, insertErr)
 
@@ -305,9 +373,9 @@ func TestTreeInsertFuncErrorLeavesExistingRecordUnchanged(t *testing.T) {
 	err = tree.InsertFunc(
 		prefix,
 		mmdbtype.Map{"extra": mmdbtype.String("value")},
-		func(_, _ mmdbtype.DataType) (mmdbtype.DataType, error) {
+		inserter.Func(func(_, _ mmdbtype.DataType) (mmdbtype.DataType, error) {
 			return nil, insertErr
-		},
+		}),
 	)
 	require.ErrorIs(t, err, insertErr)
 
@@ -559,6 +627,69 @@ func TestTreeInsertRangeInvalidBounds(t *testing.T) {
 			err := tree.InsertRange(test.start, test.end, mmdbtype.String("value"))
 			require.EqualError(t, err, test.expectedError)
 		})
+	}
+}
+
+func TestTreeInsertRangeFuncNonPrefixAligned(t *testing.T) {
+	tree, err := New(Options{IPVersion: 4, IncludeReservedNetworks: true})
+	require.NoError(t, err)
+
+	base := mmdbtype.Map{"base": mmdbtype.String("value")}
+	merged := mmdbtype.Map{
+		"base":  mmdbtype.String("value"),
+		"extra": mmdbtype.String("value"),
+	}
+	require.NoError(t, tree.Insert(netip.MustParsePrefix("1.2.3.0/24"), base))
+	require.NoError(t, tree.InsertRangeFunc(
+		netip.MustParseAddr("1.2.3.10"),
+		netip.MustParseAddr("1.2.3.20"),
+		mmdbtype.Map{"extra": mmdbtype.String("value")},
+		inserter.TopLevelMerge,
+	))
+
+	for _, test := range []struct {
+		address  string
+		expected mmdbtype.Map
+	}{
+		{address: "1.2.3.9", expected: base},
+		{address: "1.2.3.10", expected: merged},
+		{address: "1.2.3.20", expected: merged},
+		{address: "1.2.3.21", expected: base},
+	} {
+		_, got := tree.Get(netip.MustParseAddr(test.address))
+		assert.Equal(t, test.expected, got, test.address)
+	}
+}
+
+func TestTreeInsertRangePureFuncMemoizesAcrossSubnets(t *testing.T) {
+	tree, err := New(Options{IPVersion: 4, IncludeReservedNetworks: true})
+	require.NoError(t, err)
+
+	oldValue := mmdbtype.String("old")
+	newValue := mmdbtype.String("new")
+	require.NoError(t, tree.Insert(netip.MustParsePrefix("1.2.3.0/24"), oldValue))
+
+	calls := 0
+	err = tree.InsertRangePureFunc(
+		netip.MustParseAddr("1.2.3.1"),
+		netip.MustParseAddr("1.2.3.254"),
+		newValue,
+		func(existing, replacement mmdbtype.DataType) (mmdbtype.DataType, error) {
+			calls++
+			assert.Equal(t, oldValue, existing)
+			return replacement, nil
+		},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, 1, calls)
+
+	for _, address := range []string{"1.2.3.0", "1.2.3.255"} {
+		_, got := tree.Get(netip.MustParseAddr(address))
+		assert.Equal(t, oldValue, got, address)
+	}
+	for _, address := range []string{"1.2.3.1", "1.2.3.128", "1.2.3.254"} {
+		_, got := tree.Get(netip.MustParseAddr(address))
+		assert.Equal(t, newValue, got, address)
 	}
 }
 
@@ -1477,9 +1608,9 @@ func TestInsertFunc_RemovalAndLaterInsert(t *testing.T) {
 	err = tree.InsertFunc(
 		removedNetwork,
 		nil,
-		func(v, _ mmdbtype.DataType) (mmdbtype.DataType, error) {
+		inserter.Func(func(v, _ mmdbtype.DataType) (mmdbtype.DataType, error) {
 			return v, nil
-		},
+		}),
 	)
 	require.NoError(t, err)
 
@@ -1511,4 +1642,175 @@ func TestGet_IPv4MappedIn128BitTree(t *testing.T) {
 func s2ip(v string) *any {
 	i := any(v)
 	return &i
+}
+
+// TestInsertPureFuncEqualResultKeepsReference pins the branch where a pure
+// inserter returns a value semantically equal to the existing one. The memo
+// must take its own reference; otherwise releaseResolved drops the record's
+// reference and unlinks a value that a record still points at.
+func TestInsertPureFuncEqualResultKeepsReference(t *testing.T) {
+	tree, err := New(Options{
+		DatabaseType:            "mmdbwriter-pure-equal",
+		Description:             map[string]string{"en": "Test database"},
+		IPVersion:               4,
+		RecordSize:              24,
+		IncludeReservedNetworks: true,
+	})
+	require.NoError(t, err)
+
+	prefix := netip.MustParsePrefix("1.0.0.0/8")
+	require.NoError(t, tree.Insert(prefix, mmdbtype.String("value")))
+
+	require.NoError(t, tree.InsertPureFunc(
+		prefix,
+		mmdbtype.String("value"),
+		func(existingValue, _ mmdbtype.DataType) (mmdbtype.DataType, error) {
+			return existingValue, nil
+		},
+	))
+
+	require.Len(t, tree.dataMap.data, 1,
+		"the retained value was unlinked while a record still referenced it")
+	for _, dmv := range tree.dataMap.data {
+		assert.NotZero(t, dmv.refCount,
+			"the retained value has no references but is still in the tree")
+	}
+
+	require.NoError(t, tree.Insert(
+		netip.MustParsePrefix("2.0.0.0/8"), mmdbtype.String("value")))
+	assert.Len(t, tree.dataMap.data, 1, "an equal value failed to deduplicate")
+}
+
+// TestInsertFuncReleasesRedundantStoredReference covers the other uncovered
+// ownership arm: an ordinary inserter whose result is not Equal to the existing
+// value, but which deduplicates back onto that same value once stored. The
+// reference the store took must be released.
+func TestInsertFuncReleasesRedundantStoredReference(t *testing.T) {
+	tree, err := New(Options{
+		DatabaseType:            "mmdbwriter-owned-release",
+		Description:             map[string]string{"en": "Test database"},
+		IPVersion:               4,
+		RecordSize:              24,
+		IncludeReservedNetworks: true,
+	})
+	require.NoError(t, err)
+
+	prefix := netip.MustParsePrefix("1.0.0.0/8")
+	require.NoError(t, tree.Insert(prefix, mmdbtype.String("shared")))
+
+	require.Len(t, tree.dataMap.data, 1)
+	var stored *dataMapValue
+	for _, value := range tree.dataMap.data {
+		stored = value
+	}
+	require.EqualValues(t, 1, stored.refCount)
+
+	// A pointer form is not Equal to the value form, so resolve stores it. The
+	// store deduplicates back onto the record's own value, leaving a reference
+	// that must be released.
+	shared := mmdbtype.String("shared")
+	require.NoError(t, tree.InsertFunc(
+		prefix,
+		mmdbtype.String("ignored"),
+		func(_, _ mmdbtype.DataType) (mmdbtype.DataType, error) {
+			return &shared, nil
+		},
+	))
+
+	assert.Len(t, tree.dataMap.data, 1)
+	assert.EqualValues(t, 1, stored.refCount, "a redundant stored reference leaked")
+}
+// TestInsertPureFuncMatchesInsertFuncOutput is the differential that most
+// directly encodes the contract of the pure insert methods: memoizing a pure
+// function must not change the database.
+func TestInsertPureFuncMatchesInsertFuncOutput(t *testing.T) {
+	build := func(pure bool) []byte {
+		tree, err := New(Options{
+			DatabaseType:            "mmdbwriter-pure-differential",
+			Description:             map[string]string{"en": "Test database"},
+			IPVersion:               4,
+			RecordSize:              24,
+			IncludeReservedNetworks: true,
+			BuildEpoch:              1,
+		})
+		require.NoError(t, err)
+
+		for i := range 8 {
+			require.NoError(t, tree.Insert(
+				netip.MustParsePrefix(
+					netip.AddrFrom4([4]byte{1, byte(i), 0, 0}).String()+"/16"),
+				mmdbtype.Map{"n": mmdbtype.Uint32(uint32(i % 3))},
+			))
+		}
+
+		prefix := netip.MustParsePrefix("1.0.0.0/8")
+		value := mmdbtype.Map{"added": mmdbtype.String("x")}
+		if pure {
+			require.NoError(t, tree.InsertPureFunc(prefix, value, inserter.DeepMerge))
+		} else {
+			require.NoError(t, tree.InsertFunc(prefix, value, inserter.DeepMerge))
+		}
+
+		var buf bytes.Buffer
+		_, err = tree.WriteTo(&buf)
+		require.NoError(t, err)
+		return buf.Bytes()
+	}
+
+	assert.Equal(t, build(false), build(true))
+}
+
+// TestInsertPureFuncNilResultRemovesRecords covers a memoized nil result, which
+// is the common outcome for inserter.Remove.
+func TestInsertPureFuncNilResultRemovesRecords(t *testing.T) {
+	tree, err := New(Options{
+		DatabaseType:            "mmdbwriter-pure-nil",
+		Description:             map[string]string{"en": "Test database"},
+		IPVersion:               4,
+		RecordSize:              24,
+		IncludeReservedNetworks: true,
+	})
+	require.NoError(t, err)
+
+	for i := range 4 {
+		require.NoError(t, tree.Insert(
+			netip.MustParsePrefix(
+				netip.AddrFrom4([4]byte{1, byte(i), 0, 0}).String()+"/16"),
+			mmdbtype.String("value"),
+		))
+	}
+
+	require.NoError(t, tree.InsertPureFunc(
+		netip.MustParsePrefix("1.0.0.0/8"),
+		mmdbtype.String("ignored"),
+		inserter.Remove,
+	))
+
+	assert.Empty(t, tree.dataMap.data, "removed values were not released")
+}
+
+// TestInsertPureFuncCreatesPathFromEmptySpace covers the compressed-path branch
+// a pure inserter takes when nothing covers the network yet.
+func TestInsertPureFuncCreatesPathFromEmptySpace(t *testing.T) {
+	tree, err := New(Options{
+		DatabaseType:            "mmdbwriter-pure-empty",
+		Description:             map[string]string{"en": "Test database"},
+		IPVersion:               4,
+		RecordSize:              24,
+		IncludeReservedNetworks: true,
+	})
+	require.NoError(t, err)
+
+	prefix := netip.MustParsePrefix("9.9.9.0/24")
+	require.NoError(t, tree.InsertPureFunc(
+		prefix, mmdbtype.String("value"), inserter.Replace))
+
+	gotPrefix, value := tree.Get(netip.MustParseAddr("9.9.9.1"))
+	assert.Equal(t, prefix, gotPrefix)
+	assert.Equal(t, mmdbtype.String("value"), value)
+
+	var buf bytes.Buffer
+	_, err = tree.WriteTo(&buf)
+	require.NoError(t, err)
+	assert.NotZero(t, buf.Len())
 }

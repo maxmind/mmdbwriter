@@ -119,7 +119,7 @@ func BenchmarkEnterpriseKeyPipeline(b *testing.B) {
 				b.Fatal(err)
 			}
 			for _, overlay := range overlays {
-				if err := tree.InsertFunc(prefix, overlay, inserter.DeepMerge); err != nil {
+				if err := tree.InsertPureFunc(prefix, overlay, inserter.DeepMerge); err != nil {
 					b.Fatal(err)
 				}
 			}

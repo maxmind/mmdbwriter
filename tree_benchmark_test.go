@@ -52,7 +52,7 @@ func BenchmarkTreeInsertTopLevelMergeOverlappingPasses(b *testing.B) {
 	for range b.N {
 		tree := newBenchmarkTree(b)
 		for _, spec := range specs {
-			err := tree.InsertFunc(spec.network, spec.value, inserter.TopLevelMerge)
+			err := tree.InsertPureFunc(spec.network, spec.value, inserter.TopLevelMerge)
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -70,7 +70,7 @@ func BenchmarkTreeInsertDeepMergeOverlappingPasses(b *testing.B) {
 	for range b.N {
 		tree := newBenchmarkTree(b)
 		for _, spec := range specs {
-			err := tree.InsertFunc(spec.network, spec.value, inserter.DeepMerge)
+			err := tree.InsertPureFunc(spec.network, spec.value, inserter.DeepMerge)
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -102,7 +102,7 @@ func BenchmarkTreeInsertDeepMergeFragmentedNetwork(b *testing.B) {
 			}
 		}
 		b.StartTimer()
-		if err := tree.InsertFunc(
+		if err := tree.InsertPureFunc(
 			netip.MustParsePrefix("1.0.0.0/20"),
 			overlay,
 			inserter.DeepMerge,
@@ -212,7 +212,7 @@ func reportOverlappingBenchmarkShape(
 		insertBenchmarkSpecs(b, tree, specs)
 	} else {
 		for _, spec := range specs {
-			if err := tree.InsertFunc(spec.network, spec.value, insertFunc); err != nil {
+			if err := tree.InsertPureFunc(spec.network, spec.value, insertFunc); err != nil {
 				b.Fatal(err)
 			}
 		}
@@ -285,7 +285,7 @@ func insertChurnBenchmarkSpecs(b *testing.B, tree *Tree, cycles int) {
 		for specific := range 16 {
 			secondOctet := specific * 16
 			removePrefix := benchmarkCIDR(fmt.Sprintf("%d.%d.0.128/25", firstOctet, secondOctet))
-			if err := tree.InsertFunc(removePrefix, nil, inserter.Remove); err != nil {
+			if err := tree.InsertPureFunc(removePrefix, nil, inserter.Remove); err != nil {
 				b.Fatal(err)
 			}
 

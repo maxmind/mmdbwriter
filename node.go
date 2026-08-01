@@ -46,6 +46,19 @@ const (
 	nodeBlockSize           = 1024
 )
 
+// insertRecord carries the state for one insert call. Every field except ip and
+// prefixLen is fixed for the life of the value; insertPrepared re-targets those
+// two for each subnet of a range.
+//
+// The memo is only used for pure inserters. It is keyed on the existing value
+// alone, which is sound only because inserter and value are fixed: reusing an
+// insertRecord across inserts with a different value would return results
+// computed from the previous one.
+//
+// The memo holds one dataMap reference per entry, released by releaseResolved,
+// which every caller must defer. memoFirst and memoResult hold the single entry
+// until a second distinct key promotes both into memo; from that point they are
+// stale, so readers must check memo first.
 type insertRecord struct {
 	inserter func(existingValue, newValue mmdbtype.DataType) (mmdbtype.DataType, error)
 
@@ -56,27 +69,32 @@ type insertRecord struct {
 	ip        [16]byte
 	prefixLen int
 
-	recordType recordType
-	value      mmdbtype.DataType
-	memo       map[*dataMapValue]*dataMapValue
-	memoFirst  *dataMapValue
-	memoResult *dataMapValue
-	memoSet    bool
+	recordType   recordType
+	value        mmdbtype.DataType
+	inserterPure bool
+	memo         map[*dataMapValue]*dataMapValue
+	memoFirst    *dataMapValue
+	memoResult   *dataMapValue
+	memoSet      bool
 }
 
 func (iRec *insertRecord) storeData(v mmdbtype.DataType) (*dataMapValue, error) {
 	return iRec.dataMap.storeWithIdentity(v)
 }
 
-// resolve returns a borrowed value. The memo owns one reference to each
-// non-nil result until the insertion finishes.
-func (iRec *insertRecord) resolve(existing *dataMapValue) (*dataMapValue, error) {
-	if iRec.memo != nil {
-		if value, ok := iRec.memo[existing]; ok {
-			return value, nil
+// resolve returns a value and whether the caller owns its reference. A pure
+// inserter's memo owns one reference to each non-nil result until insertion
+// finishes. An ordinary Func is not memoized, so a newly stored reference is
+// transferred directly to the target record.
+func (iRec *insertRecord) resolve(existing *dataMapValue) (*dataMapValue, bool, error) {
+	if iRec.inserterPure {
+		if iRec.memo != nil {
+			if value, ok := iRec.memo[existing]; ok {
+				return value, false, nil
+			}
+		} else if iRec.memoSet && iRec.memoFirst == existing {
+			return iRec.memoResult, false, nil
 		}
-	} else if iRec.memoSet && iRec.memoFirst == existing {
-		return iRec.memoResult, nil
 	}
 	var existingData mmdbtype.DataType
 	if existing != nil {
@@ -84,29 +102,38 @@ func (iRec *insertRecord) resolve(existing *dataMapValue) (*dataMapValue, error)
 	}
 	result, err := iRec.inserter(existingData, iRec.value)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if result == nil {
-		iRec.rememberResolved(existing, nil)
-		return nil, nil
+		if iRec.inserterPure {
+			iRec.rememberResolved(existing, nil)
+		}
+		return nil, false, nil
 	}
 
 	// Preserve the existing InsertFunc behavior for semantically equal values,
 	// including floating-point signed zero.
 	if existingData != nil && existingData.Equal(result) {
-		iRec.dataMap.addRef(existing)
-		iRec.rememberResolved(existing, existing)
-		return existing, nil
+		if iRec.inserterPure {
+			iRec.dataMap.addRef(existing)
+			iRec.rememberResolved(existing, existing)
+		}
+		return existing, false, nil
 	}
 	value, err := iRec.dataMap.store(result)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	iRec.rememberResolved(existing, value)
-	return value, nil
+	if iRec.inserterPure {
+		iRec.rememberResolved(existing, value)
+		return value, false, nil
+	}
+	return value, true, nil
 }
 
 func (iRec *insertRecord) rememberResolved(existing, result *dataMapValue) {
+	// Keep the common one-result case allocation-free. A second distinct
+	// existing value promotes the first entry into the map.
 	if !iRec.memoSet {
 		iRec.memoFirst = existing
 		iRec.memoResult = result
@@ -130,6 +157,34 @@ func (iRec *insertRecord) releaseResolved() {
 	}
 	if iRec.memoSet {
 		iRec.dataMap.remove(iRec.memoResult)
+	}
+}
+
+func (iRec *insertRecord) replaceDataRecord(
+	r *record,
+	value *dataMapValue,
+	owned bool,
+) {
+	oldValue := r.value
+	r.nodeIndex = iRec.insertedNode
+	if value == nil {
+		r.recordType = recordTypeEmpty
+		r.value = nil
+		iRec.dataMap.remove(oldValue)
+		return
+	}
+
+	r.recordType = recordTypeData
+	if oldValue != value {
+		if !owned {
+			iRec.dataMap.addRef(value)
+		}
+		r.value = value
+		iRec.dataMap.remove(oldValue)
+		return
+	}
+	if owned {
+		iRec.dataMap.remove(value)
 	}
 }
 
@@ -227,26 +282,11 @@ func (iRec *insertRecord) insertRecord(
 		if newDepth >= iRec.prefixLen {
 			if iRec.recordType == recordTypeData {
 				if iRec.inserter != nil {
-					value, err := iRec.resolve(r.value)
+					value, owned, err := iRec.resolve(r.value)
 					if err != nil {
 						return err
 					}
-					switch {
-					case value == nil:
-						iRec.dataMap.remove(r.value)
-						r.nodeIndex = iRec.insertedNode
-						r.recordType = recordTypeEmpty
-						r.value = nil
-					case r.value != value:
-						iRec.dataMap.addRef(value)
-						iRec.dataMap.remove(r.value)
-						r.nodeIndex = iRec.insertedNode
-						r.recordType = iRec.recordType
-						r.value = value
-					default:
-						r.nodeIndex = iRec.insertedNode
-						r.recordType = iRec.recordType
-					}
+					iRec.replaceDataRecord(r, value, owned)
 					return nil
 				}
 				var oldData mmdbtype.DataType
@@ -285,14 +325,16 @@ func (iRec *insertRecord) insertRecord(
 
 		if r.recordType == recordTypeEmpty && iRec.recordType == recordTypeData {
 			if iRec.inserter != nil {
-				value, err := iRec.resolve(nil)
+				value, owned, err := iRec.resolve(nil)
 				if err != nil {
 					return err
 				}
 				if value == nil {
 					return nil
 				}
-				iRec.dataMap.addRef(value)
+				if !owned {
+					iRec.dataMap.addRef(value)
+				}
 				r.nodeIndex = iRec.tree.newPath(iRec.ip, iRec.prefixLen, record{
 					value:      value,
 					recordType: recordTypeData,

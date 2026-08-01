@@ -1,5 +1,10 @@
 // Package inserter provides some common inserter functions for
 // mmdbwriter.Tree.
+//
+// Every function in this package is pure: its result and error depend only on
+// its arguments. They are all safe to pass to mmdbwriter.Tree.InsertPureFunc
+// and mmdbwriter.Tree.InsertRangePureFunc, which may memoize repeated argument
+// pairs and share a result across records.
 package inserter
 
 import (
@@ -11,15 +16,17 @@ import (
 
 // Func resolves an insertion into a tree record. existingValue is nil for an
 // empty record, and newValue is the value passed to the insert method. Returning
-// nil leaves the record empty or removes the existing value.
+// nil leaves the record empty or removes the existing value. A Func is evaluated
+// separately for every covered record when passed to Tree.InsertFunc or
+// Tree.InsertRangeFunc. Tree.InsertPureFunc and Tree.InsertRangePureFunc may
+// memoize repeated argument pairs and share a non-nil result across records.
 //
-// A Func must be pure: its result and error must depend only on its arguments.
-// The writer may memoize repeated argument pairs within one insert operation,
-// so callers must not depend on invocation count or order. A Func must not
-// modify either argument.
+// A Func must not modify either argument, as values may be shared with other
+// records. Any non-nil returned value becomes tree-owned and must not be
+// modified after the function returns.
 type Func func(existingValue, newValue mmdbtype.DataType) (mmdbtype.DataType, error)
 
-// Remove any records for the network being inserted.
+// Remove removes any records for the network being inserted.
 func Remove(_, _ mmdbtype.DataType) (mmdbtype.DataType, error) {
 	return nil, nil
 }
@@ -65,7 +72,9 @@ func TopLevelMerge(existingValue, newValue mmdbtype.DataType) (mmdbtype.DataType
 }
 
 // DeepMerge recursively updates an existing value. Map and Slice values will be
-// merged recursively. Other values will be replaced by the new value.
+// merged recursively. Other values will be replaced by the new value. The
+// returned value may be the existing container or retain unchanged nested
+// containers from it. The result must therefore be treated as immutable.
 func DeepMerge(existingValue, newValue mmdbtype.DataType) (mmdbtype.DataType, error) {
 	value, _, err := deepMerge(existingValue, newValue)
 	return value, err
@@ -134,6 +143,8 @@ func deepMerge(
 			}
 			if rv == nil {
 				rv = make(mmdbtype.Slice, length)
+				// Restore skipped existing indices; new tail indices are
+				// assigned below, so the result cannot contain accidental holes.
 				copy(rv, existingValue)
 			}
 			rv[i] = merged
