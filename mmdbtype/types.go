@@ -42,7 +42,6 @@ type writer interface {
 	WriteByte(byte) error
 	WriteString(string) (int, error)
 	WriteOrWritePointer(DataType) (int64, error)
-	WriteOrWritePointerString(String) (int64, error)
 }
 
 // DataType represents a MaxMind DB data type.
@@ -408,7 +407,7 @@ func (t Map) WriteTo(w writer) (int64, error) {
 
 	for _, ks := range keys {
 		k := String(ks)
-		written, err := w.WriteOrWritePointerString(k)
+		written, err := w.WriteOrWritePointer(k)
 		numBytes += written
 		if err != nil {
 			return numBytes, err

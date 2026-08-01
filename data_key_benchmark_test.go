@@ -46,10 +46,6 @@ func (kw *keyWriter) WriteOrWritePointer(value mmdbtype.DataType) (int64, error)
 	return value.WriteTo(kw)
 }
 
-func (kw *keyWriter) WriteOrWritePointerString(value mmdbtype.String) (int64, error) {
-	return value.WriteTo(kw)
-}
-
 func BenchmarkDataHasherEnterpriseValue(b *testing.B) {
 	value := benchmarkEnterpriseValue()
 	b.Run("sha256", func(b *testing.B) {

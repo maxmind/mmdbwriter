@@ -14,11 +14,9 @@ type writtenType struct {
 }
 
 type dataOffset struct {
-	data        mmdbtype.DataType
-	stringValue mmdbtype.String
-	written     writtenType
-	next        int
-	isString    bool
+	data    mmdbtype.DataType
+	written writtenType
+	next    int
 }
 
 type dataWriter struct {
@@ -117,44 +115,6 @@ func (dw *dataWriter) WriteOrWritePointer(t mmdbtype.DataType) (int64, error) {
 	return size, nil
 }
 
-func (dw *dataWriter) WriteOrWritePointerString(t mmdbtype.String) (int64, error) {
-	if !dw.usePointers {
-		return t.WriteTo(dw)
-	}
-
-	// This mirrors WriteOrWritePointer but accepts a concrete String so hashing
-	// map keys does not need the general top-level hash dispatch.
-	hash, err := dw.dataMap.hasher.hashValue(t)
-	if err != nil {
-		return 0, err
-	}
-
-	dmHash := dataMapHash(hash)
-	written, ok := dw.findStringOffset(dmHash, t)
-	if ok && written.size > written.pointer.WrittenSize() {
-		// Only use a pointer if it would take less space than writing the
-		// type again.
-		return written.pointer.WriteTo(dw)
-	}
-
-	offset := dw.Len()
-	size, err := t.WriteTo(dw)
-	if err != nil || ok {
-		return size, err
-	}
-
-	if offset > math.MaxUint32 {
-		return 0, fmt.Errorf("offset of %d exceeds maximum when writing data", offset)
-	}
-
-	//nolint:gosec // we check for overflow above
-	dw.rememberStringOffset(dmHash, t, writtenType{
-		pointer: mmdbtype.Pointer(offset),
-		size:    size,
-	})
-	return size, nil
-}
-
 func (dw *dataWriter) findOffset(
 	hash dataMapHash,
 	data mmdbtype.DataType,
@@ -172,47 +132,14 @@ func (dw *dataWriter) findOffset(
 	return writtenType{}, false
 }
 
-func (dw *dataWriter) findStringOffset(
-	hash dataMapHash,
-	data mmdbtype.String,
-) (writtenType, bool) {
-	index, ok := dw.offsets[hash]
-	// next == -1 terminates a chain; every nonnegative next is a live arena index.
-	for ok {
-		offset := &dw.offsetArena[index]
-		if offset.matchesString(data) {
-			return offset.written, true
-		}
-		index = offset.next
-		ok = index >= 0
-	}
-	return writtenType{}, false
-}
-
 func (dw *dataWriter) rememberOffset(
 	hash dataMapHash,
 	data mmdbtype.DataType,
 	written writtenType,
 ) {
-	if stringValue, ok := normalizedString(data); ok {
-		dw.rememberStringOffset(hash, stringValue, written)
-		return
-	}
 	dw.appendOffset(hash, dataOffset{
 		data:    data,
 		written: written,
-	})
-}
-
-func (dw *dataWriter) rememberStringOffset(
-	hash dataMapHash,
-	data mmdbtype.String,
-	written writtenType,
-) {
-	dw.appendOffset(hash, dataOffset{
-		stringValue: data,
-		written:     written,
-		isString:    true,
 	})
 }
 
@@ -226,26 +153,5 @@ func (dw *dataWriter) appendOffset(hash dataMapHash, entry dataOffset) {
 }
 
 func (offset *dataOffset) matches(data mmdbtype.DataType) bool {
-	if !offset.isString {
-		return wireDataEqual(offset.data, data)
-	}
-	stringValue, ok := normalizedString(data)
-	return ok && offset.stringValue == stringValue
-}
-
-func (offset *dataOffset) matchesString(data mmdbtype.String) bool {
-	if offset.isString {
-		return offset.stringValue == data
-	}
-	stringValue, ok := normalizedString(offset.data)
-	return ok && stringValue == data
-}
-
-func normalizedString(data mmdbtype.DataType) (mmdbtype.String, bool) {
-	normalized, ok := dereferenceDataType(data)
-	if !ok {
-		return "", false
-	}
-	stringValue, ok := normalized.(mmdbtype.String)
-	return stringValue, ok
+	return wireDataEqual(offset.data, data)
 }
