@@ -179,6 +179,11 @@ func TestSliceIdentityDoesNotAllocate(t *testing.T) {
 	assert.Zero(t, allocations)
 }
 
+func TestEmptyContainerIdentitiesAreCanonical(t *testing.T) {
+	assert.Equal(t, mapDataIdentity(nil), mapDataIdentity(mmdbtype.Map{}))
+	assert.Equal(t, sliceDataIdentity(nil), sliceDataIdentity(make(mmdbtype.Slice, 0, 1)))
+}
+
 func TestDataHasherPromotesRepeatedContainers(t *testing.T) {
 	shared := mmdbtype.Map{"value": mmdbtype.String("shared")}
 	value := mmdbtype.Slice{shared, shared}

@@ -345,12 +345,18 @@ func dereference[T mmdbtype.DataType](value *T) (mmdbtype.DataType, bool) {
 }
 
 func mapDataIdentity(value mmdbtype.Map) dataMapIdentityKey {
+	if len(value) == 0 {
+		return dataMapIdentityKey{kind: dataMapIdentityMap}
+	}
 	return dataMapIdentityKey{
 		ptr: reflect.ValueOf(value).Pointer(), kind: dataMapIdentityMap, size: len(value),
 	}
 }
 
 func sliceDataIdentity(value mmdbtype.Slice) dataMapIdentityKey {
+	if len(value) == 0 {
+		return dataMapIdentityKey{kind: dataMapIdentitySlice}
+	}
 	return dataMapIdentityKey{
 		ptr:  sliceIdentityPointer(value),
 		kind: dataMapIdentitySlice,
