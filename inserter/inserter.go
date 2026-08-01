@@ -24,7 +24,9 @@ type Resolver interface {
 // separately for every covered record and is not memoized.
 //
 // A Func must not modify either argument, as values may be shared with other
-// records. Use PureFunc when the result and error depend only on the arguments.
+// records. Any non-nil returned value becomes tree-owned and must not be
+// modified after the function returns. Use PureFunc when the result and error
+// depend only on the arguments.
 type Func func(existingValue, newValue mmdbtype.DataType) (mmdbtype.DataType, error)
 
 // Function returns f.
@@ -42,7 +44,9 @@ func (Func) isResolver() {}
 // PureFunc is a Func whose result and error depend only on its arguments. It
 // must not modify either argument or depend on invocation count, order, or
 // external mutable state. The writer may memoize repeated argument pairs within
-// one insert operation.
+// one insert operation and may share one non-nil returned value across records.
+// Returned values become tree-owned and must not be modified after the function
+// returns.
 type PureFunc Func
 
 // Function returns f as a Func.

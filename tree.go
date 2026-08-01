@@ -88,7 +88,8 @@ type Options struct {
 	// other records, and Load reuses decoded values for source networks that
 	// reference the same data offset. Copy a value before modifying it. PureFunc
 	// resolvers may be memoized during one insert; Func resolvers are evaluated
-	// separately for every covered record.
+	// separately for every covered record. Any non-nil returned value becomes
+	// tree-owned and must not be modified after the resolver returns.
 	Inserter inserter.Resolver
 }
 
@@ -122,6 +123,10 @@ type Tree struct {
 
 // New creates a new Tree.
 func New(opts Options) (*Tree, error) {
+	if _, _, err := resolverDetails(opts.Inserter); err != nil {
+		return nil, err
+	}
+
 	tree := &Tree{
 		buildEpoch:              time.Now().Unix(),
 		databaseType:            opts.DatabaseType,
@@ -321,6 +326,10 @@ func (t *Tree) Insert(prefix netip.Prefix, value mmdbtype.DataType) error {
 // an insert because repeated argument pairs may be memoized. A Func is called
 // separately for every covered record, as in v1.
 //
+// Any non-nil value returned by the resolver becomes tree-owned and must not be
+// modified after the resolver returns. A PureFunc result may be shared by
+// multiple records.
+//
 // This is not safe to call from multiple threads.
 func (t *Tree) InsertFunc(
 	prefix netip.Prefix,
@@ -375,19 +384,17 @@ func (t *Tree) insertPrepared(
 	node nodeIndex,
 	value mmdbtype.DataType,
 ) error {
+	inserterFunc, inserterIsPure, err := resolverDetails(resolver)
+	if err != nil {
+		return err
+	}
+
 	// Any insert can change the reachable node graph, so cached finalization
 	// state must be rebuilt before the next write.
 	t.nodeCount = 0
 	t.nodeNumbers = nil
 
 	ip, prefixLen := t.prefixInsertIP(prefix)
-	var inserterFunc inserter.Func
-	var inserterIsPure bool
-	if resolver != nil {
-		inserterFunc = resolver.Function()
-		inserterIsPure = resolver.IsPure()
-	}
-
 	iRec := &insertRecord{
 		ip:           ip,
 		prefixLen:    prefixLen,
@@ -400,9 +407,31 @@ func (t *Tree) insertPrepared(
 
 		dataMap: t.dataMap,
 	}
-	err := iRec.insertNode(t.root, 0)
+	err = iRec.insertNode(t.root, 0)
 	iRec.releaseResolved()
 	return err
+}
+
+func resolverDetails(resolver inserter.Resolver) (inserter.Func, bool, error) {
+	switch resolver := resolver.(type) {
+	case nil:
+		return nil, false, nil
+	case inserter.Func:
+		if resolver == nil {
+			return nil, false, errors.New("resolver must not be a nil inserter.Func")
+		}
+		return resolver, false, nil
+	case inserter.PureFunc:
+		if resolver == nil {
+			return nil, false, errors.New("resolver must not be a nil inserter.PureFunc")
+		}
+		return inserter.Func(resolver), true, nil
+	default:
+		return nil, false, fmt.Errorf(
+			"resolver must be an inserter.Func or inserter.PureFunc value, got %T",
+			resolver,
+		)
+	}
 }
 
 func (t *Tree) normalizeInsertPrefix(prefix netip.Prefix) (netip.Prefix, error) {

@@ -289,6 +289,65 @@ func TestTreeOptionsInserter(t *testing.T) {
 	assert.Equal(t, mmdbtype.Map{"base": mmdbtype.String("value")}, got)
 }
 
+func TestTreeRejectsInvalidResolverValues(t *testing.T) {
+	function := inserter.Func(func(_, value mmdbtype.DataType) (mmdbtype.DataType, error) {
+		return value, nil
+	})
+	pureFunction := inserter.PureFunc(function)
+	var nilFunction inserter.Func
+	var nilPureFunction inserter.PureFunc
+
+	tests := []struct {
+		name          string
+		resolver      inserter.Resolver
+		expectedError string
+	}{
+		{
+			name:          "Func pointer",
+			resolver:      &function,
+			expectedError: "resolver must be an inserter.Func or inserter.PureFunc value, got *inserter.Func",
+		},
+		{
+			name:          "PureFunc pointer",
+			resolver:      &pureFunction,
+			expectedError: "resolver must be an inserter.Func or inserter.PureFunc value, got *inserter.PureFunc",
+		},
+		{
+			name:          "nil Func",
+			resolver:      nilFunction,
+			expectedError: "resolver must not be a nil inserter.Func",
+		},
+		{
+			name:          "nil PureFunc",
+			resolver:      nilPureFunction,
+			expectedError: "resolver must not be a nil inserter.PureFunc",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := New(Options{Inserter: test.resolver})
+			require.EqualError(t, err, test.expectedError)
+
+			tree, err := New(Options{IPVersion: 4, IncludeReservedNetworks: true})
+			require.NoError(t, err)
+			err = tree.InsertFunc(
+				netip.MustParsePrefix("1.2.3.0/24"),
+				mmdbtype.String("value"),
+				test.resolver,
+			)
+			require.EqualError(t, err, test.expectedError)
+			err = tree.InsertRangeFunc(
+				netip.MustParseAddr("1.2.3.1"),
+				netip.MustParseAddr("1.2.3.2"),
+				mmdbtype.String("value"),
+				test.resolver,
+			)
+			require.EqualError(t, err, test.expectedError)
+		})
+	}
+}
+
 func TestTreeInsertFuncErrorDoesNotMutateEmptySiblingRecord(t *testing.T) {
 	tree, err := New(Options{
 		IPVersion:               4,

@@ -21,7 +21,10 @@
   `Tree.InsertFunc` and `Tree.InsertRangeFunc` now take the new value and a
   resolver. Built-in resolvers are `inserter.PureFunc` values and may be
   memoized. Custom `inserter.Func` values retain per-record evaluation for
-  callbacks that use external or mutable state.
+  callbacks that use external or mutable state. Resolvers must be non-nil
+  `inserter.Func` or `inserter.PureFunc` values rather than pointers to those
+  types. Non-nil results become tree-owned and must not be modified after the
+  resolver returns.
 - Reduced allocations on the tree insert and serialization hot paths, lowering
   memory pressure and GC overhead during large builds.
 - `Load` now caches decoded source records by data offset during loading. This
