@@ -135,7 +135,7 @@ func (h *dataHasher) hashMap(value mmdbtype.Map) (uint64, error) {
 
 func (h *dataHasher) hashMapContents(value mmdbtype.Map) (uint64, error) {
 	// Both accumulators are commutative so map iteration order cannot affect the
-	// result. The second accumulator makes cancelling sums less likely.
+	// result. The second accumulator makes canceling sums less likely.
 	var sum, xor uint64
 	for key, child := range value {
 		childHash, err := h.hashValue(child)
