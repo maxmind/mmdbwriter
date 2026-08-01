@@ -308,11 +308,13 @@ func TestDeepMergeReusesUnchangedNestedContainers(t *testing.T) {
 		"changed": mmdbtype.String("old"),
 		"nested":  nested,
 	}
+	existingSnapshot := existing.Copy()
 	merged, err := DeepMerge(existing, mmdbtype.Map{
 		"changed": mmdbtype.String("new"),
 	})
 	require.NoError(t, err)
 
+	assert.Equal(t, existingSnapshot, existing, "the existing value was modified")
 	mergedMap := merged.(mmdbtype.Map)
 	assert.NotEqual(t, reflect.ValueOf(existing).Pointer(), reflect.ValueOf(mergedMap).Pointer())
 	assert.Equal(t, mmdbtype.String("new"), mergedMap["changed"])
