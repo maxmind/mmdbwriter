@@ -1,6 +1,11 @@
 package mmdbwriter
 
 import (
+	"bytes"
+	"crypto/sha256"
+	"fmt"
+	"hash"
+	"io"
 	"maps"
 	"net/netip"
 	"strconv"
@@ -9,6 +14,40 @@ import (
 	"github.com/maxmind/mmdbwriter/v2/inserter"
 	"github.com/maxmind/mmdbwriter/v2/mmdbtype"
 )
+
+// keyWriter is the serialized SHA-256 implementation used by main before this
+// change. It remains here as a benchmark baseline for the structural hasher.
+type keyWriter struct {
+	*bytes.Buffer
+
+	sha256 hash.Hash
+	key    [sha256.Size]byte
+}
+
+func newKeyWriter() *keyWriter {
+	return &keyWriter{Buffer: &bytes.Buffer{}, sha256: sha256.New()}
+}
+
+func (kw *keyWriter) Key(value mmdbtype.DataType) ([]byte, error) {
+	kw.Truncate(0)
+	kw.sha256.Reset()
+	_, err := value.WriteTo(kw)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := kw.WriteTo(kw.sha256); err != nil {
+		return nil, fmt.Errorf("writing key to writer: %w", err)
+	}
+	return kw.sha256.Sum(kw.key[:0]), nil
+}
+
+func (kw *keyWriter) WriteOrWritePointer(value mmdbtype.DataType) (int64, error) {
+	return value.WriteTo(kw)
+}
+
+func (kw *keyWriter) WriteOrWritePointerString(value mmdbtype.String) (int64, error) {
+	return value.WriteTo(kw)
+}
 
 func BenchmarkDataHasherEnterpriseValue(b *testing.B) {
 	value := benchmarkEnterpriseValue()
@@ -196,6 +235,41 @@ func BenchmarkTreeInsertEnterpriseDedupRates(b *testing.B) {
 				}
 			}
 		})
+	}
+}
+
+func BenchmarkTreeWriteEnterpriseDedupRates(b *testing.B) {
+	const networkCount = 512
+	for _, hitRate := range []int{0, 90, 99} {
+		b.Run(strconv.Itoa(hitRate)+"%-hits", func(b *testing.B) {
+			values := benchmarkEnterpriseValuesAtHitRate(networkCount, hitRate)
+			tree, err := New(Options{IPVersion: 4, IncludeReservedNetworks: true})
+			requireNoBenchmarkError(b, err)
+			for index, value := range values {
+				address := netip.AddrFrom4(
+					[4]byte{1, byte(index >> 16), byte(index >> 8), byte(index)},
+				)
+				requireNoBenchmarkError(
+					b,
+					tree.Insert(netip.PrefixFrom(address, 32), value),
+				)
+			}
+			tree.finalize()
+			b.ReportMetric(networkCount, "records/tree")
+			b.ReportAllocs()
+			b.ResetTimer()
+			for range b.N {
+				_, err := tree.WriteTo(io.Discard)
+				requireNoBenchmarkError(b, err)
+			}
+		})
+	}
+}
+
+func requireNoBenchmarkError(b *testing.B, err error) {
+	b.Helper()
+	if err != nil {
+		b.Fatal(err)
 	}
 }
 
