@@ -36,6 +36,10 @@
   are now indexed by a seeded structural content hash with bounded caching for
   shared nested containers. Values are compared exactly before deduplication, so
   hash collisions cannot substitute a different value.
+- Inserter functions are now documented as pure and repeated existing values
+  are memoized within each insert call. `DeepMerge` also reuses existing maps
+  and slices when a merge does not change their contents, avoiding unnecessary
+  cloning and reindexing.
 
 ## 1.2.0 (2026-01-14)
 

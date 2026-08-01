@@ -84,7 +84,8 @@ type Options struct {
 	//
 	// An Inserter must not modify either argument. Values may be shared with
 	// other records, and Load reuses decoded values for source networks that
-	// reference the same data offset. Copy a value before modifying it.
+	// reference the same data offset. Copy a value before modifying it. Inserters
+	// must be pure; repeated argument pairs may be memoized during one insert.
 	Inserter inserter.Func
 }
 
@@ -299,8 +300,10 @@ func (t *Tree) Insert(prefix netip.Prefix, value mmdbtype.DataType) error {
 // require the record to be copied and there is a non-trivial performance
 // impact.
 //
-// The function will be called multiple times per insert when the network
-// has multiple preexisting records associated with it.
+// The function will be called once for each distinct preexisting value covered
+// by an insert. It must be pure: its result and error must depend only on its
+// arguments. Repeated argument pairs may be memoized, so callers must not
+// depend on invocation count or order.
 //
 // This is not safe to call from multiple threads.
 func (t *Tree) InsertFunc(
@@ -363,7 +366,7 @@ func (t *Tree) insertPrepared(
 
 	ip, prefixLen := t.prefixInsertIP(prefix)
 
-	return insertRecord{
+	iRec := &insertRecord{
 		ip:           ip,
 		prefixLen:    prefixLen,
 		recordType:   recordType,
@@ -373,7 +376,10 @@ func (t *Tree) insertPrepared(
 		value:        value,
 
 		dataMap: t.dataMap,
-	}.insertNode(t.root, 0)
+	}
+	err := iRec.insertNode(t.root, 0)
+	iRec.releaseResolved()
+	return err
 }
 
 func (t *Tree) normalizeInsertPrefix(prefix netip.Prefix) (netip.Prefix, error) {

@@ -2,6 +2,7 @@ package inserter
 
 import (
 	"fmt"
+	"reflect"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -278,4 +279,25 @@ func TestDeepMerge(t *testing.T) {
 			assert.Equal(t, test.expected, v)
 		}
 	}
+}
+
+func TestDeepMergeReturnsExistingContainersWhenUnchanged(t *testing.T) {
+	existingSlice := mmdbtype.Slice{
+		mmdbtype.Map{"value": mmdbtype.String("unchanged")},
+		mmdbtype.Uint32(2),
+	}
+	existing := mmdbtype.Map{"slice": existingSlice}
+	merged, err := DeepMerge(existing, mmdbtype.Map{
+		"slice": mmdbtype.Slice{
+			mmdbtype.Map{"value": mmdbtype.String("unchanged")},
+		},
+	})
+	require.NoError(t, err)
+
+	mergedMap := merged.(mmdbtype.Map)
+	assert.Equal(t, reflect.ValueOf(existing).Pointer(), reflect.ValueOf(mergedMap).Pointer())
+	assert.Equal(t,
+		reflect.ValueOf(existingSlice).Pointer(),
+		reflect.ValueOf(mergedMap["slice"].(mmdbtype.Slice)).Pointer(),
+	)
 }

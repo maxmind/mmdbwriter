@@ -161,6 +161,27 @@ func TestTreeInsertFunc(t *testing.T) {
 	}, got)
 }
 
+func TestTreeInsertFuncMemoizesDistinctExistingValues(t *testing.T) {
+	tree, err := New(Options{IPVersion: 4, IncludeReservedNetworks: true})
+	require.NoError(t, err)
+	for index, value := range []mmdbtype.String{"a", "b", "a", "b"} {
+		prefix := netip.PrefixFrom(netip.AddrFrom4([4]byte{1, 2, 3, byte(index * 64)}), 26)
+		require.NoError(t, tree.Insert(prefix, value))
+	}
+
+	calls := map[mmdbtype.String]int{}
+	err = tree.InsertFunc(
+		netip.MustParsePrefix("1.2.3.0/24"),
+		mmdbtype.String("new"),
+		func(existing, newValue mmdbtype.DataType) (mmdbtype.DataType, error) {
+			calls[existing.(mmdbtype.String)]++
+			return newValue, nil
+		},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, map[mmdbtype.String]int{"a": 1, "b": 1}, calls)
+}
+
 func TestTreeOptionsInserter(t *testing.T) {
 	tree, err := New(Options{
 		IPVersion:               4,
