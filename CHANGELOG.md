@@ -17,9 +17,11 @@
   insertion paths. `inserter.ReplaceWith`, `inserter.TopLevelMergeWith`, and
   `inserter.DeepMergeWith` are replaced by `inserter.Replace`,
   `inserter.TopLevelMerge`, and `inserter.DeepMerge`. `inserter.FuncGenerator`
-  was removed, `Options.Inserter` now accepts `inserter.Func`, and
-  `Tree.InsertFunc` and `Tree.InsertRangeFunc` now take the new value as an
-  argument.
+  was removed, `Options.Inserter` now accepts an `inserter.Resolver`, and
+  `Tree.InsertFunc` and `Tree.InsertRangeFunc` now take the new value and a
+  resolver. Built-in resolvers are `inserter.PureFunc` values and may be
+  memoized. Custom `inserter.Func` values retain per-record evaluation for
+  callbacks that use external or mutable state.
 - Reduced allocations on the tree insert and serialization hot paths, lowering
   memory pressure and GC overhead during large builds.
 - `Load` now caches decoded source records by data offset during loading. This
@@ -36,10 +38,10 @@
   are now indexed by a seeded structural content hash with bounded caching for
   shared nested containers. Values are compared exactly before deduplication, so
   hash collisions cannot substitute a different value.
-- Inserter functions are now documented as pure and repeated existing values are
-  memoized within each insert call. `DeepMerge` also reuses existing maps and
-  slices when a merge does not change their contents, avoiding unnecessary
-  cloning and reindexing.
+- Added `inserter.PureFunc` for resolvers whose output depends only on their
+  arguments. Repeated existing values are memoized within each insert call for
+  these resolvers. `DeepMerge` also reuses existing maps and slices when a merge
+  does not change their contents, avoiding unnecessary cloning and reindexing.
 
 ## 1.2.0 (2026-01-14)
 

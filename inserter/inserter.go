@@ -9,25 +9,67 @@ import (
 	"github.com/maxmind/mmdbwriter/v2/mmdbtype"
 )
 
+// Resolver resolves an insertion into a tree record. A Resolver must be either
+// a Func or a PureFunc.
+type Resolver interface {
+	Function() Func
+	IsPure() bool
+
+	isResolver()
+}
+
 // Func resolves an insertion into a tree record. existingValue is nil for an
 // empty record, and newValue is the value passed to the insert method. Returning
-// nil leaves the record empty or removes the existing value.
+// nil leaves the record empty or removes the existing value. A Func is evaluated
+// separately for every covered record and is not memoized.
 //
-// A Func must be pure: its result and error must depend only on its arguments.
-// The writer may memoize repeated argument pairs within one insert operation,
-// so callers must not depend on invocation count or order. A Func must not
-// modify either argument.
+// A Func must not modify either argument, as values may be shared with other
+// records. Use PureFunc when the result and error depend only on the arguments.
 type Func func(existingValue, newValue mmdbtype.DataType) (mmdbtype.DataType, error)
 
-// Remove any records for the network being inserted.
-func Remove(_, _ mmdbtype.DataType) (mmdbtype.DataType, error) {
-	return nil, nil
+// Function returns f.
+func (f Func) Function() Func {
+	return f
 }
 
-// Replace replaces the existing value with the new value.
-func Replace(_, newValue mmdbtype.DataType) (mmdbtype.DataType, error) {
-	return newValue, nil
+// IsPure reports whether repeated argument pairs may be memoized.
+func (Func) IsPure() bool {
+	return false
 }
+
+func (Func) isResolver() {}
+
+// PureFunc is a Func whose result and error depend only on its arguments. It
+// must not modify either argument or depend on invocation count, order, or
+// external mutable state. The writer may memoize repeated argument pairs within
+// one insert operation.
+type PureFunc Func
+
+// Function returns f as a Func.
+func (f PureFunc) Function() Func {
+	return Func(f)
+}
+
+// IsPure reports whether repeated argument pairs may be memoized.
+func (PureFunc) IsPure() bool {
+	return true
+}
+
+func (PureFunc) isResolver() {}
+
+// Remove removes any records for the network being inserted.
+//
+//nolint:gochecknoglobals // Exported stateless inserters are callable function values.
+var Remove = PureFunc(func(_, _ mmdbtype.DataType) (mmdbtype.DataType, error) {
+	return nil, nil
+})
+
+// Replace replaces the existing value with the new value.
+//
+//nolint:gochecknoglobals // Exported stateless inserters are callable function values.
+var Replace = PureFunc(func(_, newValue mmdbtype.DataType) (mmdbtype.DataType, error) {
+	return newValue, nil
+})
 
 // TopLevelMerge is an inserter for Map values that will update an
 // existing Map by adding the top-level keys and values from the new Map,
@@ -35,7 +77,11 @@ func Replace(_, newValue mmdbtype.DataType) (mmdbtype.DataType, error) {
 //
 // Both the new and existing value must be a Map. An error will be returned
 // otherwise.
-func TopLevelMerge(existingValue, newValue mmdbtype.DataType) (mmdbtype.DataType, error) {
+//
+//nolint:gochecknoglobals // Exported stateless inserters are callable function values.
+var TopLevelMerge = PureFunc(topLevelMerge)
+
+func topLevelMerge(existingValue, newValue mmdbtype.DataType) (mmdbtype.DataType, error) {
 	newMap, ok := newValue.(mmdbtype.Map)
 	if !ok {
 		return nil, fmt.Errorf(
@@ -66,7 +112,11 @@ func TopLevelMerge(existingValue, newValue mmdbtype.DataType) (mmdbtype.DataType
 
 // DeepMerge recursively updates an existing value. Map and Slice values will be
 // merged recursively. Other values will be replaced by the new value.
-func DeepMerge(existingValue, newValue mmdbtype.DataType) (mmdbtype.DataType, error) {
+//
+//nolint:gochecknoglobals // Exported stateless inserters are callable function values.
+var DeepMerge = PureFunc(deepMergeFunc)
+
+func deepMergeFunc(existingValue, newValue mmdbtype.DataType) (mmdbtype.DataType, error) {
 	value, _, err := deepMerge(existingValue, newValue)
 	return value, err
 }

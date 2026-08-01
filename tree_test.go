@@ -174,13 +174,49 @@ func TestTreeInsertFuncMemoizesDistinctExistingValues(t *testing.T) {
 	err = tree.InsertFunc(
 		netip.MustParsePrefix("1.2.3.0/24"),
 		mmdbtype.String("new"),
-		func(existing, newValue mmdbtype.DataType) (mmdbtype.DataType, error) {
+		inserter.PureFunc(func(existing, newValue mmdbtype.DataType) (mmdbtype.DataType, error) {
 			calls[existing.(mmdbtype.String)]++
 			return newValue, nil
-		},
+		}),
 	)
 	require.NoError(t, err)
 	assert.Equal(t, map[mmdbtype.String]int{"a": 1, "b": 1}, calls)
+	for index := range 4 {
+		//nolint:gosec // index is bounded by the four-iteration loop
+		_, value := tree.Get(netip.AddrFrom4([4]byte{1, 2, 3, byte(index * 64)}))
+		assert.Equal(t, mmdbtype.String("new"), value)
+	}
+}
+
+func TestTreeInsertFuncEvaluatesOrdinaryFuncForEveryRecord(t *testing.T) {
+	tree, err := New(Options{IPVersion: 4, IncludeReservedNetworks: true})
+	require.NoError(t, err)
+	for index, value := range []mmdbtype.String{"a", "b", "a", "b"} {
+		//nolint:gosec // index is bounded by the four-iteration loop
+		prefix := netip.PrefixFrom(netip.AddrFrom4([4]byte{1, 2, 3, byte(index * 64)}), 26)
+		require.NoError(t, tree.Insert(prefix, value))
+	}
+
+	calls := 0
+	err = tree.InsertFunc(
+		netip.MustParsePrefix("1.2.3.0/24"),
+		mmdbtype.String("new"),
+		inserter.Func(func(_, _ mmdbtype.DataType) (mmdbtype.DataType, error) {
+			calls++
+			//nolint:gosec // calls is bounded by the four covered records
+			return mmdbtype.Uint32(calls), nil
+		}),
+	)
+	require.NoError(t, err)
+	assert.Equal(t, 4, calls)
+
+	values := map[mmdbtype.DataType]struct{}{}
+	for index := range 4 {
+		//nolint:gosec // index is bounded by the four-iteration loop
+		_, value := tree.Get(netip.AddrFrom4([4]byte{1, 2, 3, byte(index * 64)}))
+		values[value] = struct{}{}
+	}
+	assert.Len(t, values, 4)
 }
 
 func TestTreeOptionsInserter(t *testing.T) {
@@ -231,9 +267,9 @@ func TestTreeInsertFuncErrorDoesNotMutateEmptySiblingRecord(t *testing.T) {
 	err = tree.InsertFunc(
 		netip.MustParsePrefix("1.2.2.0/24"),
 		mmdbtype.String("value"),
-		func(_, _ mmdbtype.DataType) (mmdbtype.DataType, error) {
+		inserter.Func(func(_, _ mmdbtype.DataType) (mmdbtype.DataType, error) {
 			return nil, insertErr
-		},
+		}),
 	)
 	require.ErrorIs(t, err, insertErr)
 
@@ -262,9 +298,9 @@ func TestTreeInsertFuncErrorLeavesExistingRecordUnchanged(t *testing.T) {
 	err = tree.InsertFunc(
 		prefix,
 		mmdbtype.Map{"extra": mmdbtype.String("value")},
-		func(_, _ mmdbtype.DataType) (mmdbtype.DataType, error) {
+		inserter.Func(func(_, _ mmdbtype.DataType) (mmdbtype.DataType, error) {
 			return nil, insertErr
-		},
+		}),
 	)
 	require.ErrorIs(t, err, insertErr)
 
@@ -1379,9 +1415,9 @@ func TestInsertFunc_RemovalAndLaterInsert(t *testing.T) {
 	err = tree.InsertFunc(
 		removedNetwork,
 		nil,
-		func(v, _ mmdbtype.DataType) (mmdbtype.DataType, error) {
+		inserter.Func(func(v, _ mmdbtype.DataType) (mmdbtype.DataType, error) {
 			return v, nil
-		},
+		}),
 	)
 	require.NoError(t, err)
 

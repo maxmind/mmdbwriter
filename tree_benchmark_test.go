@@ -203,7 +203,7 @@ func BenchmarkTreeLoadOverlappingPasses(b *testing.B) {
 func reportOverlappingBenchmarkShape(
 	b *testing.B,
 	specs []benchmarkInsertSpec,
-	insertFunc inserter.Func,
+	insertFunc inserter.Resolver,
 ) {
 	b.Helper()
 
