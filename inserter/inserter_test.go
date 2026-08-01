@@ -301,3 +301,23 @@ func TestDeepMergeReturnsExistingContainersWhenUnchanged(t *testing.T) {
 		reflect.ValueOf(mergedMap["slice"].(mmdbtype.Slice)).Pointer(),
 	)
 }
+
+func TestDeepMergeReusesUnchangedNestedContainers(t *testing.T) {
+	nested := mmdbtype.Map{"value": mmdbtype.String("unchanged")}
+	existing := mmdbtype.Map{
+		"changed": mmdbtype.String("old"),
+		"nested":  nested,
+	}
+	merged, err := DeepMerge(existing, mmdbtype.Map{
+		"changed": mmdbtype.String("new"),
+	})
+	require.NoError(t, err)
+
+	mergedMap := merged.(mmdbtype.Map)
+	assert.NotEqual(t, reflect.ValueOf(existing).Pointer(), reflect.ValueOf(mergedMap).Pointer())
+	assert.Equal(t, mmdbtype.String("new"), mergedMap["changed"])
+	assert.Equal(t,
+		reflect.ValueOf(nested).Pointer(),
+		reflect.ValueOf(mergedMap["nested"].(mmdbtype.Map)).Pointer(),
+	)
+}

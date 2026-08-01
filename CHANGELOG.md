@@ -41,7 +41,9 @@
 - Added `inserter.PureFunc` for resolvers whose output depends only on their
   arguments. Repeated existing values are memoized within each insert call for
   these resolvers. `DeepMerge` also reuses existing maps and slices when a merge
-  does not change their contents, avoiding unnecessary cloning and reindexing.
+  does not change their contents and retains unchanged nested containers,
+  avoiding unnecessary cloning and reindexing. Its result must therefore be
+  treated as immutable.
 
 ## 1.2.0 (2026-01-14)
 

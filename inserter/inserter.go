@@ -111,7 +111,9 @@ func topLevelMerge(existingValue, newValue mmdbtype.DataType) (mmdbtype.DataType
 }
 
 // DeepMerge recursively updates an existing value. Map and Slice values will be
-// merged recursively. Other values will be replaced by the new value.
+// merged recursively. Other values will be replaced by the new value. The
+// returned value may be the existing container or retain unchanged nested
+// containers from it. The result must therefore be treated as immutable.
 //
 //nolint:gochecknoglobals // Exported stateless inserters are callable function values.
 var DeepMerge = PureFunc(deepMergeFunc)
@@ -184,6 +186,8 @@ func deepMerge(
 			}
 			if rv == nil {
 				rv = make(mmdbtype.Slice, length)
+				// Restore skipped existing indices; new tail indices are
+				// assigned below, so the result cannot contain accidental holes.
 				copy(rv, existingValue)
 			}
 			rv[i] = merged
