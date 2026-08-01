@@ -168,47 +168,29 @@ func TestDataHasherSeparatesPreviouslyCollidingScalars(t *testing.T) {
 	}
 }
 
-func TestSliceIdentityDoesNotAllocate(t *testing.T) {
+func TestSliceIdentityPointerDoesNotAllocate(t *testing.T) {
 	value := mmdbtype.Slice{mmdbtype.String("value")}
-	var identity dataMapIdentityKey
+	var pointer uintptr
 	allocations := testing.AllocsPerRun(1_000, func() {
-		identity = sliceDataIdentity(value)
+		pointer = sliceIdentityPointer(value)
 	})
 
-	assert.NotZero(t, identity.ptr)
+	assert.NotZero(t, pointer)
 	assert.Zero(t, allocations)
 }
 
 func TestEmptyContainerIdentitiesAreCanonical(t *testing.T) {
-	assert.Equal(t, mapDataIdentity(nil), mapDataIdentity(mmdbtype.Map{}))
-	assert.Equal(t, sliceDataIdentity(nil), sliceDataIdentity(make(mmdbtype.Slice, 0, 1)))
-}
-
-func TestDataHasherPromotesRepeatedContainers(t *testing.T) {
-	shared := mmdbtype.Map{"value": mmdbtype.String("shared")}
-	value := mmdbtype.Slice{shared, shared}
-	identity := mapDataIdentity(shared)
-	hasher := newDataHasher()
-
-	_, err := hasher.Hash(value)
-	require.NoError(t, err)
-
-	index, ok := hasher.cacheByIdentity[identity]
+	nilMapIdentity, ok := keyIdentity(mmdbtype.Map(nil))
 	require.True(t, ok)
-	assert.Equal(t, shared, hasher.cache[index].mapValue)
-	assert.NotContains(t, hasher.probationByID, identity)
-}
+	emptyMapIdentity, ok := keyIdentity(mmdbtype.Map{})
+	require.True(t, ok)
+	assert.Equal(t, nilMapIdentity, emptyMapIdentity)
 
-func TestDataHasherBoundsContainerCaches(t *testing.T) {
-	hasher := newDataHasher()
-	for index := range dataHashCacheSize + dataHashProbationSize + 1 {
-		shared := mmdbtype.Map{"value": mmdbtype.Uint32(index)}
-		_, err := hasher.Hash(mmdbtype.Slice{shared, shared})
-		require.NoError(t, err)
-	}
-
-	assert.Len(t, hasher.cache, dataHashCacheSize)
-	assert.LessOrEqual(t, len(hasher.probation), dataHashProbationSize)
+	nilSliceIdentity, ok := keyIdentity(mmdbtype.Slice(nil))
+	require.True(t, ok)
+	emptySliceIdentity, ok := keyIdentity(make(mmdbtype.Slice, 0, 1))
+	require.True(t, ok)
+	assert.Equal(t, nilSliceIdentity, emptySliceIdentity)
 }
 
 func TestDataHasherRejectsNilNestedValue(t *testing.T) {
