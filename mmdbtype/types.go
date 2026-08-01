@@ -843,7 +843,7 @@ func (t *Uint128) Copy() DataType {
 // Equal checks for equality.
 func (t *Uint128) Equal(other DataType) bool {
 	otherT, ok := other.(*Uint128)
-	return ok && (*big.Int)(t).Cmp((*big.Int)(otherT)) == 0
+	return ok && t != nil && otherT != nil && (*big.Int)(t).Cmp((*big.Int)(otherT)) == 0
 }
 
 func (t *Uint128) size() int {
