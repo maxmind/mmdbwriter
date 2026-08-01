@@ -8,10 +8,7 @@ import (
 	"github.com/maxmind/mmdbwriter/v2/mmdbtype"
 )
 
-type (
-	dataMapKey  string
-	dataMapHash uint64
-)
+type dataMapHash uint64
 
 type dataMapIdentityKind byte
 

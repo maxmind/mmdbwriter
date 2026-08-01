@@ -1,11 +1,8 @@
 package mmdbwriter
 
 import (
-	"bytes"
-	"crypto/sha256"
 	"errors"
 	"fmt"
-	stdhash "hash"
 	"hash/maphash"
 	"math"
 	"math/big"
@@ -353,59 +350,4 @@ func sliceDataIdentity(value mmdbtype.Slice) dataMapIdentityKey {
 		kind: dataMapIdentitySlice,
 		size: len(value),
 	}
-}
-
-// keyWriter is similar to dataWriter but it will never use pointers. This
-// will produce a unique key for the type.
-type keyWriter struct {
-	*bytes.Buffer
-
-	sha256 stdhash.Hash
-	key    [sha256.Size]byte
-}
-
-func newKeyWriter() *keyWriter {
-	return &keyWriter{Buffer: &bytes.Buffer{}, sha256: sha256.New()}
-}
-
-// Key generates a unique key for the data structure v.
-//
-// This is just a quick hack. I am sure there is
-// something better.
-func (kw *keyWriter) Key(v mmdbtype.DataType) ([]byte, error) {
-	kw.Truncate(0)
-	kw.sha256.Reset()
-	_, err := v.WriteTo(kw)
-	if err != nil {
-		return nil, err
-	}
-	if _, err := kw.WriteTo(kw.sha256); err != nil {
-		return nil, fmt.Errorf("writing key to writer: %w", err)
-	}
-	return kw.sha256.Sum(kw.key[:0]), nil
-}
-
-// KeyString is intentionally identical to Key but takes a concrete String to
-// keep map-key writes from boxing into DataType on the write hot path.
-func (kw *keyWriter) KeyString(v mmdbtype.String) ([]byte, error) {
-	kw.Truncate(0)
-	kw.sha256.Reset()
-	_, err := v.WriteTo(kw)
-	if err != nil {
-		return nil, err
-	}
-	if _, err := kw.WriteTo(kw.sha256); err != nil {
-		return nil, fmt.Errorf("writing key to writer: %w", err)
-	}
-	return kw.sha256.Sum(kw.key[:0]), nil
-}
-
-func (kw *keyWriter) WriteOrWritePointer(t mmdbtype.DataType) (int64, error) {
-	return t.WriteTo(kw)
-}
-
-// WriteOrWritePointerString mirrors WriteOrWritePointer without converting the
-// map key to DataType. keyWriter never emits pointers.
-func (kw *keyWriter) WriteOrWritePointerString(t mmdbtype.String) (int64, error) {
-	return t.WriteTo(kw)
 }

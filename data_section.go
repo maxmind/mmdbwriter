@@ -13,13 +13,20 @@ type writtenType struct {
 	size    int64
 }
 
+type dataOffset struct {
+	data        mmdbtype.DataType
+	stringValue mmdbtype.String
+	written     writtenType
+	next        int
+	isString    bool
+}
+
 type dataWriter struct {
 	*bytes.Buffer
 
 	dataMap     *dataMap
-	dataOffsets map[*dataMapValue]writtenType
-	offsets     map[dataMapKey]writtenType
-	keyWriter   *keyWriter
+	offsets     map[dataMapHash]int
+	offsetArena []dataOffset
 	usePointers bool
 }
 
@@ -27,15 +34,13 @@ func newDataWriter(dataMap *dataMap, usePointers bool) *dataWriter {
 	return &dataWriter{
 		Buffer:      &bytes.Buffer{},
 		dataMap:     dataMap,
-		dataOffsets: map[*dataMapValue]writtenType{},
-		offsets:     map[dataMapKey]writtenType{},
-		keyWriter:   newKeyWriter(),
+		offsets:     map[dataMapHash]int{},
 		usePointers: usePointers,
 	}
 }
 
 func (dw *dataWriter) maybeWrite(value *dataMapValue) (int, error) {
-	written, ok := dw.dataOffsets[value]
+	written, ok := dw.findOffset(value.hash, value.data)
 	if ok {
 		return int(written.pointer), nil
 	}
@@ -56,7 +61,7 @@ func (dw *dataWriter) maybeWrite(value *dataMapValue) (int, error) {
 		size:    size,
 	}
 
-	dw.dataOffsets[value] = written
+	dw.rememberOffset(value.hash, value.data, written)
 
 	return int(written.pointer), nil
 }
@@ -66,26 +71,23 @@ func (dw *dataWriter) WriteOrWritePointer(t mmdbtype.DataType) (int64, error) {
 		return t.WriteTo(dw)
 	}
 
-	keyBytes, err := dw.keyWriter.Key(t)
+	hash, err := dw.dataMap.hasher.Hash(t)
 	if err != nil {
 		return 0, err
 	}
 
-	written, ok := dw.offsets[dataMapKey(keyBytes)]
+	dmHash := dataMapHash(hash)
+	written, ok := dw.findOffset(dmHash, t)
 	if ok && written.size > written.pointer.WrittenSize() {
 		// Only use a pointer if it would take less space than writing the
 		// type again.
 		return written.pointer.WriteTo(dw)
 	}
-	// We can't use the pointers[dataMapKey(keyBytes)] optimization to
-	// avoid an allocation below as the backing buffer for key may change when
-	// we call t.WriteTo. That said, this is the less common code path
-	// so it doesn't matter too much.
-	key := dataMapKey(keyBytes)
 
 	// TODO: A possible optimization here for simple types would be to just
-	// write key to the dataWriter. This won't necessarily work for Map and
-	// Slice though as they may have internal pointers missing from key.
+	// write the type to the dataWriter's buffer from a compact representation.
+	// This is less straightforward for Map and Slice as they may contain
+	// internal pointers.
 	// I briefly tested this and didn't see much difference, but it might
 	// be worth exploring more.
 	offset := dw.Len()
@@ -99,10 +101,10 @@ func (dw *dataWriter) WriteOrWritePointer(t mmdbtype.DataType) (int64, error) {
 	}
 
 	//nolint:gosec // we check for overflow above
-	dw.offsets[key] = writtenType{
+	dw.rememberOffset(dmHash, t, writtenType{
 		pointer: mmdbtype.Pointer(offset),
 		size:    size,
-	}
+	})
 	return size, nil
 }
 
@@ -111,23 +113,21 @@ func (dw *dataWriter) WriteOrWritePointerString(t mmdbtype.String) (int64, error
 		return t.WriteTo(dw)
 	}
 
-	// This mirrors WriteOrWritePointer but accepts a concrete String to avoid
-	// boxing map keys into DataType while writing sorted maps.
-	keyBytes, err := dw.keyWriter.KeyString(t)
+	// This mirrors WriteOrWritePointer but accepts a concrete String so hashing
+	// map keys does not need the general top-level hash dispatch.
+	hash, err := dw.dataMap.hasher.hashValue(t)
 	if err != nil {
 		return 0, err
 	}
 
-	written, ok := dw.offsets[dataMapKey(keyBytes)]
+	dmHash := dataMapHash(hash)
+	written, ok := dw.findStringOffset(dmHash, t)
 	if ok && written.size > written.pointer.WrittenSize() {
 		// Only use a pointer if it would take less space than writing the
 		// type again.
 		return written.pointer.WriteTo(dw)
 	}
 
-	// Take a stable copy of the key before storing it; the key writer reuses
-	// its buffer on the next key generation.
-	key := dataMapKey(keyBytes)
 	offset := dw.Len()
 	size, err := t.WriteTo(dw)
 	if err != nil || ok {
@@ -139,9 +139,106 @@ func (dw *dataWriter) WriteOrWritePointerString(t mmdbtype.String) (int64, error
 	}
 
 	//nolint:gosec // we check for overflow above
-	dw.offsets[key] = writtenType{
+	dw.rememberStringOffset(dmHash, t, writtenType{
 		pointer: mmdbtype.Pointer(offset),
 		size:    size,
-	}
+	})
 	return size, nil
+}
+
+func (dw *dataWriter) findOffset(
+	hash dataMapHash,
+	data mmdbtype.DataType,
+) (writtenType, bool) {
+	index, ok := dw.offsets[hash]
+	for ok {
+		offset := &dw.offsetArena[index]
+		if offset.matches(data) {
+			return offset.written, true
+		}
+		index = offset.next
+		ok = index >= 0
+	}
+	return writtenType{}, false
+}
+
+func (dw *dataWriter) findStringOffset(
+	hash dataMapHash,
+	data mmdbtype.String,
+) (writtenType, bool) {
+	index, ok := dw.offsets[hash]
+	for ok {
+		offset := &dw.offsetArena[index]
+		if offset.matchesString(data) {
+			return offset.written, true
+		}
+		index = offset.next
+		ok = index >= 0
+	}
+	return writtenType{}, false
+}
+
+func (dw *dataWriter) rememberOffset(
+	hash dataMapHash,
+	data mmdbtype.DataType,
+	written writtenType,
+) {
+	if normalized, ok := dereferenceDataType(data); ok {
+		if stringValue, ok := normalized.(mmdbtype.String); ok {
+			dw.rememberStringOffset(hash, stringValue, written)
+			return
+		}
+	}
+	next := -1
+	if index, ok := dw.offsets[hash]; ok {
+		next = index
+	}
+	dw.offsetArena = append(dw.offsetArena, dataOffset{
+		data:    data,
+		written: written,
+		next:    next,
+	})
+	dw.offsets[hash] = len(dw.offsetArena) - 1
+}
+
+func (dw *dataWriter) rememberStringOffset(
+	hash dataMapHash,
+	data mmdbtype.String,
+	written writtenType,
+) {
+	next := -1
+	if index, ok := dw.offsets[hash]; ok {
+		next = index
+	}
+	dw.offsetArena = append(dw.offsetArena, dataOffset{
+		stringValue: data,
+		written:     written,
+		next:        next,
+		isString:    true,
+	})
+	dw.offsets[hash] = len(dw.offsetArena) - 1
+}
+
+func (offset *dataOffset) matches(data mmdbtype.DataType) bool {
+	if !offset.isString {
+		return wireDataEqual(offset.data, data)
+	}
+	normalized, ok := dereferenceDataType(data)
+	if !ok {
+		return false
+	}
+	stringValue, ok := normalized.(mmdbtype.String)
+	return ok && offset.stringValue == stringValue
+}
+
+func (offset *dataOffset) matchesString(data mmdbtype.String) bool {
+	if offset.isString {
+		return offset.stringValue == data
+	}
+	normalized, ok := dereferenceDataType(offset.data)
+	if !ok {
+		return false
+	}
+	stringValue, ok := normalized.(mmdbtype.String)
+	return ok && stringValue == data
 }
