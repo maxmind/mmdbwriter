@@ -46,13 +46,9 @@ type dataMap struct {
 }
 
 func newDataMap() *dataMap {
-	return newDataMapWithHasher(newDataHasher())
-}
-
-func newDataMapWithHasher(hasher *dataHasher) *dataMap {
 	return &dataMap{
 		data:   map[dataMapHash]*dataMapValue{},
-		hasher: hasher,
+		hasher: newDataHasher(),
 	}
 }
 
