@@ -124,10 +124,10 @@ func (dm *dataMap) storeByHash(v mmdbtype.DataType, dmHash dataMapHash) *dataMap
 	return dmv
 }
 
-// wireDataEqual compares the data that will be written to the MMDB. The
-// mmdbtype Equal methods are sufficient except for containers, which may hold
-// floats, and floats, where signed zero has different wire encodings despite
-// comparing equal in Go.
+// wireDataEqual compares the data that will be written to the MMDB. Pointer
+// forms are normalized before comparison. The mmdbtype Equal methods are then
+// sufficient except for containers, which may hold floats, and floats, where
+// signed zero has different wire encodings despite comparing equal in Go.
 func wireDataEqual(first, second mmdbtype.DataType) bool {
 	if first == nil || second == nil {
 		return first == nil && second == nil

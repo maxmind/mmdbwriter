@@ -84,8 +84,9 @@ func (h *dataHasher) Hash(value mmdbtype.DataType) (uint64, error) {
 	if !ok {
 		return 0, fmt.Errorf("cannot hash a nil %T", original)
 	}
-	// The data map already caches top-level identities. Avoid retaining every
-	// distinct record in the nested-container cache as well.
+	// Top-level identities and repeated merge results are cached outside the
+	// hasher. Avoid retaining every distinct record in the nested-container
+	// cache as well.
 	switch value := value.(type) {
 	case mmdbtype.Map:
 		return h.hashMapContents(value)
