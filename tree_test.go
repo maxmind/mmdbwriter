@@ -165,6 +165,7 @@ func TestTreeInsertFuncMemoizesDistinctExistingValues(t *testing.T) {
 	tree, err := New(Options{IPVersion: 4, IncludeReservedNetworks: true})
 	require.NoError(t, err)
 	for index, value := range []mmdbtype.String{"a", "b", "a", "b"} {
+		//nolint:gosec // index is bounded by the four-element literal
 		prefix := netip.PrefixFrom(netip.AddrFrom4([4]byte{1, 2, 3, byte(index * 64)}), 26)
 		require.NoError(t, tree.Insert(prefix, value))
 	}
