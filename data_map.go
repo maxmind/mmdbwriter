@@ -3,6 +3,7 @@ package mmdbwriter
 import (
 	"math"
 	"reflect"
+	"unsafe"
 
 	"github.com/maxmind/mmdbwriter/v2/mmdbtype"
 )
@@ -135,6 +136,12 @@ func wireDataEqual(first, second mmdbtype.DataType) bool {
 	if first == nil || second == nil {
 		return first == nil && second == nil
 	}
+	var firstOK, secondOK bool
+	first, firstOK = dereferenceDataType(first)
+	second, secondOK = dereferenceDataType(second)
+	if !firstOK || !secondOK {
+		return false
+	}
 	switch first := first.(type) {
 	case mmdbtype.Float32:
 		second, ok := second.(mmdbtype.Float32)
@@ -177,13 +184,18 @@ func wireDataEqual(first, second mmdbtype.DataType) bool {
 }
 
 func keyIdentity(v mmdbtype.DataType) (dataMapIdentityKey, bool) {
+	var ok bool
+	v, ok = dereferenceDataType(v)
+	if !ok {
+		return dataMapIdentityKey{}, false
+	}
 	switch t := v.(type) {
 	case mmdbtype.Bytes:
 		if len(t) == 0 {
 			return dataMapIdentityKey{kind: dataMapIdentityBytes}, true
 		}
 		return dataMapIdentityKey{
-			ptr:  reflect.ValueOf(t).Pointer(),
+			ptr:  uintptr(unsafe.Pointer(unsafe.SliceData(t))),
 			kind: dataMapIdentityBytes,
 			size: len(t),
 		}, true
@@ -201,7 +213,7 @@ func keyIdentity(v mmdbtype.DataType) (dataMapIdentityKey, bool) {
 			return dataMapIdentityKey{kind: dataMapIdentitySlice}, true
 		}
 		return dataMapIdentityKey{
-			ptr:  reflect.ValueOf(t).Pointer(),
+			ptr:  uintptr(unsafe.Pointer(unsafe.SliceData(t))),
 			kind: dataMapIdentitySlice,
 			size: len(t),
 		}, true
