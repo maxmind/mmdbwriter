@@ -39,14 +39,24 @@ func BenchmarkDataHasherEnterpriseDeepCopies(b *testing.B) {
 	for index := range values {
 		values[index] = value.Copy()
 	}
-	hasher := newDataHasher()
-	b.ReportAllocs()
-	b.ResetTimer()
-	for index := range b.N {
-		if _, err := hasher.Hash(values[index%len(values)]); err != nil {
-			b.Fatal(err)
+	b.Run("sha256", func(b *testing.B) {
+		writer := newKeyWriter()
+		b.ReportAllocs()
+		for index := range b.N {
+			if _, err := writer.Key(values[index%len(values)]); err != nil {
+				b.Fatal(err)
+			}
 		}
-	}
+	})
+	b.Run("structural", func(b *testing.B) {
+		hasher := newDataHasher()
+		b.ReportAllocs()
+		for index := range b.N {
+			if _, err := hasher.Hash(values[index%len(values)]); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
 }
 
 func BenchmarkEnterpriseKeyPipeline(b *testing.B) {
@@ -84,8 +94,31 @@ func BenchmarkEnterpriseKeyPipeline(b *testing.B) {
 func BenchmarkDataMapEnterpriseValue(b *testing.B) {
 	value := benchmarkEnterpriseValue()
 
-	b.Run("equal-distinct", func(b *testing.B) {
+	b.Run("equal-shared-nested", func(b *testing.B) {
 		values := benchmarkShallowCopies(value, 8_192)
+		dataMap := newDataMap()
+		canonical, err := dataMap.storeWithIdentity(value)
+		if err != nil {
+			b.Fatal(err)
+		}
+		b.Cleanup(func() { dataMap.remove(canonical) })
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := range b.N {
+			stored, err := dataMap.storeWithIdentity(values[i%len(values)])
+			if err != nil {
+				b.Fatal(err)
+			}
+			dataMap.remove(stored)
+		}
+	})
+
+	b.Run("equal-deep-copy", func(b *testing.B) {
+		const valueCount = 512
+		values := make([]mmdbtype.DataType, valueCount)
+		for index := range values {
+			values[index] = value.Copy()
+		}
 		dataMap := newDataMap()
 		canonical, err := dataMap.storeWithIdentity(value)
 		if err != nil {
@@ -120,13 +153,60 @@ func BenchmarkDataMapEnterpriseValue(b *testing.B) {
 
 func BenchmarkWireDataEqualEnterpriseValue(b *testing.B) {
 	value := benchmarkEnterpriseValue()
-	clone := benchmarkShallowCopies(value, 1)[0]
-	b.ReportAllocs()
-	for range b.N {
-		if !wireDataEqual(value, clone) {
-			b.Fatal("values do not compare equal")
+	b.Run("shared-nested", func(b *testing.B) {
+		clone := benchmarkShallowCopies(value, 1)[0]
+		b.ReportAllocs()
+		for range b.N {
+			if !wireDataEqual(value, clone) {
+				b.Fatal("values do not compare equal")
+			}
 		}
+	})
+	b.Run("deep-copy", func(b *testing.B) {
+		clone := value.Copy()
+		b.ReportAllocs()
+		for range b.N {
+			if !wireDataEqual(value, clone) {
+				b.Fatal("values do not compare equal")
+			}
+		}
+	})
+}
+
+func BenchmarkTreeInsertEnterpriseDedupRates(b *testing.B) {
+	const networkCount = 4_608
+	for _, hitRate := range []int{0, 50, 90, 99} {
+		b.Run(strconv.Itoa(hitRate)+"%-hits", func(b *testing.B) {
+			values := benchmarkEnterpriseValuesAtHitRate(networkCount, hitRate)
+			b.ReportMetric(networkCount, "insertions/op")
+			b.ReportAllocs()
+			b.ResetTimer()
+			for range b.N {
+				tree, err := New(Options{IPVersion: 4, IncludeReservedNetworks: true})
+				if err != nil {
+					b.Fatal(err)
+				}
+				for index, value := range values {
+					address := netip.AddrFrom4(
+						[4]byte{1, byte(index >> 16), byte(index >> 8), byte(index)},
+					)
+					if err := tree.Insert(netip.PrefixFrom(address, 32), value); err != nil {
+						b.Fatal(err)
+					}
+				}
+			}
+		})
 	}
+}
+
+func benchmarkEnterpriseValuesAtHitRate(count, hitRate int) []mmdbtype.DataType {
+	uniqueCount := max(1, count*(100-hitRate)/100)
+	uniqueValues := benchmarkUniqueValues(benchmarkEnterpriseValue(), uniqueCount)
+	values := make([]mmdbtype.DataType, count)
+	for index := range values {
+		values[index] = uniqueValues[index%uniqueCount].Copy()
+	}
+	return values
 }
 
 func benchmarkShallowCopies(value mmdbtype.Map, count int) []mmdbtype.DataType {
