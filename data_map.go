@@ -3,7 +3,6 @@ package mmdbwriter
 import (
 	"math"
 	"reflect"
-	"unsafe"
 
 	"github.com/maxmind/mmdbwriter/v2/mmdbtype"
 )
@@ -192,7 +191,7 @@ func keyIdentity(v mmdbtype.DataType) (dataMapIdentityKey, bool) {
 			return dataMapIdentityKey{kind: dataMapIdentityBytes}, true
 		}
 		return dataMapIdentityKey{
-			ptr:  uintptr(unsafe.Pointer(unsafe.SliceData(t))),
+			ptr:  sliceIdentityPointer(t),
 			kind: dataMapIdentityBytes,
 			size: len(t),
 		}, true
@@ -210,7 +209,7 @@ func keyIdentity(v mmdbtype.DataType) (dataMapIdentityKey, bool) {
 			return dataMapIdentityKey{kind: dataMapIdentitySlice}, true
 		}
 		return dataMapIdentityKey{
-			ptr:  uintptr(unsafe.Pointer(unsafe.SliceData(t))),
+			ptr:  sliceIdentityPointer(t),
 			kind: dataMapIdentitySlice,
 			size: len(t),
 		}, true

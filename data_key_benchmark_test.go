@@ -28,17 +28,18 @@ func newKeyWriter() *keyWriter {
 	return &keyWriter{Buffer: &bytes.Buffer{}, sha256: sha256.New()}
 }
 
-func (kw *keyWriter) Key(value mmdbtype.DataType) ([]byte, error) {
+func (kw *keyWriter) Key(value mmdbtype.DataType) error {
 	kw.Truncate(0)
 	kw.sha256.Reset()
 	_, err := value.WriteTo(kw)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if _, err := kw.WriteTo(kw.sha256); err != nil {
-		return nil, fmt.Errorf("writing key to writer: %w", err)
+		return fmt.Errorf("writing key to writer: %w", err)
 	}
-	return kw.sha256.Sum(kw.key[:0]), nil
+	kw.sha256.Sum(kw.key[:0])
+	return nil
 }
 
 func (kw *keyWriter) WriteOrWritePointer(value mmdbtype.DataType) (int64, error) {
@@ -55,7 +56,7 @@ func BenchmarkDataHasherEnterpriseValue(b *testing.B) {
 		writer := newKeyWriter()
 		b.ReportAllocs()
 		for range b.N {
-			if _, err := writer.Key(value); err != nil {
+			if err := writer.Key(value); err != nil {
 				b.Fatal(err)
 			}
 		}
@@ -82,7 +83,7 @@ func BenchmarkDataHasherEnterpriseDeepCopies(b *testing.B) {
 		writer := newKeyWriter()
 		b.ReportAllocs()
 		for index := range b.N {
-			if _, err := writer.Key(values[index%len(values)]); err != nil {
+			if err := writer.Key(values[index%len(values)]); err != nil {
 				b.Fatal(err)
 			}
 		}

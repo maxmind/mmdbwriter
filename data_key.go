@@ -190,7 +190,12 @@ func (h *dataHasher) hashMapContents(value mmdbtype.Map) (uint64, error) {
 		xor ^= bits.RotateLeft64(entryHash, int(entryHash>>58))
 	}
 	digest := dataHashMix64(
-		h.typeSalts[dataHashMap] ^ uint64(len(value))*dataHashMix ^ sum ^ bits.RotateLeft64(xor, 23),
+		h.typeSalts[dataHashMap] ^ uint64(
+			len(value),
+		)*dataHashMix ^ sum ^ bits.RotateLeft64(
+			xor,
+			23,
+		),
 	)
 	return digest, nil
 }
@@ -346,8 +351,15 @@ func mapDataIdentity(value mmdbtype.Map) dataMapIdentityKey {
 
 func sliceDataIdentity(value mmdbtype.Slice) dataMapIdentityKey {
 	return dataMapIdentityKey{
-		ptr:  uintptr(unsafe.Pointer(unsafe.SliceData(value))),
+		ptr:  sliceIdentityPointer(value),
 		kind: dataMapIdentitySlice,
 		size: len(value),
 	}
+}
+
+func sliceIdentityPointer[T any](value []T) uintptr {
+	// The pointer is used only as an identity while a typed strong reference
+	// keeps the slice live. It is never dereferenced or converted back.
+	//nolint:gosec // converting to uintptr is intentional for the identity key
+	return uintptr(unsafe.Pointer(unsafe.SliceData(value)))
 }
