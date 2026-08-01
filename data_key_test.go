@@ -168,31 +168,6 @@ func TestDataHasherSeparatesPreviouslyCollidingScalars(t *testing.T) {
 	}
 }
 
-func TestSliceIdentityPointerDoesNotAllocate(t *testing.T) {
-	value := mmdbtype.Slice{mmdbtype.String("value")}
-	var pointer uintptr
-	allocations := testing.AllocsPerRun(1_000, func() {
-		pointer = sliceIdentityPointer(value)
-	})
-
-	assert.NotZero(t, pointer)
-	assert.Zero(t, allocations)
-}
-
-func TestEmptyContainerIdentitiesAreCanonical(t *testing.T) {
-	nilMapIdentity, ok := keyIdentity(mmdbtype.Map(nil))
-	require.True(t, ok)
-	emptyMapIdentity, ok := keyIdentity(mmdbtype.Map{})
-	require.True(t, ok)
-	assert.Equal(t, nilMapIdentity, emptyMapIdentity)
-
-	nilSliceIdentity, ok := keyIdentity(mmdbtype.Slice(nil))
-	require.True(t, ok)
-	emptySliceIdentity, ok := keyIdentity(make(mmdbtype.Slice, 0, 1))
-	require.True(t, ok)
-	assert.Equal(t, nilSliceIdentity, emptySliceIdentity)
-}
-
 func TestDataHasherRejectsNilNestedValue(t *testing.T) {
 	_, err := newDataHasher().Hash(mmdbtype.Map{"nil": nil})
 	require.EqualError(t, err, `hashing map key "nil": cannot hash a nil MMDB value`)

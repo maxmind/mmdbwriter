@@ -3,27 +3,11 @@ package mmdbwriter
 import (
 	"math"
 	"reflect"
-	"unsafe"
 
 	"github.com/maxmind/mmdbwriter/v2/mmdbtype"
 )
 
 type dataMapHash uint64
-
-type dataMapIdentityKind byte
-
-const (
-	dataMapIdentityBytes dataMapIdentityKind = iota
-	dataMapIdentityMap
-	dataMapIdentitySlice
-	dataMapIdentityUint128
-)
-
-type dataMapIdentityKey struct {
-	ptr  uintptr
-	kind dataMapIdentityKind
-	size int
-}
 
 // Please note, if you change the order of these fields, please check
 // alignment as we end up storing quite a few in memory.
@@ -41,9 +25,8 @@ type dataMapValue struct {
 // dataMap is used to deduplicate data inserted into the tree. Hashes select a
 // bucket; values in the bucket are compared exactly before they are reused.
 type dataMap struct {
-	data              map[dataMapHash]*dataMapValue
-	hasher            *dataHasher
-	keyByDataIdentity map[dataMapIdentityKey]*dataMapValue
+	data   map[dataMapHash]*dataMapValue
+	hasher *dataHasher
 }
 
 func newDataMap() *dataMap {
@@ -58,41 +41,6 @@ func newDataMap() *dataMap {
 // incremented.
 func (dm *dataMap) store(v mmdbtype.DataType) (*dataMapValue, error) {
 	return dm.storeByGeneratedKey(v)
-}
-
-func (dm *dataMap) storeWithIdentity(v mmdbtype.DataType) (*dataMapValue, error) {
-	identity, ok := keyIdentity(v)
-	if !ok {
-		return dm.store(v)
-	}
-
-	if dmv, ok := dm.keyByDataIdentity[identity]; ok {
-		// Only retained values are pinned by dm.data. Equal-but-distinct values
-		// can be mutated or collected, so stale identity entries must be
-		// discarded instead of treated as hits.
-		if dmv.refCount != 0 {
-			if retainedIdentity, ok := keyIdentity(dmv.data); ok && retainedIdentity == identity {
-				dmv.refCount++
-				return dmv, nil
-			}
-		}
-		delete(dm.keyByDataIdentity, identity)
-	}
-
-	dmv, err := dm.storeByGeneratedKey(v)
-	if err != nil {
-		return nil, err
-	}
-	if dm.keyByDataIdentity == nil {
-		dm.keyByDataIdentity = map[dataMapIdentityKey]*dataMapValue{}
-	}
-	// Register only the identity of the retained value. A generated-key dedupe
-	// can return an older equal value, whose pointer is the only safe one to
-	// cache because dm.data pins it until remove.
-	if retainedIdentity, ok := keyIdentity(dmv.data); ok && retainedIdentity == identity {
-		dm.keyByDataIdentity[identity] = dmv
-	}
-	return dmv, nil
 }
 
 func (dm *dataMap) storeByGeneratedKey(v mmdbtype.DataType) (*dataMapValue, error) {
@@ -176,60 +124,6 @@ func wireDataEqual(first, second mmdbtype.DataType) bool {
 	}
 }
 
-func keyIdentity(v mmdbtype.DataType) (dataMapIdentityKey, bool) {
-	var ok bool
-	v, ok = dereferenceDataType(v)
-	if !ok {
-		return dataMapIdentityKey{}, false
-	}
-	switch t := v.(type) {
-	case mmdbtype.Bytes:
-		if len(t) == 0 {
-			return dataMapIdentityKey{kind: dataMapIdentityBytes}, true
-		}
-		return dataMapIdentityKey{
-			ptr:  sliceIdentityPointer(t),
-			kind: dataMapIdentityBytes,
-			size: len(t),
-		}, true
-	case mmdbtype.Map:
-		if len(t) == 0 {
-			return dataMapIdentityKey{kind: dataMapIdentityMap}, true
-		}
-		return dataMapIdentityKey{
-			ptr:  reflect.ValueOf(t).Pointer(),
-			kind: dataMapIdentityMap,
-			size: len(t),
-		}, true
-	case mmdbtype.Slice:
-		if len(t) == 0 {
-			return dataMapIdentityKey{kind: dataMapIdentitySlice}, true
-		}
-		return dataMapIdentityKey{
-			ptr:  sliceIdentityPointer(t),
-			kind: dataMapIdentitySlice,
-			size: len(t),
-		}, true
-	case *mmdbtype.Uint128:
-		if t == nil {
-			return dataMapIdentityKey{}, false
-		}
-		return dataMapIdentityKey{
-			ptr:  reflect.ValueOf(t).Pointer(),
-			kind: dataMapIdentityUint128,
-		}, true
-	default:
-		return dataMapIdentityKey{}, false
-	}
-}
-
-func sliceIdentityPointer[T any](value []T) uintptr {
-	// The pointer is used only as an identity while a typed strong reference
-	// keeps the slice live. It is never dereferenced or converted back.
-	//nolint:gosec // converting to uintptr is intentional for the identity key
-	return uintptr(unsafe.Pointer(unsafe.SliceData(value)))
-}
-
 // addRef adds a reference to the value.
 func (dm *dataMap) addRef(v *dataMapValue) {
 	// This is here mostly so that we don't have to guard against it
@@ -266,13 +160,6 @@ func (dm *dataMap) remove(v *dataMapValue) {
 				delete(dm.data, v.hash)
 			}
 			break
-		}
-		if dm.keyByDataIdentity != nil {
-			if identity, ok := keyIdentity(v.data); ok {
-				if dm.keyByDataIdentity[identity] == v {
-					delete(dm.keyByDataIdentity, identity)
-				}
-			}
 		}
 		v.next = nil
 	}

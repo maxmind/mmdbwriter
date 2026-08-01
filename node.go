@@ -65,10 +65,6 @@ type insertRecord struct {
 	memoSet      bool
 }
 
-func (iRec *insertRecord) storeData(v mmdbtype.DataType) (*dataMapValue, error) {
-	return iRec.dataMap.storeWithIdentity(v)
-}
-
 // resolve returns a value and whether the caller owns its reference. A pure
 // inserter's memo owns one reference to each non-nil result until insertion
 // finishes. An ordinary Func is not memoized, so a newly stored reference is
@@ -288,7 +284,7 @@ func (iRec *insertRecord) insertRecord(
 					r.recordType = recordTypeEmpty
 					r.value = nil
 				case oldData == nil || !oldData.Equal(newData):
-					value, err := iRec.storeData(newData)
+					value, err := iRec.dataMap.store(newData)
 					if err != nil {
 						return err
 					}
@@ -333,7 +329,7 @@ func (iRec *insertRecord) insertRecord(
 			if newData == nil {
 				return nil
 			}
-			value, err := iRec.storeData(newData)
+			value, err := iRec.dataMap.store(newData)
 			if err != nil {
 				return err
 			}

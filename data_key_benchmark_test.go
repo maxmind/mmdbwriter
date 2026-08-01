@@ -133,7 +133,7 @@ func BenchmarkDataMapEnterpriseValue(b *testing.B) {
 	b.Run("equal-shared-nested", func(b *testing.B) {
 		values := benchmarkShallowCopies(value, 8_192)
 		dataMap := newDataMap()
-		canonical, err := dataMap.storeWithIdentity(value)
+		canonical, err := dataMap.store(value)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -141,7 +141,7 @@ func BenchmarkDataMapEnterpriseValue(b *testing.B) {
 		b.ReportAllocs()
 		b.ResetTimer()
 		for i := range b.N {
-			stored, err := dataMap.storeWithIdentity(values[i%len(values)])
+			stored, err := dataMap.store(values[i%len(values)])
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -156,7 +156,7 @@ func BenchmarkDataMapEnterpriseValue(b *testing.B) {
 			values[index] = value.Copy()
 		}
 		dataMap := newDataMap()
-		canonical, err := dataMap.storeWithIdentity(value)
+		canonical, err := dataMap.store(value)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -164,7 +164,7 @@ func BenchmarkDataMapEnterpriseValue(b *testing.B) {
 		b.ReportAllocs()
 		b.ResetTimer()
 		for i := range b.N {
-			stored, err := dataMap.storeWithIdentity(values[i%len(values)])
+			stored, err := dataMap.store(values[i%len(values)])
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -178,7 +178,7 @@ func BenchmarkDataMapEnterpriseValue(b *testing.B) {
 		b.ReportAllocs()
 		b.ResetTimer()
 		for i := range b.N {
-			stored, err := dataMap.storeWithIdentity(values[i%len(values)])
+			stored, err := dataMap.store(values[i%len(values)])
 			if err != nil {
 				b.Fatal(err)
 			}
