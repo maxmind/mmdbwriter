@@ -9,71 +9,27 @@ import (
 	"github.com/maxmind/mmdbwriter/v2/mmdbtype"
 )
 
-// Resolver resolves an insertion into a tree record. A Resolver must be either
-// a Func or a PureFunc.
-type Resolver interface {
-	Function() Func
-	IsPure() bool
-
-	isResolver()
-}
-
 // Func resolves an insertion into a tree record. existingValue is nil for an
 // empty record, and newValue is the value passed to the insert method. Returning
 // nil leaves the record empty or removes the existing value. A Func is evaluated
-// separately for every covered record and is not memoized.
+// separately for every covered record when passed to Tree.InsertFunc or
+// Tree.InsertRangeFunc. Tree.InsertPureFunc and Tree.InsertRangePureFunc may
+// memoize repeated argument pairs and share a non-nil result across records.
 //
 // A Func must not modify either argument, as values may be shared with other
 // records. Any non-nil returned value becomes tree-owned and must not be
-// modified after the function returns. Use PureFunc when the result and error
-// depend only on the arguments.
+// modified after the function returns.
 type Func func(existingValue, newValue mmdbtype.DataType) (mmdbtype.DataType, error)
 
-// Function returns f.
-func (f Func) Function() Func {
-	return f
-}
-
-// IsPure reports whether repeated argument pairs may be memoized.
-func (Func) IsPure() bool {
-	return false
-}
-
-func (Func) isResolver() {}
-
-// PureFunc is a Func whose result and error depend only on its arguments. It
-// must not modify either argument or depend on invocation count, order, or
-// external mutable state. The writer may memoize repeated argument pairs within
-// one insert operation and may share one non-nil returned value across records.
-// Returned values become tree-owned and must not be modified after the function
-// returns.
-type PureFunc Func
-
-// Function returns f as a Func.
-func (f PureFunc) Function() Func {
-	return Func(f)
-}
-
-// IsPure reports whether repeated argument pairs may be memoized.
-func (PureFunc) IsPure() bool {
-	return true
-}
-
-func (PureFunc) isResolver() {}
-
 // Remove removes any records for the network being inserted.
-//
-//nolint:gochecknoglobals // Exported stateless inserters are callable function values.
-var Remove = PureFunc(func(_, _ mmdbtype.DataType) (mmdbtype.DataType, error) {
+func Remove(_, _ mmdbtype.DataType) (mmdbtype.DataType, error) {
 	return nil, nil
-})
+}
 
 // Replace replaces the existing value with the new value.
-//
-//nolint:gochecknoglobals // Exported stateless inserters are callable function values.
-var Replace = PureFunc(func(_, newValue mmdbtype.DataType) (mmdbtype.DataType, error) {
+func Replace(_, newValue mmdbtype.DataType) (mmdbtype.DataType, error) {
 	return newValue, nil
-})
+}
 
 // TopLevelMerge is an inserter for Map values that will update an
 // existing Map by adding the top-level keys and values from the new Map,
@@ -81,11 +37,7 @@ var Replace = PureFunc(func(_, newValue mmdbtype.DataType) (mmdbtype.DataType, e
 //
 // Both the new and existing value must be a Map. An error will be returned
 // otherwise.
-//
-//nolint:gochecknoglobals // Exported stateless inserters are callable function values.
-var TopLevelMerge = PureFunc(topLevelMerge)
-
-func topLevelMerge(existingValue, newValue mmdbtype.DataType) (mmdbtype.DataType, error) {
+func TopLevelMerge(existingValue, newValue mmdbtype.DataType) (mmdbtype.DataType, error) {
 	newMap, ok := newValue.(mmdbtype.Map)
 	if !ok {
 		return nil, fmt.Errorf(
@@ -118,11 +70,7 @@ func topLevelMerge(existingValue, newValue mmdbtype.DataType) (mmdbtype.DataType
 // merged recursively. Other values will be replaced by the new value. The
 // returned value may be the existing container or retain unchanged nested
 // containers from it. The result must therefore be treated as immutable.
-//
-//nolint:gochecknoglobals // Exported stateless inserters are callable function values.
-var DeepMerge = PureFunc(deepMergeFunc)
-
-func deepMergeFunc(existingValue, newValue mmdbtype.DataType) (mmdbtype.DataType, error) {
+func DeepMerge(existingValue, newValue mmdbtype.DataType) (mmdbtype.DataType, error) {
 	value, _, err := deepMerge(existingValue, newValue)
 	return value, err
 }

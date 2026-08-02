@@ -17,14 +17,15 @@
   insertion paths. `inserter.ReplaceWith`, `inserter.TopLevelMergeWith`, and
   `inserter.DeepMergeWith` are replaced by `inserter.Replace`,
   `inserter.TopLevelMerge`, and `inserter.DeepMerge`. `inserter.FuncGenerator`
-  was removed, `Options.Inserter` now accepts an `inserter.Resolver`, and
+  was removed, `Options.Inserter` now accepts an `inserter.Func`, and
   `Tree.InsertFunc` and `Tree.InsertRangeFunc` now take the new value and a
-  resolver. Built-in resolvers are `inserter.PureFunc` values and may be
-  memoized. Custom `inserter.Func` values retain per-record evaluation for
-  callbacks that use external or mutable state. Resolvers must be non-nil
-  `inserter.Func` or `inserter.PureFunc` values rather than pointers to those
-  types. Non-nil results become tree-owned and must not be modified after the
-  resolver returns.
+  function. These functions are evaluated separately for every covered record,
+  as in v1. Added `Tree.InsertPureFunc` and `Tree.InsertRangePureFunc` for
+  functions whose result and error depend only on their arguments. These methods
+  may memoize repeated argument pairs within an insertion;
+  `Tree.InsertRangePureFunc` shares the memo across the entire range. Explicit
+  nil functions are rejected. Non-nil results become tree-owned and must not be
+  modified after the function returns.
 - Reduced allocations on the tree insert and serialization hot paths, lowering
   memory pressure and GC overhead during large builds.
 - `Load` now caches decoded source records by data offset during loading. This
@@ -41,10 +42,8 @@
   are now indexed by a seeded structural content hash. Values are compared
   exactly before deduplication, so hash collisions cannot substitute a different
   value.
-- Added `inserter.PureFunc` for resolvers whose output depends only on their
-  arguments. Repeated existing values are memoized within each insert call for
-  these resolvers. `DeepMerge` also reuses existing maps and slices when a merge
-  does not change their contents and retains unchanged nested containers,
+- Changed `inserter.DeepMerge` to reuse existing maps and slices when a merge
+  does not change their contents and retain unchanged nested containers,
   avoiding unnecessary cloning and reindexing. Its result must therefore be
   treated as immutable.
 
