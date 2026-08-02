@@ -29,19 +29,10 @@ type dataWriter struct {
 }
 
 func newDataWriter(dataMap *dataMap, usePointers bool) *dataWriter {
-	return newDataWriterWithCapacity(dataMap, usePointers, 0)
-}
-
-func newDataWriterWithCapacity(
-	dataMap *dataMap,
-	usePointers bool,
-	offsetCapacity int,
-) *dataWriter {
 	return &dataWriter{
 		Buffer:      &bytes.Buffer{},
 		dataMap:     dataMap,
-		offsets:     make(map[dataMapHash]int, offsetCapacity),
-		offsetArena: make([]dataOffset, 0, offsetCapacity),
+		offsets:     map[dataMapHash]int{},
 		usePointers: usePointers,
 	}
 }
