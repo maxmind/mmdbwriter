@@ -78,7 +78,7 @@ type Options struct {
 	// use should primarily be limited to existing database types.
 	DisableMetadataPointers bool
 
-	// Inserter is the insertion resolver used when calling `Insert`. Leaving it nil
+	// Inserter is the function used when calling `Insert`. Leaving it nil
 	// is equivalent to `inserter.Replace`, which replaces any conflicting old
 	// value entirely with the new, and allows Insert to use the default
 	// direct-value fast path. Passing `inserter.Replace` explicitly has the same
@@ -86,11 +86,10 @@ type Options struct {
 	//
 	// An Inserter must not modify either argument. Values may be shared with
 	// other records, and Load reuses decoded values for source networks that
-	// reference the same data offset. Copy a value before modifying it. PureFunc
-	// resolvers may be memoized during one insert; Func resolvers are evaluated
-	// separately for every covered record. Any non-nil returned value becomes
-	// tree-owned and must not be modified after the resolver returns.
-	Inserter inserter.Resolver
+	// reference the same data offset. Copy a value before modifying it. The
+	// function is evaluated separately for every covered record. Any non-nil
+	// returned value becomes tree-owned and must not be modified after return.
+	Inserter inserter.Func
 }
 
 // Tree represents an MaxMind DB search tree.
@@ -118,15 +117,11 @@ type Tree struct {
 	treeDepth int
 
 	nodeCount int
-	inserter  inserter.Resolver
+	inserter  inserter.Func
 }
 
 // New creates a new Tree.
 func New(opts Options) (*Tree, error) {
-	if _, _, err := resolverDetails(opts.Inserter); err != nil {
-		return nil, err
-	}
-
 	tree := &Tree{
 		buildEpoch:              time.Now().Unix(),
 		databaseType:            opts.DatabaseType,
@@ -322,27 +317,26 @@ func (t *Tree) Insert(prefix netip.Prefix, value mmdbtype.DataType) error {
 // require the record to be copied and there is a non-trivial performance
 // impact.
 //
-// A PureFunc may be called once for each distinct preexisting value covered by
-// an insert because repeated argument pairs may be memoized. A Func is called
-// separately for every covered record, as in v1.
-//
-// Any non-nil value returned by the resolver becomes tree-owned and must not be
-// modified after the resolver returns. A PureFunc result may be shared by
-// multiple records.
+// The function is called separately for every covered record, as in v1. Any
+// non-nil value it returns becomes tree-owned and must not be modified after the
+// function returns.
 //
 // This is not safe to call from multiple threads.
 func (t *Tree) InsertFunc(
 	prefix netip.Prefix,
 	value mmdbtype.DataType,
-	resolver inserter.Resolver,
+	insertFunc inserter.Func,
 ) error {
-	return t.insert(prefix, recordTypeData, resolver, noNodeIndex, value)
+	if insertFunc == nil {
+		return errors.New("inserter function must not be nil")
+	}
+	return t.insert(prefix, recordTypeData, insertFunc, noNodeIndex, value)
 }
 
 func (t *Tree) insert(
 	prefix netip.Prefix,
 	recordType recordType,
-	resolver inserter.Resolver,
+	insertFunc inserter.Func,
 	node nodeIndex,
 	value mmdbtype.DataType,
 ) error {
@@ -361,34 +355,29 @@ func (t *Tree) insert(
 			return err
 		}
 	}
-	return t.insertPrepared(prefix, recordType, resolver, node, value)
+	return t.insertPrepared(prefix, recordType, insertFunc, node, value)
 }
 
 func (t *Tree) insertNormalized(
 	prefix netip.Prefix,
 	recordType recordType,
-	resolver inserter.Resolver,
+	insertFunc inserter.Func,
 	node nodeIndex,
 	value mmdbtype.DataType,
 ) error {
 	if t.treeDepth == 32 && !prefix.Addr().Is4() {
 		return errors.New("IPv6 prefixes cannot be inserted into an IPv4 tree")
 	}
-	return t.insertPrepared(prefix, recordType, resolver, node, value)
+	return t.insertPrepared(prefix, recordType, insertFunc, node, value)
 }
 
 func (t *Tree) insertPrepared(
 	prefix netip.Prefix,
 	recordType recordType,
-	resolver inserter.Resolver,
+	insertFunc inserter.Func,
 	node nodeIndex,
 	value mmdbtype.DataType,
 ) error {
-	inserterFunc, inserterIsPure, err := resolverDetails(resolver)
-	if err != nil {
-		return err
-	}
-
 	// Any insert can change the reachable node graph, so cached finalization
 	// state must be rebuilt before the next write.
 	t.nodeCount = 0
@@ -399,39 +388,14 @@ func (t *Tree) insertPrepared(
 		ip:           ip,
 		prefixLen:    prefixLen,
 		recordType:   recordType,
-		inserter:     inserterFunc,
-		inserterPure: inserterIsPure,
+		inserter:     insertFunc,
 		insertedNode: node,
 		tree:         t,
 		value:        value,
 
 		dataMap: t.dataMap,
 	}
-	err = iRec.insertNode(t.root, 0)
-	iRec.releaseResolved()
-	return err
-}
-
-func resolverDetails(resolver inserter.Resolver) (inserter.Func, bool, error) {
-	switch resolver := resolver.(type) {
-	case nil:
-		return nil, false, nil
-	case inserter.Func:
-		if resolver == nil {
-			return nil, false, errors.New("resolver must not be a nil inserter.Func")
-		}
-		return resolver, false, nil
-	case inserter.PureFunc:
-		if resolver == nil {
-			return nil, false, errors.New("resolver must not be a nil inserter.PureFunc")
-		}
-		return inserter.Func(resolver), true, nil
-	default:
-		return nil, false, fmt.Errorf(
-			"resolver must be an inserter.Func or inserter.PureFunc value, got %T",
-			resolver,
-		)
-	}
+	return iRec.insertNode(t.root, 0)
 }
 
 func (t *Tree) normalizeInsertPrefix(prefix netip.Prefix) (netip.Prefix, error) {
@@ -557,16 +521,19 @@ func (t *Tree) InsertRangeFunc(
 	start netip.Addr,
 	end netip.Addr,
 	value mmdbtype.DataType,
-	resolver inserter.Resolver,
+	insertFunc inserter.Func,
 ) error {
-	return t.insertRange(start, end, recordTypeData, resolver, noNodeIndex, value)
+	if insertFunc == nil {
+		return errors.New("inserter function must not be nil")
+	}
+	return t.insertRange(start, end, recordTypeData, insertFunc, noNodeIndex, value)
 }
 
 func (t *Tree) insertRange(
 	start netip.Addr,
 	end netip.Addr,
 	recordType recordType,
-	resolver inserter.Resolver,
+	insertFunc inserter.Func,
 	node nodeIndex,
 	value mmdbtype.DataType,
 ) error {
@@ -588,7 +555,7 @@ func (t *Tree) insertRange(
 	}
 	subnets := r.Prefixes()
 	for _, subnet := range subnets {
-		err := t.insertPrepared(subnet, recordType, resolver, node, value)
+		err := t.insertPrepared(subnet, recordType, insertFunc, node, value)
 		if err != nil {
 			return err
 		}
@@ -600,14 +567,14 @@ func (t *Tree) insertRange(
 func (t *Tree) insertStringNetwork(
 	network string,
 	recordType recordType,
-	resolver inserter.Resolver,
+	insertFunc inserter.Func,
 	node nodeIndex,
 ) error {
 	prefix, err := netip.ParsePrefix(network)
 	if err != nil {
 		return fmt.Errorf("parsing network (%s): %w", network, err)
 	}
-	return t.insert(prefix, recordType, resolver, node, nil)
+	return t.insert(prefix, recordType, insertFunc, node, nil)
 }
 
 var ipv4AliasNetworks = []string{

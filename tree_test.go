@@ -161,7 +161,7 @@ func TestTreeInsertFunc(t *testing.T) {
 	}, got)
 }
 
-func TestTreeInsertFuncMemoizesDistinctExistingValues(t *testing.T) {
+func TestTreeInsertFuncCallsFunctionForEveryRecord(t *testing.T) {
 	tree, err := New(Options{IPVersion: 4, IncludeReservedNetworks: true})
 	require.NoError(t, err)
 	for index, value := range []mmdbtype.String{"a", "b", "a", "b"} {
@@ -174,13 +174,13 @@ func TestTreeInsertFuncMemoizesDistinctExistingValues(t *testing.T) {
 	err = tree.InsertFunc(
 		netip.MustParsePrefix("1.2.3.0/24"),
 		mmdbtype.String("new"),
-		inserter.PureFunc(func(existing, newValue mmdbtype.DataType) (mmdbtype.DataType, error) {
+		func(existing, newValue mmdbtype.DataType) (mmdbtype.DataType, error) {
 			calls[existing.(mmdbtype.String)]++
 			return newValue, nil
-		}),
+		},
 	)
 	require.NoError(t, err)
-	assert.Equal(t, map[mmdbtype.String]int{"a": 1, "b": 1}, calls)
+	assert.Equal(t, map[mmdbtype.String]int{"a": 2, "b": 2}, calls)
 	for index := range 4 {
 		//nolint:gosec // index is bounded by the four-iteration loop
 		_, value := tree.Get(netip.AddrFrom4([4]byte{1, 2, 3, byte(index * 64)}))
@@ -188,7 +188,7 @@ func TestTreeInsertFuncMemoizesDistinctExistingValues(t *testing.T) {
 	}
 }
 
-func TestTreeInsertFuncReleasesPureMemoAfterPartialError(t *testing.T) {
+func TestTreeInsertFuncKeepsEarlierResultAfterPartialError(t *testing.T) {
 	tree, err := New(Options{IPVersion: 4, IncludeReservedNetworks: true})
 	require.NoError(t, err)
 	require.NoError(t, tree.Insert(
@@ -205,7 +205,7 @@ func TestTreeInsertFuncReleasesPureMemoAfterPartialError(t *testing.T) {
 	err = tree.InsertFunc(
 		netip.MustParsePrefix("1.2.3.0/24"),
 		mmdbtype.String("new"),
-		inserter.PureFunc(func(existing, _ mmdbtype.DataType) (mmdbtype.DataType, error) {
+		inserter.Func(func(existing, _ mmdbtype.DataType) (mmdbtype.DataType, error) {
 			if existing == mmdbtype.String("second") {
 				return nil, insertErr
 			}
@@ -218,7 +218,7 @@ func TestTreeInsertFuncReleasesPureMemoAfterPartialError(t *testing.T) {
 	require.NoError(t, err)
 	stored := tree.dataMap.data[dataMapHash(hash)]
 	require.NotNil(t, stored)
-	assert.Equal(t, uint32(1), stored.refCount, "the pure memo retained a result reference")
+	assert.Equal(t, uint32(1), stored.refCount)
 
 	_, got := tree.Get(netip.MustParseAddr("1.2.3.1"))
 	assert.Equal(t, result, got)
@@ -289,63 +289,25 @@ func TestTreeOptionsInserter(t *testing.T) {
 	assert.Equal(t, mmdbtype.Map{"base": mmdbtype.String("value")}, got)
 }
 
-func TestTreeRejectsInvalidResolverValues(t *testing.T) {
-	function := inserter.Func(func(_, value mmdbtype.DataType) (mmdbtype.DataType, error) {
-		return value, nil
-	})
-	pureFunction := inserter.PureFunc(function)
-	var nilFunction inserter.Func
-	var nilPureFunction inserter.PureFunc
+func TestTreeRejectsNilInserterFunc(t *testing.T) {
+	tree, err := New(Options{IPVersion: 4, IncludeReservedNetworks: true})
+	require.NoError(t, err)
 
-	tests := []struct {
-		name          string
-		resolver      inserter.Resolver
-		expectedError string
-	}{
-		{
-			name:          "Func pointer",
-			resolver:      &function,
-			expectedError: "resolver must be an inserter.Func or inserter.PureFunc value, got *inserter.Func",
-		},
-		{
-			name:          "PureFunc pointer",
-			resolver:      &pureFunction,
-			expectedError: "resolver must be an inserter.Func or inserter.PureFunc value, got *inserter.PureFunc",
-		},
-		{
-			name:          "nil Func",
-			resolver:      nilFunction,
-			expectedError: "resolver must not be a nil inserter.Func",
-		},
-		{
-			name:          "nil PureFunc",
-			resolver:      nilPureFunction,
-			expectedError: "resolver must not be a nil inserter.PureFunc",
-		},
-	}
+	var insertFunc inserter.Func
+	err = tree.InsertFunc(
+		netip.MustParsePrefix("1.2.3.0/24"),
+		mmdbtype.String("value"),
+		insertFunc,
+	)
+	require.EqualError(t, err, "inserter function must not be nil")
 
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			_, err := New(Options{Inserter: test.resolver})
-			require.EqualError(t, err, test.expectedError)
-
-			tree, err := New(Options{IPVersion: 4, IncludeReservedNetworks: true})
-			require.NoError(t, err)
-			err = tree.InsertFunc(
-				netip.MustParsePrefix("1.2.3.0/24"),
-				mmdbtype.String("value"),
-				test.resolver,
-			)
-			require.EqualError(t, err, test.expectedError)
-			err = tree.InsertRangeFunc(
-				netip.MustParseAddr("1.2.3.1"),
-				netip.MustParseAddr("1.2.3.2"),
-				mmdbtype.String("value"),
-				test.resolver,
-			)
-			require.EqualError(t, err, test.expectedError)
-		})
-	}
+	err = tree.InsertRangeFunc(
+		netip.MustParseAddr("1.2.3.1"),
+		netip.MustParseAddr("1.2.3.2"),
+		mmdbtype.String("value"),
+		insertFunc,
+	)
+	require.EqualError(t, err, "inserter function must not be nil")
 }
 
 func TestTreeInsertFuncErrorDoesNotMutateEmptySiblingRecord(t *testing.T) {
