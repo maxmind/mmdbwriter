@@ -51,6 +51,10 @@
   treated as immutable.
 - `Load` now returns an error when a database's metadata declares an unsupported
   `ip_version` or `record_size` rather than using the value unchecked.
+- `New` now returns an error for an unsupported `Options.RecordSize` or a
+  negative `Options.BuildEpoch`. An unsupported record size previously reached
+  serialization, where a negative value panicked and other values failed only
+  after output had been written.
 - `mmdbtype.Uint128.Equal` now returns false when either value is a nil
   `*Uint128`. Previously a nil argument caused a panic.
 - `mmdbtype.Float32.Equal` and `mmdbtype.Float64.Equal` now compare the wire

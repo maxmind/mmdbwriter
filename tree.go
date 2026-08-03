@@ -167,6 +167,16 @@ func New(opts Options) (*Tree, error) {
 		return nil, fmt.Errorf("unsupported IPVersion: %d", tree.ipVersion)
 	}
 
+	switch tree.recordSize {
+	case 24, 28, 32:
+	default:
+		return nil, fmt.Errorf("unsupported RecordSize: %d", tree.recordSize)
+	}
+
+	if tree.buildEpoch < 0 {
+		return nil, fmt.Errorf("BuildEpoch must not be negative: %d", tree.buildEpoch)
+	}
+
 	if tree.ipVersion == 6 && !opts.DisableIPv4Aliasing {
 		if err := tree.insertIPv4Aliases(); err != nil {
 			return nil, err
@@ -181,6 +191,17 @@ func New(opts Options) (*Tree, error) {
 	}
 
 	return tree, nil
+}
+
+// metadataDimension narrows a search tree dimension read from metadata. New
+// validates which values are supported; this only rejects one that is absent or
+// too large to represent, either of which would otherwise be indistinguishable
+// from an unset Option and silently replaced by a default.
+func metadataDimension(name string, value uint) (int, error) {
+	if value == 0 || value > math.MaxInt32 {
+		return 0, fmt.Errorf("unsupported %s in metadata: %d", name, value)
+	}
+	return int(value), nil
 }
 
 // Load loads an existing database into the writer. Source records that share a
@@ -203,13 +224,9 @@ func Load(path string, opts Options) (*Tree, error) {
 	}
 
 	if opts.IPVersion == 0 {
-		switch metadata.IPVersion {
-		case 4:
-			opts.IPVersion = 4
-		case 6:
-			opts.IPVersion = 6
-		default:
-			return nil, fmt.Errorf("unsupported IPVersion in metadata: %d", metadata.IPVersion)
+		opts.IPVersion, err = metadataDimension("ip_version", metadata.IPVersion)
+		if err != nil {
+			return nil, err
 		}
 	}
 
@@ -218,21 +235,15 @@ func Load(path string, opts Options) (*Tree, error) {
 	}
 
 	if opts.RecordSize == 0 {
-		switch metadata.RecordSize {
-		case 24:
-			opts.RecordSize = 24
-		case 28:
-			opts.RecordSize = 28
-		case 32:
-			opts.RecordSize = 32
-		default:
-			return nil, fmt.Errorf("unsupported RecordSize in metadata: %d", metadata.RecordSize)
+		opts.RecordSize, err = metadataDimension("record_size", metadata.RecordSize)
+		if err != nil {
+			return nil, err
 		}
 	}
 
 	tree, err := New(opts)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("creating tree for %s: %w", path, err)
 	}
 
 	unmarshaler := mmdbtype.NewUnmarshaler()

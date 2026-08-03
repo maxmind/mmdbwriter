@@ -8,6 +8,7 @@ import (
 	"math/big"
 	"net/netip"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -1864,7 +1865,7 @@ func TestLoadRejectsUnsupportedMetadataDimensions(t *testing.T) {
 		_, err := Load(path, Options{IncludeReservedNetworks: true})
 
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "unsupported IPVersion in metadata: 5")
+		assert.Contains(t, err.Error(), "unsupported IPVersion: 5")
 	})
 
 	t.Run("unsupported record size", func(t *testing.T) {
@@ -1873,7 +1874,16 @@ func TestLoadRejectsUnsupportedMetadataDimensions(t *testing.T) {
 		_, err := Load(path, Options{IncludeReservedNetworks: true})
 
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "unsupported RecordSize in metadata: 20")
+		assert.Contains(t, err.Error(), "unsupported RecordSize: 20")
+	})
+
+	t.Run("absent ip version", func(t *testing.T) {
+		path := writeMetadataPatchedDB(t, "ip_version", 0)
+
+		_, err := Load(path, Options{IncludeReservedNetworks: true})
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "unsupported ip_version in metadata: 0")
 	})
 
 	t.Run("explicit options bypass the metadata values", func(t *testing.T) {
@@ -1958,4 +1968,66 @@ func TestSignedZeroIsNeverSilentlyDropped(t *testing.T) {
 		_, value := tree.Get(netip.MustParseAddr("1.2.3.4"))
 		assert.True(t, math.Signbit(float64(value.(mmdbtype.Float64))))
 	})
+}
+
+// TestNewRejectsUnsupportedOptions covers the Options validation in New. An
+// unsupported record size previously reached serialization, where a negative
+// value panicked in make and other values failed only after bytes had already
+// been written.
+func TestNewRejectsUnsupportedOptions(t *testing.T) {
+	tests := []struct {
+		name    string
+		options Options
+		errText string
+	}{
+		{
+			name:    "record size below the supported range",
+			options: Options{RecordSize: 20},
+			errText: "unsupported RecordSize: 20",
+		},
+		{
+			name:    "record size between supported values",
+			options: Options{RecordSize: 30},
+			errText: "unsupported RecordSize: 30",
+		},
+		{
+			name:    "negative record size",
+			options: Options{RecordSize: -8},
+			errText: "unsupported RecordSize: -8",
+		},
+		{
+			name:    "negative build epoch",
+			options: Options{BuildEpoch: -1},
+			errText: "BuildEpoch must not be negative: -1",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			options := test.options
+			options.DatabaseType = "mmdbwriter-options"
+			options.Description = map[string]string{"en": "Test database"}
+
+			tree, err := New(options)
+
+			require.Error(t, err)
+			assert.Nil(t, tree)
+			assert.Contains(t, err.Error(), test.errText)
+		})
+	}
+}
+
+// TestNewAcceptsSupportedRecordSizes is the control for
+// TestNewRejectsUnsupportedOptions.
+func TestNewAcceptsSupportedRecordSizes(t *testing.T) {
+	for _, recordSize := range []int{24, 28, 32} {
+		t.Run(strconv.Itoa(recordSize), func(t *testing.T) {
+			_, err := New(Options{
+				DatabaseType: "mmdbwriter-options",
+				Description:  map[string]string{"en": "Test database"},
+				RecordSize:   recordSize,
+			})
+			require.NoError(t, err)
+		})
+	}
 }
