@@ -335,7 +335,7 @@ func (t *Tree) Insert(prefix netip.Prefix, value mmdbtype.DataType) error {
 //
 // The function is called separately for every covered record, as in v1. Any
 // non-nil value it returns becomes tree-owned and must not be modified after the
-// function returns.
+// function returns. A nil insertFunc returns an error.
 //
 // This is not safe to call from multiple threads.
 func (t *Tree) InsertFunc(
@@ -344,7 +344,7 @@ func (t *Tree) InsertFunc(
 	insertFunc inserter.Func,
 ) error {
 	if insertFunc == nil {
-		return errors.New("inserter function must not be nil")
+		return errNilInserterFunc
 	}
 	return t.insert(prefix, recordTypeData, insertFunc, false, noNodeIndex, value)
 }
@@ -352,7 +352,8 @@ func (t *Tree) InsertFunc(
 // InsertPureFunc is like InsertFunc, but the function's result and error must
 // depend only on its arguments. It must not depend on invocation count, order,
 // or external mutable state. Repeated argument pairs may be memoized during the
-// insert, and a non-nil result may be shared by multiple records.
+// insert, and a non-nil result may be shared by multiple records. A nil
+// insertFunc returns an error.
 //
 // This is not safe to call from multiple threads.
 func (t *Tree) InsertPureFunc(
@@ -361,7 +362,7 @@ func (t *Tree) InsertPureFunc(
 	insertFunc inserter.Func,
 ) error {
 	if insertFunc == nil {
-		return errors.New("inserter function must not be nil")
+		return errNilInserterFunc
 	}
 	return t.insert(prefix, recordTypeData, insertFunc, true, noNodeIndex, value)
 }
@@ -562,7 +563,8 @@ func (t *Tree) InsertRange(
 }
 
 // InsertRangeFunc is the same as InsertFunc, except it will insert all subnets
-// within the range of IPs specified by `[start,end]`.
+// within the range of IPs specified by `[start,end]`. A nil insertFunc returns
+// an error.
 func (t *Tree) InsertRangeFunc(
 	start netip.Addr,
 	end netip.Addr,
@@ -570,7 +572,7 @@ func (t *Tree) InsertRangeFunc(
 	insertFunc inserter.Func,
 ) error {
 	if insertFunc == nil {
-		return errors.New("inserter function must not be nil")
+		return errNilInserterFunc
 	}
 	return t.insertRange(start, end, recordTypeData, insertFunc, false, noNodeIndex, value)
 }
@@ -578,6 +580,7 @@ func (t *Tree) InsertRangeFunc(
 // InsertRangePureFunc is like InsertPureFunc, except it inserts all subnets
 // within the range of IPs specified by `[start,end]`. Repeated argument pairs
 // may be memoized across the entire range, not just within one of its subnets.
+// A nil insertFunc returns an error.
 func (t *Tree) InsertRangePureFunc(
 	start netip.Addr,
 	end netip.Addr,
@@ -585,7 +588,7 @@ func (t *Tree) InsertRangePureFunc(
 	insertFunc inserter.Func,
 ) error {
 	if insertFunc == nil {
-		return errors.New("inserter function must not be nil")
+		return errNilInserterFunc
 	}
 	return t.insertRange(start, end, recordTypeData, insertFunc, true, noNodeIndex, value)
 }

@@ -6,6 +6,11 @@ import (
 	"net/netip"
 )
 
+// errNilInserterFunc is returned by the insertion methods that take an inserter
+// function when that function is nil. A nil Options.Inserter is not an error;
+// it is equivalent to inserter.Replace.
+var errNilInserterFunc = errors.New("inserter function must not be nil")
+
 // AliasedNetworkError is returned when inserting a aliased network into
 // a Tree where DisableIPv4Aliasing in Options is false.
 type AliasedNetworkError struct {

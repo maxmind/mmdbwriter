@@ -306,25 +306,17 @@ func TestTreeRejectsNilInserterFunc(t *testing.T) {
 	end := netip.MustParseAddr("1.2.3.2")
 	value := mmdbtype.String("value")
 
-	require.EqualError(
-		t,
-		tree.InsertFunc(prefix, value, insertFunc),
-		"inserter function must not be nil",
-	)
-	require.EqualError(
-		t,
-		tree.InsertPureFunc(prefix, value, insertFunc),
-		"inserter function must not be nil",
-	)
-	require.EqualError(
+	require.ErrorIs(t, tree.InsertFunc(prefix, value, insertFunc), errNilInserterFunc)
+	require.ErrorIs(t, tree.InsertPureFunc(prefix, value, insertFunc), errNilInserterFunc)
+	require.ErrorIs(
 		t,
 		tree.InsertRangeFunc(start, end, value, insertFunc),
-		"inserter function must not be nil",
+		errNilInserterFunc,
 	)
-	require.EqualError(
+	require.ErrorIs(
 		t,
 		tree.InsertRangePureFunc(start, end, value, insertFunc),
-		"inserter function must not be nil",
+		errNilInserterFunc,
 	)
 }
 
