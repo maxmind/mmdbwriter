@@ -1,7 +1,6 @@
 package mmdbwriter
 
 import (
-	"math"
 	"reflect"
 	"unsafe"
 
@@ -122,9 +121,9 @@ func (dm *dataMap) storeByHash(v mmdbtype.DataType, dmHash dataMapHash) *dataMap
 }
 
 // wireDataEqual compares the data that will be written to the MMDB. Pointer
-// forms are normalized before comparison. The mmdbtype Equal methods are then
-// sufficient except for containers, which may hold floats, and floats, where
-// signed zero has different wire encodings despite comparing equal in Go.
+// forms are normalized before comparison, after which the mmdbtype Equal
+// methods are wire-exact. Containers are walked here rather than through
+// Map.Equal and Slice.Equal so that nested pointer forms are normalized too.
 func wireDataEqual(first, second mmdbtype.DataType) bool {
 	if first == nil || second == nil {
 		return first == nil && second == nil
@@ -136,12 +135,6 @@ func wireDataEqual(first, second mmdbtype.DataType) bool {
 		return false
 	}
 	switch first := first.(type) {
-	case mmdbtype.Float32:
-		second, ok := second.(mmdbtype.Float32)
-		return ok && math.Float32bits(float32(first)) == math.Float32bits(float32(second))
-	case mmdbtype.Float64:
-		second, ok := second.(mmdbtype.Float64)
-		return ok && math.Float64bits(float64(first)) == math.Float64bits(float64(second))
 	case mmdbtype.Map:
 		second, ok := second.(mmdbtype.Map)
 		if !ok || len(first) != len(second) {

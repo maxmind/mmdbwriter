@@ -53,6 +53,12 @@
   `ip_version` or `record_size` rather than using the value unchecked.
 - `mmdbtype.Uint128.Equal` now returns false when either value is a nil
   `*Uint128`. Previously a nil argument caused a panic.
+- `mmdbtype.Float32.Equal` and `mmdbtype.Float64.Equal` now compare the wire
+  encoding rather than the Go value. `+0.0` and `-0.0` are no longer equal, and
+  two NaNs with the same bit pattern now are. This makes equality agree with
+  deduplication, which is already exact. In v1 an inserted signed zero was kept
+  or discarded depending on whether an unrelated sibling key changed in the same
+  insertion; it is now always kept.
 
 ## 1.2.0 (2026-01-14)
 

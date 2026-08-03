@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"math"
 	"math/big"
 	"net/netip"
 	"os"
@@ -1885,5 +1886,76 @@ func TestLoadRejectsUnsupportedMetadataDimensions(t *testing.T) {
 		})
 
 		require.NoError(t, err)
+	})
+}
+
+// TestSignedZeroIsNeverSilentlyDropped pins that an inserted signed zero
+// replaces an existing one of the opposite sign. The two encodings differ on
+// the wire, so keeping the old value would silently discard the new sign. This
+// must not depend on whether an unrelated sibling key also changed.
+func TestSignedZeroIsNeverSilentlyDropped(t *testing.T) {
+	negativeZero := mmdbtype.Float64(math.Copysign(0, -1))
+
+	tests := []struct {
+		name     string
+		newValue mmdbtype.Map
+	}{
+		{
+			name: "only the signed zero changes",
+			newValue: mmdbtype.Map{
+				"zero":    negativeZero,
+				"sibling": mmdbtype.String("same"),
+			},
+		},
+		{
+			name: "the signed zero and a sibling change",
+			newValue: mmdbtype.Map{
+				"zero":    negativeZero,
+				"sibling": mmdbtype.String("changed"),
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			tree, err := New(Options{
+				DatabaseType:            "mmdbwriter-signed-zero",
+				Description:             map[string]string{"en": "Test database"},
+				IPVersion:               4,
+				RecordSize:              24,
+				IncludeReservedNetworks: true,
+			})
+			require.NoError(t, err)
+
+			prefix := netip.MustParsePrefix("1.0.0.0/8")
+			require.NoError(t, tree.Insert(prefix, mmdbtype.Map{
+				"zero":    mmdbtype.Float64(0),
+				"sibling": mmdbtype.String("same"),
+			}))
+			require.NoError(t, tree.InsertFunc(prefix, test.newValue, inserter.DeepMerge))
+
+			_, value := tree.Get(netip.MustParseAddr("1.2.3.4"))
+			stored := float64(value.(mmdbtype.Map)["zero"].(mmdbtype.Float64))
+			assert.True(t, math.Signbit(stored),
+				"the inserted negative zero was replaced by the existing positive zero")
+		})
+	}
+
+	t.Run("a plain insert also keeps the new sign", func(t *testing.T) {
+		tree, err := New(Options{
+			DatabaseType:            "mmdbwriter-signed-zero",
+			Description:             map[string]string{"en": "Test database"},
+			IPVersion:               4,
+			RecordSize:              24,
+			IncludeReservedNetworks: true,
+		})
+		require.NoError(t, err)
+
+		prefix := netip.MustParsePrefix("1.0.0.0/8")
+		require.NoError(t, tree.Insert(prefix, mmdbtype.Float64(0)))
+		require.NoError(t, tree.Insert(prefix, negativeZero))
+
+		_, value := tree.Get(netip.MustParseAddr("1.2.3.4"))
+		assert.True(t, math.Signbit(float64(value.(mmdbtype.Float64))))
 	})
 }

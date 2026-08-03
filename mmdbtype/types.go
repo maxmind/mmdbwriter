@@ -159,10 +159,12 @@ var _ DataType = (*Float32)(nil)
 // Copy the value.
 func (t Float32) Copy() DataType { return t }
 
-// Equal checks for equality.
+// Equal reports whether other is a Float32 with the same wire encoding.
+// Comparison is on the bit pattern rather than the Go value, so +0.0 and -0.0
+// are not equal and two identical NaNs are.
 func (t Float32) Equal(other DataType) bool {
 	otherT, ok := other.(Float32)
-	return ok && t == otherT
+	return ok && math.Float32bits(float32(t)) == math.Float32bits(float32(otherT))
 }
 
 func (t Float32) size() int {
@@ -209,10 +211,12 @@ var _ DataType = (*Float64)(nil)
 // Copy the value.
 func (t Float64) Copy() DataType { return t }
 
-// Equal checks for equality.
+// Equal reports whether other is a Float64 with the same wire encoding.
+// Comparison is on the bit pattern rather than the Go value, so +0.0 and -0.0
+// are not equal and two identical NaNs are.
 func (t Float64) Equal(other DataType) bool {
 	otherT, ok := other.(Float64)
-	return ok && t == otherT
+	return ok && math.Float64bits(float64(t)) == math.Float64bits(float64(otherT))
 }
 
 func (t Float64) size() int {

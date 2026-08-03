@@ -367,6 +367,24 @@ func TestEqual(t *testing.T) {
 			expect: false,
 		},
 		{
+			name:   "Float64 signed zeros are not equal",
+			a:      Float64(0),
+			b:      Float64(math.Copysign(0, -1)),
+			expect: false,
+		},
+		{
+			name:   "Float32 signed zeros are not equal",
+			a:      Float32(0),
+			b:      Float32(float32(math.Copysign(0, -1))),
+			expect: false,
+		},
+		{
+			name:   "Float64 identical NaNs are equal",
+			a:      Float64(math.NaN()),
+			b:      Float64(math.NaN()),
+			expect: true,
+		},
+		{
 			name:   "Int32 same",
 			a:      Int32(1),
 			b:      Int32(1),
