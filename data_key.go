@@ -11,6 +11,8 @@ import (
 	"github.com/maxmind/mmdbwriter/v2/mmdbtype"
 )
 
+// dataHashMix is the 64-bit golden ratio constant, used to decorrelate index
+// and length inputs before they are folded into a digest.
 const dataHashMix = uint64(0x9e3779b97f4a7c15)
 
 type dataHashKind byte
@@ -33,9 +35,13 @@ const (
 	dataHashKindEnd
 )
 
-// dataHasher hashes the typed structure of an MMDB value. Hash matches are
-// always followed by an exact comparison, so correctness does not depend on
-// collision resistance.
+// dataHasher hashes the typed structure of an MMDB value.
+//
+// Callers must confirm a hash match with an exact comparison, so correctness
+// does not depend on collision resistance. The converse is required and is what
+// makes the tree's pointer-equality record merging sound: any two values that
+// wireDataEqual reports as equal must hash identically. Keep this file in sync
+// with wireDataEqual, which is the comparison every caller uses.
 type dataHasher struct {
 	seed      maphash.Seed
 	typeSalts [dataHashKindEnd]uint64
@@ -144,6 +150,8 @@ func (h *dataHasher) hashSliceContents(value mmdbtype.Slice) (uint64, error) {
 	return hash, nil
 }
 
+// dataHashMix64 is the splitmix64 finalizer. It avalanches a single 64-bit word
+// so that inputs differing in one bit produce unrelated digests.
 func dataHashMix64(value uint64) uint64 {
 	value ^= value >> 30
 	value *= 0xbf58476d1ce4e5b9

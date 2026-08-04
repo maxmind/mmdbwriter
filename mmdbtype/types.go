@@ -47,7 +47,15 @@ type writer interface {
 // DataType represents a MaxMind DB data type.
 type DataType interface {
 	Copy() DataType
+
+	// Equal reports whether other encodes to the same bytes as the receiver. It
+	// is equality of the wire encoding, not of the Go value: an implementation
+	// must report false for values that differ in any encoded bit even when Go
+	// considers them equal, and true only when the two encode identically. The
+	// writer deduplicates records on this, so an implementation that is looser
+	// than the encoding will collapse records that should stay distinct.
 	Equal(DataType) bool
+
 	size() int
 	typeNum() typeNum
 	WriteTo(writer) (int64, error)

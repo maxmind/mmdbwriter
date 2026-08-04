@@ -7,6 +7,8 @@ import (
 	"github.com/maxmind/mmdbwriter/v2/mmdbtype"
 )
 
+// dataMapHash is a digest from a dataHasher. Values are only comparable within
+// a single dataHasher instance, because each one is independently seeded.
 type dataMapHash uint64
 
 type dataMapIdentityKind byte
@@ -124,6 +126,11 @@ func (dm *dataMap) storeByHash(v mmdbtype.DataType, dmHash dataMapHash) *dataMap
 // forms are normalized before comparison, after which the mmdbtype Equal
 // methods are wire-exact. Containers are walked here rather than through
 // Map.Equal and Slice.Equal so that nested pointer forms are normalized too.
+//
+// A value holding a nil typed pointer is reported unequal to everything,
+// including an identical nil. That would break the one-live-value-per-wire-value
+// invariant if such a value could be stored, but it cannot: hashValue rejects
+// nil pointers, so a store fails before reaching the dataMap.
 func wireDataEqual(first, second mmdbtype.DataType) bool {
 	if first == nil || second == nil {
 		return first == nil && second == nil
@@ -235,6 +242,11 @@ func (dm *dataMap) addRef(v *dataMapValue) {
 
 // remove removes a reference to the value. If the reference count
 // drops to zero, the value is removed from the dataMap.
+//
+// A nil value is ignored. Removing a reference that was never taken panics,
+// as does removing a value that is not in the bucket its hash names: both mean
+// the reference counting or the index is already corrupt, and continuing would
+// spread the damage silently.
 func (dm *dataMap) remove(v *dataMapValue) {
 	// This is here mostly so that we don't have to guard against it
 	// elsewhere.

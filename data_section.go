@@ -22,7 +22,13 @@ type dataOffset struct {
 type dataWriter struct {
 	*bytes.Buffer
 
-	dataMap     *dataMap
+	dataMap *dataMap
+	// offsets is keyed by hashes from dataMap.hasher. maybeWrite reuses the
+	// hash already stored on a dataMapValue while WriteOrWritePointer recomputes
+	// one, and both probe this map, so the two paths only share pointers because
+	// dataWriter borrows the dataMap's hasher rather than making its own. Giving
+	// dataWriter a separate hasher would compile and silently stop nested values
+	// from reusing top-level offsets.
 	offsets     map[dataMapHash]int
 	offsetArena []dataOffset
 	usePointers bool
