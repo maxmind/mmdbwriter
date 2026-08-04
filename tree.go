@@ -194,9 +194,10 @@ func New(opts Options) (*Tree, error) {
 }
 
 // metadataDimension narrows a search tree dimension read from metadata. New
-// validates which values are supported; this only rejects one that is absent or
-// too large to represent, either of which would otherwise be indistinguishable
-// from an unset Option and silently replaced by a default.
+// validates which values are supported; this rejects two cases it cannot see.
+// Zero is rejected because it is indistinguishable from an unset Option and
+// would be silently replaced by a default. Values above math.MaxInt32 are
+// rejected because the uint to int conversion is otherwise unchecked.
 func metadataDimension(name string, value uint) (int, error) {
 	if value == 0 || value > math.MaxInt32 {
 		return 0, fmt.Errorf("unsupported %s in metadata: %d", name, value)
@@ -333,7 +334,7 @@ func (t *Tree) Insert(prefix netip.Prefix, value mmdbtype.DataType) error {
 // require the record to be copied and there is a non-trivial performance
 // impact.
 //
-// The function is called separately for every covered record, as in v1. Any
+// The function is called separately for every covered record. Any
 // non-nil value it returns becomes tree-owned and must not be modified after the
 // function returns. A nil insertFunc returns an error.
 //

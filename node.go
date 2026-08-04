@@ -46,19 +46,21 @@ const (
 	nodeBlockSize           = 1024
 )
 
-// insertRecord carries the state for one insert call. Every field except ip and
-// prefixLen is fixed for the life of the value; insertPrepared re-targets those
-// two for each subnet of a range.
+// insertRecord carries the state for one insert call. Every field except ip,
+// prefixLen, and the memo fields is fixed for the life of the value;
+// insertPrepared re-targets ip and prefixLen for each subnet of a range, and
+// resolve updates the memo as it goes.
 //
 // The memo is only used for pure inserters. It is keyed on the existing value
 // alone, which is sound only because inserter and value are fixed: reusing an
 // insertRecord across inserts with a different value would return results
 // computed from the previous one.
 //
-// The memo holds one dataMap reference per entry, released by releaseResolved,
-// which every caller must defer. memoFirst and memoResult hold the single entry
-// until a second distinct key promotes both into memo; from that point they are
-// stale, so readers must check memo first.
+// The memo holds one dataMap reference per non-nil result, released by
+// releaseResolved, which every caller must defer. Entries for a nil result hold
+// no reference. memoFirst and memoResult hold the single entry until a second
+// distinct key promotes both into memo; from that point they are stale, so
+// readers must check memo first.
 type insertRecord struct {
 	inserter func(existingValue, newValue mmdbtype.DataType) (mmdbtype.DataType, error)
 
@@ -111,8 +113,10 @@ func (iRec *insertRecord) resolve(existing *dataMapValue) (*dataMapValue, bool, 
 		return nil, false, nil
 	}
 
-	// Preserve the existing InsertFunc behavior for semantically equal values,
-	// including floating-point signed zero.
+	// Keep the existing value when the result is equal to it, mirroring the
+	// direct-value path in insertRecord. Equal is wire-exact, so values that
+	// differ only in a float sign bit or NaN payload are not equal here and the
+	// new value replaces the old one.
 	if existingData != nil && existingData.Equal(result) {
 		if iRec.inserterPure {
 			iRec.dataMap.addRef(existing)

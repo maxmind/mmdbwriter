@@ -1638,10 +1638,11 @@ func s2ip(v string) *any {
 	return &i
 }
 
-// TestInsertPureFuncEqualResultKeepsReference pins the branch where a pure
-// inserter returns a value semantically equal to the existing one. The memo
-// must take its own reference; otherwise releaseResolved drops the record's
-// reference and unlinks a value that a record still points at.
+// TestInsertPureFuncEqualResultKeepsReference pins the addRef inside the branch
+// where a pure inserter returns a value equal to the existing one. Without it,
+// releaseResolved drops the record's own reference and unlinks a value a record
+// still points at. It does not pin the branch itself: falling through to
+// dataMap.store instead is behaviorally equivalent.
 func TestInsertPureFuncEqualResultKeepsReference(t *testing.T) {
 	tree, err := New(Options{
 		DatabaseType:            "mmdbwriter-pure-equal",

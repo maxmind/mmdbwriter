@@ -15,8 +15,9 @@ import (
 	"github.com/maxmind/mmdbwriter/v2/mmdbtype"
 )
 
-// keyWriter is the serialized SHA-256 implementation used by main before this
-// change. It remains here as a benchmark baseline for the structural hasher.
+// keyWriter is the serialized SHA-256 implementation used in v1. It remains
+// here as a benchmark baseline for the structural hasher, and can be deleted
+// once that comparison stops being interesting.
 type keyWriter struct {
 	*bytes.Buffer
 

@@ -82,12 +82,6 @@ func (dw *dataWriter) WriteOrWritePointer(t mmdbtype.DataType) (int64, error) {
 		return written.pointer.WriteTo(dw)
 	}
 
-	// TODO: A possible optimization here for simple types would be to just
-	// write the type to the dataWriter's buffer from a compact representation.
-	// This is less straightforward for Map and Slice as they may contain
-	// internal pointers.
-	// I briefly tested this and didn't see much difference, but it might
-	// be worth exploring more.
 	offset := dw.Len()
 	size, err := t.WriteTo(dw)
 	if err != nil || ok {

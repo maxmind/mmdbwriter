@@ -60,8 +60,6 @@ func TestMaybeMergeChildrenKeepsCollidingDistinctValues(t *testing.T) {
 		recordType: recordTypeNode,
 	}
 
-	// Constructed directly rather than through a helper so this test compiles
-	// against the commit that introduces the pointer-identity comparison.
 	iRec := insertRecord{dataMap: tree.dataMap, tree: tree}
 	require.NoError(t, iRec.maybeMergeChildren(&parent))
 
@@ -92,8 +90,6 @@ func TestMaybeMergeChildrenMergesIdenticalValues(t *testing.T) {
 		recordType: recordTypeNode,
 	}
 
-	// Constructed directly rather than through a helper so this test compiles
-	// against the commit that introduces the pointer-identity comparison.
 	iRec := insertRecord{dataMap: tree.dataMap, tree: tree}
 	require.NoError(t, iRec.maybeMergeChildren(&parent))
 
