@@ -35,64 +35,57 @@ func TestFinalizeNodeRejectsCompressedPath(t *testing.T) {
 	})
 }
 
-// TestMaybeMergeChildrenKeepsCollidingDistinctValues pins the pointer-identity
-// merge test. Sibling data records whose values collide in the hash but differ
-// in content must not be merged.
-func TestMaybeMergeChildrenKeepsCollidingDistinctValues(t *testing.T) {
-	tree, err := New(Options{
-		DatabaseType:            "mmdbwriter-merge",
-		Description:             map[string]string{"en": "Test database"},
-		IPVersion:               4,
-		RecordSize:              24,
-		IncludeReservedNetworks: true,
-	})
-	require.NoError(t, err)
-
-	first := tree.dataMap.storeByHash(mmdbtype.String("first"), 1)
-	second := tree.dataMap.storeByHash(mmdbtype.String("second"), 1)
-	require.NotSame(t, first, second)
-
-	parent := record{
-		nodeIndex: tree.newNode([2]record{
-			{value: first, recordType: recordTypeData},
-			{value: second, recordType: recordTypeData},
-		}),
-		recordType: recordTypeNode,
+// TestMaybeMergeChildren covers the pointer-identity merge test. Sibling data
+// records merge only when they hold the same value; colliding but distinct
+// values must be left alone.
+func TestMaybeMergeChildren(t *testing.T) {
+	tests := []struct {
+		name      string
+		sameValue bool
+		want      recordType
+	}{
+		{
+			name:      "colliding distinct values are not merged",
+			sameValue: false,
+			want:      recordTypeNode,
+		},
+		{
+			name:      "identical values are merged",
+			sameValue: true,
+			want:      recordTypeData,
+		},
 	}
 
-	iRec := insertRecord{dataMap: tree.dataMap, tree: tree}
-	require.NoError(t, iRec.maybeMergeChildren(&parent))
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			tree := newTestTree(t, "mmdbwriter-merge")
 
-	assert.Equal(t, recordTypeNode, parent.recordType,
-		"records holding different colliding values were merged")
-}
+			// Both values share a bucket, so only the exact comparison can
+			// tell them apart.
+			first := tree.dataMap.storeByHash(mmdbtype.String("first"), 1)
+			second := first
+			if test.sameValue {
+				tree.dataMap.addRef(first)
+			} else {
+				second = tree.dataMap.storeByHash(mmdbtype.String("second"), 1)
+				require.NotSame(t, first, second)
+			}
 
-// TestMaybeMergeChildrenMergesIdenticalValues is the control for
-// TestMaybeMergeChildrenKeepsCollidingDistinctValues.
-func TestMaybeMergeChildrenMergesIdenticalValues(t *testing.T) {
-	tree, err := New(Options{
-		DatabaseType:            "mmdbwriter-merge",
-		Description:             map[string]string{"en": "Test database"},
-		IPVersion:               4,
-		RecordSize:              24,
-		IncludeReservedNetworks: true,
-	})
-	require.NoError(t, err)
+			parent := record{
+				nodeIndex: tree.newNode([2]record{
+					{value: first, recordType: recordTypeData},
+					{value: second, recordType: recordTypeData},
+				}),
+				recordType: recordTypeNode,
+			}
 
-	shared := tree.dataMap.storeByHash(mmdbtype.String("shared"), 1)
-	tree.dataMap.addRef(shared)
+			iRec := insertRecord{dataMap: tree.dataMap, tree: tree}
+			require.NoError(t, iRec.maybeMergeChildren(&parent))
 
-	parent := record{
-		nodeIndex: tree.newNode([2]record{
-			{value: shared, recordType: recordTypeData},
-			{value: shared, recordType: recordTypeData},
-		}),
-		recordType: recordTypeNode,
+			assert.Equal(t, test.want, parent.recordType)
+			if test.want == recordTypeData {
+				assert.Same(t, first, parent.value)
+			}
+		})
 	}
-
-	iRec := insertRecord{dataMap: tree.dataMap, tree: tree}
-	require.NoError(t, iRec.maybeMergeChildren(&parent))
-
-	assert.Equal(t, recordTypeData, parent.recordType)
-	assert.Same(t, shared, parent.value)
 }

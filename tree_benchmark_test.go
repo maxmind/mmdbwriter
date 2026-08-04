@@ -86,6 +86,7 @@ func BenchmarkTreeInsertDeepMergeFragmentedNetwork(b *testing.B) {
 	}
 	b.ReportMetric(networkCount, "records/op")
 	b.ReportAllocs()
+	b.ResetTimer()
 
 	for range b.N {
 		b.StopTimer()

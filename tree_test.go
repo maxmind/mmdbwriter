@@ -118,8 +118,8 @@ func TestTreeNodeBlocksGrowAndWrite(t *testing.T) {
 	require.Greater(t, len(tree.nodeBlocks), 1)
 
 	var buf bytes.Buffer
-	_, err = tree.WriteTo(&buf)
-	require.NoError(t, err)
+	_, writeErr := tree.WriteTo(&buf)
+	require.NoError(t, writeErr)
 
 	reader, err := maxminddb.OpenBytes(buf.Bytes())
 	require.NoError(t, err)
@@ -832,8 +832,8 @@ func TestLoadDecodeErrorIncludesNetwork(t *testing.T) {
 	require.NoError(t, tree.Insert(prefix, mmdbtype.String("value")))
 
 	var buf bytes.Buffer
-	_, err = tree.WriteTo(&buf)
-	require.NoError(t, err)
+	_, writeErr := tree.WriteTo(&buf)
+	require.NoError(t, writeErr)
 
 	dbBytes := append([]byte(nil), buf.Bytes()...)
 	nodeSize := 2 * tree.recordSize / 8
@@ -1654,14 +1654,7 @@ func s2ip(v string) *any {
 // still points at. It does not pin the branch itself: falling through to
 // dataMap.store instead is behaviorally equivalent.
 func TestInsertPureFuncEqualResultKeepsReference(t *testing.T) {
-	tree, err := New(Options{
-		DatabaseType:            "mmdbwriter-pure-equal",
-		Description:             map[string]string{"en": "Test database"},
-		IPVersion:               4,
-		RecordSize:              24,
-		IncludeReservedNetworks: true,
-	})
-	require.NoError(t, err)
+	tree := newTestTree(t, "mmdbwriter-pure-equal")
 
 	prefix := netip.MustParsePrefix("1.0.0.0/8")
 	require.NoError(t, tree.Insert(prefix, mmdbtype.String("value")))
@@ -1691,14 +1684,7 @@ func TestInsertPureFuncEqualResultKeepsReference(t *testing.T) {
 // value, but which deduplicates back onto that same value once stored. The
 // reference the store took must be released.
 func TestInsertFuncReleasesRedundantStoredReference(t *testing.T) {
-	tree, err := New(Options{
-		DatabaseType:            "mmdbwriter-owned-release",
-		Description:             map[string]string{"en": "Test database"},
-		IPVersion:               4,
-		RecordSize:              24,
-		IncludeReservedNetworks: true,
-	})
-	require.NoError(t, err)
+	tree := newTestTree(t, "mmdbwriter-owned-release")
 
 	prefix := netip.MustParsePrefix("1.0.0.0/8")
 	require.NoError(t, tree.Insert(prefix, mmdbtype.String("shared")))
@@ -1758,8 +1744,8 @@ func TestInsertPureFuncMatchesInsertFuncOutput(t *testing.T) {
 		}
 
 		var buf bytes.Buffer
-		_, err = tree.WriteTo(&buf)
-		require.NoError(t, err)
+		_, writeErr := tree.WriteTo(&buf)
+		require.NoError(t, writeErr)
 		return buf.Bytes()
 	}
 
@@ -1769,14 +1755,7 @@ func TestInsertPureFuncMatchesInsertFuncOutput(t *testing.T) {
 // TestInsertPureFuncNilResultRemovesRecords covers a memoized nil result, which
 // is the common outcome for inserter.Remove.
 func TestInsertPureFuncNilResultRemovesRecords(t *testing.T) {
-	tree, err := New(Options{
-		DatabaseType:            "mmdbwriter-pure-nil",
-		Description:             map[string]string{"en": "Test database"},
-		IPVersion:               4,
-		RecordSize:              24,
-		IncludeReservedNetworks: true,
-	})
-	require.NoError(t, err)
+	tree := newTestTree(t, "mmdbwriter-pure-nil")
 
 	for i := range 4 {
 		require.NoError(t, tree.Insert(
@@ -1798,14 +1777,7 @@ func TestInsertPureFuncNilResultRemovesRecords(t *testing.T) {
 // TestInsertPureFuncCreatesPathFromEmptySpace covers the compressed-path branch
 // a pure inserter takes when nothing covers the network yet.
 func TestInsertPureFuncCreatesPathFromEmptySpace(t *testing.T) {
-	tree, err := New(Options{
-		DatabaseType:            "mmdbwriter-pure-empty",
-		Description:             map[string]string{"en": "Test database"},
-		IPVersion:               4,
-		RecordSize:              24,
-		IncludeReservedNetworks: true,
-	})
-	require.NoError(t, err)
+	tree := newTestTree(t, "mmdbwriter-pure-empty")
 
 	prefix := netip.MustParsePrefix("9.9.9.0/24")
 	require.NoError(t, tree.InsertPureFunc(
@@ -1816,8 +1788,8 @@ func TestInsertPureFuncCreatesPathFromEmptySpace(t *testing.T) {
 	assert.Equal(t, mmdbtype.String("value"), value)
 
 	var buf bytes.Buffer
-	_, err = tree.WriteTo(&buf)
-	require.NoError(t, err)
+	_, writeErr := tree.WriteTo(&buf)
+	require.NoError(t, writeErr)
 	assert.NotZero(t, buf.Len())
 }
 
@@ -1828,22 +1800,15 @@ func TestInsertPureFuncCreatesPathFromEmptySpace(t *testing.T) {
 func writeMetadataPatchedDB(t *testing.T, key string, value byte) string {
 	t.Helper()
 
-	tree, err := New(Options{
-		DatabaseType:            "mmdbwriter-metadata",
-		Description:             map[string]string{"en": "Test database"},
-		IPVersion:               4,
-		RecordSize:              24,
-		IncludeReservedNetworks: true,
-	})
-	require.NoError(t, err)
+	tree := newTestTree(t, "mmdbwriter-metadata")
 	require.NoError(t, tree.Insert(
 		netip.MustParsePrefix("1.2.3.0/24"),
 		mmdbtype.String("value"),
 	))
 
 	var buf bytes.Buffer
-	_, err = tree.WriteTo(&buf)
-	require.NoError(t, err)
+	_, writeErr := tree.WriteTo(&buf)
+	require.NoError(t, writeErr)
 
 	dbBytes := append([]byte(nil), buf.Bytes()...)
 	i := bytes.LastIndex(dbBytes, []byte(key))
@@ -1944,14 +1909,7 @@ func TestSignedZeroIsNeverSilentlyDropped(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			tree, err := New(Options{
-				DatabaseType:            "mmdbwriter-signed-zero",
-				Description:             map[string]string{"en": "Test database"},
-				IPVersion:               4,
-				RecordSize:              24,
-				IncludeReservedNetworks: true,
-			})
-			require.NoError(t, err)
+			tree := newTestTree(t, "mmdbwriter-signed-zero")
 
 			prefix := netip.MustParsePrefix("1.0.0.0/8")
 			require.NoError(t, tree.Insert(prefix, mmdbtype.Map{
@@ -1968,22 +1926,15 @@ func TestSignedZeroIsNeverSilentlyDropped(t *testing.T) {
 	}
 
 	t.Run("the sign survives encoding and a reader", func(t *testing.T) {
-		tree, err := New(Options{
-			DatabaseType:            "mmdbwriter-signed-zero",
-			Description:             map[string]string{"en": "Test database"},
-			IPVersion:               4,
-			RecordSize:              24,
-			IncludeReservedNetworks: true,
-		})
-		require.NoError(t, err)
+		tree := newTestTree(t, "mmdbwriter-signed-zero")
 
 		prefix := netip.MustParsePrefix("1.0.0.0/8")
 		require.NoError(t, tree.Insert(prefix, mmdbtype.Float64(0)))
 		require.NoError(t, tree.Insert(prefix, negativeZero))
 
 		var buf bytes.Buffer
-		_, err = tree.WriteTo(&buf)
-		require.NoError(t, err)
+		_, writeErr := tree.WriteTo(&buf)
+		require.NoError(t, writeErr)
 
 		reader, err := maxminddb.OpenBytes(buf.Bytes())
 		require.NoError(t, err)
@@ -1996,14 +1947,7 @@ func TestSignedZeroIsNeverSilentlyDropped(t *testing.T) {
 	})
 
 	t.Run("a plain insert also keeps the new sign", func(t *testing.T) {
-		tree, err := New(Options{
-			DatabaseType:            "mmdbwriter-signed-zero",
-			Description:             map[string]string{"en": "Test database"},
-			IPVersion:               4,
-			RecordSize:              24,
-			IncludeReservedNetworks: true,
-		})
-		require.NoError(t, err)
+		tree := newTestTree(t, "mmdbwriter-signed-zero")
 
 		prefix := netip.MustParsePrefix("1.0.0.0/8")
 		require.NoError(t, tree.Insert(prefix, mmdbtype.Float64(0)))
@@ -2080,14 +2024,7 @@ func TestNewAcceptsSupportedRecordSizes(t *testing.T) {
 // inserter path has its own removal implementation in replaceDataRecord, so
 // this one is only reached by a plain Insert of a nil value.
 func TestInsertNilValueRemovesRecord(t *testing.T) {
-	tree, err := New(Options{
-		DatabaseType:            "mmdbwriter-insert-nil",
-		Description:             map[string]string{"en": "Test database"},
-		IPVersion:               4,
-		RecordSize:              24,
-		IncludeReservedNetworks: true,
-	})
-	require.NoError(t, err)
+	tree := newTestTree(t, "mmdbwriter-insert-nil")
 
 	prefix := netip.MustParsePrefix("1.0.0.0/8")
 	require.NoError(t, tree.Insert(prefix, mmdbtype.String("value")))
@@ -2143,14 +2080,7 @@ func TestInserterNilResultOverEmptySpaceIsNoOp(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			tree, err := New(Options{
-				DatabaseType:            "mmdbwriter-empty-space",
-				Description:             map[string]string{"en": "Test database"},
-				IPVersion:               4,
-				RecordSize:              24,
-				IncludeReservedNetworks: true,
-			})
-			require.NoError(t, err)
+			tree := newTestTree(t, "mmdbwriter-empty-space")
 
 			require.NoError(t, test.insert(tree))
 
@@ -2159,8 +2089,8 @@ func TestInserterNilResultOverEmptySpaceIsNoOp(t *testing.T) {
 			assert.Empty(t, tree.dataMap.data)
 
 			var buf bytes.Buffer
-			_, err = tree.WriteTo(&buf)
-			require.NoError(t, err, "the tree could not be written")
+			_, writeErr := tree.WriteTo(&buf)
+			require.NoError(t, writeErr, "the tree could not be written")
 		})
 	}
 }
@@ -2168,16 +2098,9 @@ func TestInserterNilResultOverEmptySpaceIsNoOp(t *testing.T) {
 // TestInsertReportsHashErrorFromIdentityPath covers the hash failure returned
 // through storeWithIdentity, which is the path a plain Insert takes.
 func TestInsertReportsHashErrorFromIdentityPath(t *testing.T) {
-	tree, err := New(Options{
-		DatabaseType:            "mmdbwriter-identity-error",
-		Description:             map[string]string{"en": "Test database"},
-		IPVersion:               4,
-		RecordSize:              24,
-		IncludeReservedNetworks: true,
-	})
-	require.NoError(t, err)
+	tree := newTestTree(t, "mmdbwriter-identity-error")
 
-	err = tree.Insert(
+	err := tree.Insert(
 		netip.MustParsePrefix("1.0.0.0/8"),
 		mmdbtype.Map{"u": (*mmdbtype.Uint128)(nil)},
 	)
@@ -2189,4 +2112,20 @@ func TestInsertReportsHashErrorFromIdentityPath(t *testing.T) {
 	// lookup and must not leave anything cached.
 	assert.Empty(t, tree.dataMap.valueByDataIdentity)
 	assert.Empty(t, tree.dataMap.data)
+}
+
+// newTestTree builds the tree shape most tests want. Tests that depend on a
+// particular option set it explicitly instead.
+func newTestTree(t *testing.T, databaseType string) *Tree {
+	t.Helper()
+
+	tree, err := New(Options{
+		DatabaseType:            databaseType,
+		Description:             map[string]string{"en": "Test database"},
+		IPVersion:               4,
+		RecordSize:              24,
+		IncludeReservedNetworks: true,
+	})
+	require.NoError(t, err)
+	return tree
 }

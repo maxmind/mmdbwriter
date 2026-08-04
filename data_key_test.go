@@ -152,19 +152,40 @@ func TestDataHasherSeedsEveryValueKind(t *testing.T) {
 
 func TestDataHasherSeparatesPreviouslyCollidingScalars(t *testing.T) {
 	tests := []struct {
+		name   string
 		first  mmdbtype.DataType
 		second mmdbtype.DataType
 	}{
-		{mmdbtype.Uint16(1000), mmdbtype.Uint32(1001)},
-		{mmdbtype.Uint32(1), mmdbtype.Uint64(6)},
+		{
+			name:   "uint16 and uint32",
+			first:  mmdbtype.Uint16(1000),
+			second: mmdbtype.Uint32(1001),
+		},
+		{
+			name:   "uint32 and uint64",
+			first:  mmdbtype.Uint32(1),
+			second: mmdbtype.Uint64(6),
+		},
+		{
+			// Bytes and String hash the same pre-salt bytes, so this pair
+			// depends entirely on the per-type salts.
+			name:   "bytes and string",
+			first:  mmdbtype.Bytes("x"),
+			second: mmdbtype.String("x"),
+		},
 	}
-	hasher := newDataHasher()
+
 	for _, test := range tests {
-		firstHash, err := hasher.Hash(test.first)
-		require.NoError(t, err)
-		secondHash, err := hasher.Hash(test.second)
-		require.NoError(t, err)
-		assert.NotEqual(t, firstHash, secondHash)
+		t.Run(test.name, func(t *testing.T) {
+			hasher := newDataHasher()
+
+			firstHash, err := hasher.Hash(test.first)
+			require.NoError(t, err)
+			secondHash, err := hasher.Hash(test.second)
+			require.NoError(t, err)
+
+			assert.NotEqual(t, firstHash, secondHash)
+		})
 	}
 }
 

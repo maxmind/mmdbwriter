@@ -222,15 +222,46 @@ func TestDataMapResolvesHashCollisionsByExactValue(t *testing.T) {
 	assert.Same(t, firstValue, dm.data[1])
 }
 
-func TestDataMapRemovesNonHeadCollisionEntry(t *testing.T) {
-	dm := newDataMap()
-	firstValue := dm.storeByHash(mmdbtype.String("first"), 1)
-	secondValue := dm.storeByHash(mmdbtype.String("second"), 1)
+// TestDataMapRemovesCollisionEntry unlinks an entry from every position in a
+// bucket chain. The middle case is the one with a tail to preserve.
+func TestDataMapRemovesCollisionEntry(t *testing.T) {
+	tests := []struct {
+		name   string
+		remove int
+	}{
+		{name: "head of the chain", remove: 2},
+		{name: "middle of the chain", remove: 1},
+		{name: "tail of the chain", remove: 0},
+	}
 
-	dm.remove(firstValue)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			dm := newDataMap()
 
-	assert.Same(t, secondValue, dm.data[1])
-	assert.Nil(t, secondValue.next)
+			// Entries are prepended, so stored[2] is the head of the chain.
+			stored := []*dataMapValue{
+				dm.storeByHash(mmdbtype.String("first"), 1),
+				dm.storeByHash(mmdbtype.String("middle"), 1),
+				dm.storeByHash(mmdbtype.String("last"), 1),
+			}
+			require.Same(t, stored[2], dm.data[1])
+
+			dm.remove(stored[test.remove])
+
+			var chain []*dataMapValue
+			for value := dm.data[1]; value != nil; value = value.next {
+				chain = append(chain, value)
+			}
+
+			var want []*dataMapValue
+			for index := 2; index >= 0; index-- {
+				if index != test.remove {
+					want = append(want, stored[index])
+				}
+			}
+			assert.Equal(t, want, chain, "the chain lost or reordered entries")
+		})
+	}
 }
 
 func TestDataMapRejectsReferenceCountUnderflow(t *testing.T) {
@@ -246,14 +277,33 @@ func TestDataMapRejectsReferenceCountUnderflow(t *testing.T) {
 }
 
 func TestDataMapCollisionComparisonPreservesFloatEncoding(t *testing.T) {
-	dm := newDataMap()
-	positiveZero := mmdbtype.Map{"value": mmdbtype.Float64(0)}
-	negativeZero := mmdbtype.Map{"value": mmdbtype.Float64(math.Copysign(0, -1))}
+	tests := []struct {
+		name     string
+		positive mmdbtype.DataType
+		negative mmdbtype.DataType
+	}{
+		{
+			name:     "float64",
+			positive: mmdbtype.Float64(0),
+			negative: mmdbtype.Float64(math.Copysign(0, -1)),
+		},
+		{
+			name:     "float32",
+			positive: mmdbtype.Float32(0),
+			negative: mmdbtype.Float32(float32(math.Copysign(0, -1))),
+		},
+	}
 
-	positiveValue := dm.storeByHash(positiveZero, 1)
-	negativeValue := dm.storeByHash(negativeZero, 1)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			dm := newDataMap()
 
-	assert.NotSame(t, positiveValue, negativeValue)
+			positiveValue := dm.storeByHash(mmdbtype.Map{"value": test.positive}, 1)
+			negativeValue := dm.storeByHash(mmdbtype.Map{"value": test.negative}, 1)
+
+			assert.NotSame(t, positiveValue, negativeValue)
+		})
+	}
 }
 
 // TestWireDataEqualRejectsUnequalValues covers the negative branches of the
@@ -345,38 +395,6 @@ func TestWireDataEqualAcceptsEqualValues(t *testing.T) {
 // TestDataMapCollisionComparisonPreservesFloat32Encoding is the Float32 twin of
 // TestDataMapCollisionComparisonPreservesFloatEncoding. Go treats the two zeros
 // as equal, but they have different wire encodings.
-func TestDataMapCollisionComparisonPreservesFloat32Encoding(t *testing.T) {
-	dm := newDataMap()
-	positiveZero := mmdbtype.Map{"value": mmdbtype.Float32(0)}
-	negativeZero := mmdbtype.Map{
-		"value": mmdbtype.Float32(float32(math.Copysign(0, -1))),
-	}
-
-	positiveValue := dm.storeByHash(positiveZero, 1)
-	negativeValue := dm.storeByHash(negativeZero, 1)
-
-	assert.NotSame(t, positiveValue, negativeValue)
-}
-
-// TestDataMapRemovesMiddleCollisionEntry removes an entry with entries on both
-// sides of it, so the unlink has a tail it must preserve.
-func TestDataMapRemovesMiddleCollisionEntry(t *testing.T) {
-	dm := newDataMap()
-	first := dm.storeByHash(mmdbtype.String("first"), 1)
-	middle := dm.storeByHash(mmdbtype.String("middle"), 1)
-	last := dm.storeByHash(mmdbtype.String("last"), 1)
-
-	// Entries are prepended, so the chain is last -> middle -> first.
-	require.Same(t, last, dm.data[1])
-	require.Same(t, middle, last.next)
-
-	dm.remove(middle)
-
-	assert.Same(t, last, dm.data[1])
-	assert.Same(t, first, last.next, "the entries after the removed one were lost")
-	assert.Nil(t, first.next)
-}
-
 // TestDataMapIgnoresStaleIdentityForReleasedValue covers the reference count
 // guard on the identity fast path. A cached identity may outlive the value it
 // points at, and a released value must never be resurrected.
