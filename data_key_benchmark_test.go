@@ -1,10 +1,6 @@
 package mmdbwriter
 
 import (
-	"bytes"
-	"crypto/sha256"
-	"fmt"
-	"hash"
 	"io"
 	"maps"
 	"net/netip"
@@ -15,62 +11,16 @@ import (
 	"github.com/maxmind/mmdbwriter/v2/mmdbtype"
 )
 
-// keyWriter is the serialized SHA-256 implementation used in v1. It remains
-// here as a benchmark baseline for the structural hasher, and can be deleted
-// once that comparison stops being interesting.
-type keyWriter struct {
-	*bytes.Buffer
-
-	sha256 hash.Hash
-	key    [sha256.Size]byte
-}
-
-func newKeyWriter() *keyWriter {
-	return &keyWriter{Buffer: &bytes.Buffer{}, sha256: sha256.New()}
-}
-
-func (kw *keyWriter) Key(value mmdbtype.DataType) error {
-	kw.Truncate(0)
-	kw.sha256.Reset()
-	_, err := value.WriteTo(kw)
-	if err != nil {
-		return err
-	}
-	if _, err := kw.WriteTo(kw.sha256); err != nil {
-		return fmt.Errorf("writing key to writer: %w", err)
-	}
-	kw.sha256.Sum(kw.key[:0])
-	return nil
-}
-
-func (kw *keyWriter) WriteOrWritePointerString(value mmdbtype.String) (int64, error) {
-	return value.WriteTo(kw)
-}
-
-func (kw *keyWriter) WriteOrWritePointer(value mmdbtype.DataType) (int64, error) {
-	return value.WriteTo(kw)
-}
-
 func BenchmarkDataHasherEnterpriseValue(b *testing.B) {
 	value := benchmarkEnterpriseValue()
-	b.Run("sha256", func(b *testing.B) {
-		writer := newKeyWriter()
-		b.ReportAllocs()
-		for range b.N {
-			if err := writer.Key(value); err != nil {
-				b.Fatal(err)
-			}
+	hasher := newDataHasher()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		if _, err := hasher.Hash(value); err != nil {
+			b.Fatal(err)
 		}
-	})
-	b.Run("structural", func(b *testing.B) {
-		hasher := newDataHasher()
-		b.ReportAllocs()
-		for range b.N {
-			if _, err := hasher.Hash(value); err != nil {
-				b.Fatal(err)
-			}
-		}
-	})
+	}
 }
 
 func BenchmarkDataHasherEnterpriseDeepCopies(b *testing.B) {
@@ -80,24 +30,14 @@ func BenchmarkDataHasherEnterpriseDeepCopies(b *testing.B) {
 	for index := range values {
 		values[index] = value.Copy()
 	}
-	b.Run("sha256", func(b *testing.B) {
-		writer := newKeyWriter()
-		b.ReportAllocs()
-		for index := range b.N {
-			if err := writer.Key(values[index%len(values)]); err != nil {
-				b.Fatal(err)
-			}
+	hasher := newDataHasher()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for index := range b.N {
+		if _, err := hasher.Hash(values[index%len(values)]); err != nil {
+			b.Fatal(err)
 		}
-	})
-	b.Run("structural", func(b *testing.B) {
-		hasher := newDataHasher()
-		b.ReportAllocs()
-		for index := range b.N {
-			if _, err := hasher.Hash(values[index%len(values)]); err != nil {
-				b.Fatal(err)
-			}
-		}
-	})
+	}
 }
 
 func BenchmarkEnterpriseKeyPipeline(b *testing.B) {
