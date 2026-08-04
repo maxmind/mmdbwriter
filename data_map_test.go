@@ -404,3 +404,21 @@ func TestDataMapIgnoresStaleIdentityForReleasedValue(t *testing.T) {
 		"a released value was resurrected from the identity cache")
 	assert.NotZero(t, second.refCount)
 }
+
+// TestDataMapRejectsValueMissingFromItsBucket pins the twin of the reference
+// count assertion. A value whose hash no longer names its bucket means the
+// index is corrupt; unlinking blind would sever the chain and orphan every
+// entry behind it.
+func TestDataMapRejectsValueMissingFromItsBucket(t *testing.T) {
+	dm := newDataMap()
+	value := dm.storeByHash(mmdbtype.String("value"), 1)
+
+	// Simulate a corrupt index by pointing the value at an empty bucket.
+	value.hash = 2
+
+	assert.PanicsWithValue(
+		t,
+		"mmdbwriter: dataMap.remove called on a value missing from its bucket",
+		func() { dm.remove(value) },
+	)
+}

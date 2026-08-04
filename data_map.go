@@ -259,6 +259,7 @@ func (dm *dataMap) remove(v *dataMapValue) {
 	v.refCount--
 
 	if v.refCount == 0 {
+		unlinked := false
 		var previous *dataMapValue
 		for current := dm.data[v.hash]; current != nil; current = current.next {
 			if current != v {
@@ -273,7 +274,12 @@ func (dm *dataMap) remove(v *dataMapValue) {
 			if dm.data[v.hash] == nil {
 				delete(dm.data, v.hash)
 			}
+			v.next = nil
+			unlinked = true
 			break
+		}
+		if !unlinked {
+			panic("mmdbwriter: dataMap.remove called on a value missing from its bucket")
 		}
 		if dm.valueByDataIdentity != nil {
 			if identity, ok := keyIdentity(v.data); ok {
@@ -282,6 +288,5 @@ func (dm *dataMap) remove(v *dataMapValue) {
 				}
 			}
 		}
-		v.next = nil
 	}
 }
