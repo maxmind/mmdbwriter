@@ -392,9 +392,6 @@ func TestWireDataEqualAcceptsEqualValues(t *testing.T) {
 	assert.True(t, wireDataEqual(nil, nil))
 }
 
-// TestDataMapCollisionComparisonPreservesFloat32Encoding is the Float32 twin of
-// TestDataMapCollisionComparisonPreservesFloatEncoding. Go treats the two zeros
-// as equal, but they have different wire encodings.
 // TestDataMapIgnoresStaleIdentityForReleasedValue covers the reference count
 // guard on the identity fast path. A cached identity may outlive the value it
 // points at, and a released value must never be resurrected.
