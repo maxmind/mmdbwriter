@@ -80,8 +80,28 @@ type insertRecord struct {
 	memoSet      bool
 }
 
-func (iRec *insertRecord) storeData(v mmdbtype.DataType) (*dataMapValue, error) {
-	return iRec.dataMap.storeWithIdentity(v)
+// resolveValue returns the value for a record and whether the caller owns its
+// reference. With no inserter the new value is used directly, reusing the
+// existing value when it is already equal, and stored through the identity
+// cache because a caller repeats the same value often. An inserter result is
+// built fresh each call, so resolve stores it by content alone.
+func (iRec *insertRecord) resolveValue(
+	existing *dataMapValue,
+) (*dataMapValue, bool, error) {
+	if iRec.inserter != nil {
+		return iRec.resolve(existing)
+	}
+	if iRec.value == nil {
+		return nil, false, nil
+	}
+	if existing != nil && existing.data.Equal(iRec.value) {
+		return existing, false, nil
+	}
+	value, err := iRec.dataMap.storeWithIdentity(iRec.value)
+	if err != nil {
+		return nil, false, err
+	}
+	return value, true, nil
 }
 
 // resolve returns a value and whether the caller owns its reference. A pure
@@ -285,38 +305,11 @@ func (iRec *insertRecord) insertRecord(
 	case recordTypeEmpty, recordTypeData:
 		if newDepth >= iRec.prefixLen {
 			if iRec.recordType == recordTypeData {
-				if iRec.inserter != nil {
-					value, owned, err := iRec.resolve(r.value)
-					if err != nil {
-						return err
-					}
-					iRec.replaceDataRecord(r, value, owned)
-					return nil
+				value, owned, err := iRec.resolveValue(r.value)
+				if err != nil {
+					return err
 				}
-				var oldData mmdbtype.DataType
-				if r.value != nil {
-					oldData = r.value.data
-				}
-				newData := iRec.value
-				switch {
-				case newData == nil:
-					iRec.dataMap.remove(r.value)
-					r.nodeIndex = iRec.insertedNode
-					r.recordType = recordTypeEmpty
-					r.value = nil
-				case oldData == nil || !oldData.Equal(newData):
-					value, err := iRec.storeData(newData)
-					if err != nil {
-						return err
-					}
-					iRec.dataMap.remove(r.value)
-					r.nodeIndex = iRec.insertedNode
-					r.recordType = iRec.recordType
-					r.value = value
-				default:
-					r.nodeIndex = iRec.insertedNode
-					r.recordType = iRec.recordType
-				}
+				iRec.replaceDataRecord(r, value, owned)
 			} else {
 				oldValue := r.value
 				r.nodeIndex = iRec.insertedNode
@@ -328,31 +321,15 @@ func (iRec *insertRecord) insertRecord(
 		}
 
 		if r.recordType == recordTypeEmpty && iRec.recordType == recordTypeData {
-			if iRec.inserter != nil {
-				value, owned, err := iRec.resolve(nil)
-				if err != nil {
-					return err
-				}
-				if value == nil {
-					return nil
-				}
-				if !owned {
-					iRec.dataMap.addRef(value)
-				}
-				r.nodeIndex = iRec.tree.newPath(iRec.ip, iRec.prefixLen, record{
-					value:      value,
-					recordType: recordTypeData,
-				})
-				r.recordType = recordTypePath
-				return nil
-			}
-			newData := iRec.value
-			if newData == nil {
-				return nil
-			}
-			value, err := iRec.storeData(newData)
+			value, owned, err := iRec.resolveValue(nil)
 			if err != nil {
 				return err
+			}
+			if value == nil {
+				return nil
+			}
+			if !owned {
+				iRec.dataMap.addRef(value)
 			}
 			r.nodeIndex = iRec.tree.newPath(iRec.ip, iRec.prefixLen, record{
 				value:      value,
