@@ -385,6 +385,20 @@ func TestEqual(t *testing.T) {
 			expect: true,
 		},
 		{
+			name:   "Float32 identical NaNs are equal",
+			a:      Float32(float32(math.NaN())),
+			b:      Float32(float32(math.NaN())),
+			expect: true,
+		},
+		{
+			// math.NaN is 0x7FF8000000000001, so the payload must differ from
+			// that one to be a genuinely distinct encoding.
+			name:   "Float64 NaNs with different payloads are not equal",
+			a:      Float64(math.Float64frombits(0x7FF8000000000002)),
+			b:      Float64(math.NaN()),
+			expect: false,
+		},
+		{
 			name:   "Int32 same",
 			a:      Int32(1),
 			b:      Int32(1),

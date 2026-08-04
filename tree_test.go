@@ -188,6 +188,16 @@ func TestTreeInsertPureFuncMemoizesDistinctExistingValues(t *testing.T) {
 		_, value := tree.Get(netip.AddrFrom4([4]byte{1, 2, 3, byte(index * 64)}))
 		assert.Equal(t, mmdbtype.String("new"), value)
 	}
+
+	// Two distinct existing values promote the memo to its map form, so this
+	// also pins that releaseResolved drains every entry rather than the first.
+	// The four covered records now share one value and merge back into a single
+	// record, so exactly one reference should remain.
+	require.Len(t, tree.dataMap.data, 1, "the memo retained replaced values")
+	for _, dmv := range tree.dataMap.data {
+		assert.EqualValues(t, 1, dmv.refCount,
+			"the memo held references after the insert finished")
+	}
 }
 
 func TestTreeInsertPureFuncReleasesMemoAfterPartialError(t *testing.T) {
@@ -1870,6 +1880,15 @@ func TestLoadRejectsUnsupportedMetadataDimensions(t *testing.T) {
 		assert.Contains(t, err.Error(), "unsupported RecordSize: 20")
 	})
 
+	t.Run("absent record size", func(t *testing.T) {
+		path := writeMetadataPatchedDB(t, "record_size", 0)
+
+		_, err := Load(path, Options{IncludeReservedNetworks: true})
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "unsupported record_size in metadata: 0")
+	})
+
 	t.Run("absent ip version", func(t *testing.T) {
 		path := writeMetadataPatchedDB(t, "ip_version", 0)
 
@@ -1943,6 +1962,34 @@ func TestSignedZeroIsNeverSilentlyDropped(t *testing.T) {
 				"the inserted negative zero was replaced by the existing positive zero")
 		})
 	}
+
+	t.Run("the sign survives encoding and a reader", func(t *testing.T) {
+		tree, err := New(Options{
+			DatabaseType:            "mmdbwriter-signed-zero",
+			Description:             map[string]string{"en": "Test database"},
+			IPVersion:               4,
+			RecordSize:              24,
+			IncludeReservedNetworks: true,
+		})
+		require.NoError(t, err)
+
+		prefix := netip.MustParsePrefix("1.0.0.0/8")
+		require.NoError(t, tree.Insert(prefix, mmdbtype.Float64(0)))
+		require.NoError(t, tree.Insert(prefix, negativeZero))
+
+		var buf bytes.Buffer
+		_, err = tree.WriteTo(&buf)
+		require.NoError(t, err)
+
+		reader, err := maxminddb.OpenBytes(buf.Bytes())
+		require.NoError(t, err)
+		defer func() { require.NoError(t, reader.Close()) }()
+
+		var stored float64
+		require.NoError(t, reader.Lookup(netip.MustParseAddr("1.2.3.4")).Decode(&stored))
+		assert.True(t, math.Signbit(stored),
+			"the negative zero did not survive encoding")
+	})
 
 	t.Run("a plain insert also keeps the new sign", func(t *testing.T) {
 		tree, err := New(Options{
@@ -2023,4 +2070,119 @@ func TestNewAcceptsSupportedRecordSizes(t *testing.T) {
 			require.NoError(t, err)
 		})
 	}
+}
+
+// TestInsertNilValueRemovesRecord covers the direct-value removal path. The
+// inserter path has its own removal implementation in replaceDataRecord, so
+// this one is only reached by a plain Insert of a nil value.
+func TestInsertNilValueRemovesRecord(t *testing.T) {
+	tree, err := New(Options{
+		DatabaseType:            "mmdbwriter-insert-nil",
+		Description:             map[string]string{"en": "Test database"},
+		IPVersion:               4,
+		RecordSize:              24,
+		IncludeReservedNetworks: true,
+	})
+	require.NoError(t, err)
+
+	prefix := netip.MustParsePrefix("1.0.0.0/8")
+	require.NoError(t, tree.Insert(prefix, mmdbtype.String("value")))
+	require.Len(t, tree.dataMap.data, 1)
+
+	require.NoError(t, tree.Insert(prefix, nil))
+
+	_, value := tree.Get(netip.MustParseAddr("1.2.3.4"))
+	assert.Nil(t, value)
+	assert.Empty(t, tree.dataMap.data, "the removed value was not released")
+}
+
+// TestInserterNilResultOverEmptySpaceIsNoOp covers the guard for an inserter
+// that returns nil for a network nothing covers. Without it the tree gains a
+// data record with no value, which nil-dereferences when written.
+func TestInserterNilResultOverEmptySpaceIsNoOp(t *testing.T) {
+	tests := []struct {
+		name   string
+		insert func(*Tree) error
+	}{
+		{
+			name: "InsertFunc",
+			insert: func(tree *Tree) error {
+				return tree.InsertFunc(
+					netip.MustParsePrefix("9.9.9.0/24"),
+					mmdbtype.String("ignored"),
+					inserter.Remove,
+				)
+			},
+		},
+		{
+			name: "InsertPureFunc",
+			insert: func(tree *Tree) error {
+				return tree.InsertPureFunc(
+					netip.MustParsePrefix("9.9.9.0/24"),
+					mmdbtype.String("ignored"),
+					inserter.Remove,
+				)
+			},
+		},
+		{
+			name: "InsertRangePureFunc",
+			insert: func(tree *Tree) error {
+				return tree.InsertRangePureFunc(
+					netip.MustParseAddr("9.9.9.0"),
+					netip.MustParseAddr("9.9.9.255"),
+					mmdbtype.String("ignored"),
+					inserter.Remove,
+				)
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			tree, err := New(Options{
+				DatabaseType:            "mmdbwriter-empty-space",
+				Description:             map[string]string{"en": "Test database"},
+				IPVersion:               4,
+				RecordSize:              24,
+				IncludeReservedNetworks: true,
+			})
+			require.NoError(t, err)
+
+			require.NoError(t, test.insert(tree))
+
+			_, value := tree.Get(netip.MustParseAddr("9.9.9.1"))
+			assert.Nil(t, value)
+			assert.Empty(t, tree.dataMap.data)
+
+			var buf bytes.Buffer
+			_, err = tree.WriteTo(&buf)
+			require.NoError(t, err, "the tree could not be written")
+		})
+	}
+}
+
+// TestInsertReportsHashErrorFromIdentityPath covers the hash failure returned
+// through storeWithIdentity, which is the path a plain Insert takes.
+func TestInsertReportsHashErrorFromIdentityPath(t *testing.T) {
+	tree, err := New(Options{
+		DatabaseType:            "mmdbwriter-identity-error",
+		Description:             map[string]string{"en": "Test database"},
+		IPVersion:               4,
+		RecordSize:              24,
+		IncludeReservedNetworks: true,
+	})
+	require.NoError(t, err)
+
+	err = tree.Insert(
+		netip.MustParsePrefix("1.0.0.0/8"),
+		mmdbtype.Map{"u": (*mmdbtype.Uint128)(nil)},
+	)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `hashing map key "u"`)
+	assert.Contains(t, err.Error(), "cannot hash a nil *mmdbtype.Uint128")
+	// A Map has an identity key, so the failure happens after the identity
+	// lookup and must not leave anything cached.
+	assert.Empty(t, tree.dataMap.valueByDataIdentity)
+	assert.Empty(t, tree.dataMap.data)
 }

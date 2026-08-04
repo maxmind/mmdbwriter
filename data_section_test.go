@@ -111,3 +111,32 @@ func TestDataWriterOnlyPointersWhenSmaller(t *testing.T) {
 			"a repeated long value should become a pointer")
 	})
 }
+
+// TestWriteOrWritePointerRejectsCollidingOffset pins the exact comparison that
+// guards the nested-value pointer path. A hash match alone must not produce a
+// pointer: without the comparison the writer would emit a pointer to different
+// data, which no reader could detect.
+func TestWriteOrWritePointerRejectsCollidingOffset(t *testing.T) {
+	dw := newDataWriter(newDataMap(), true)
+
+	value := mmdbtype.String("the value actually being written out here")
+	other := mmdbtype.String("entirely different data sharing its bucket")
+
+	hash, err := dw.dataMap.hasher.Hash(value)
+	require.NoError(t, err)
+
+	// Plant a colliding entry for different data, large enough that a pointer
+	// would win on size if the exact comparison were skipped.
+	dw.rememberOffset(dataMapHash(hash), other, writtenType{
+		pointer: mmdbtype.Pointer(0),
+		size:    int64(len(other) + 2),
+	})
+
+	size, err := dw.WriteOrWritePointer(value)
+	require.NoError(t, err)
+
+	assert.Greater(t, size, mmdbtype.Pointer(0).WrittenSize(),
+		"a colliding entry for different data produced a pointer")
+	assert.Contains(t, dw.String(), string(value),
+		"the value was not written out")
+}

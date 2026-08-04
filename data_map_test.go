@@ -314,6 +314,13 @@ func TestWireDataEqualRejectsUnequalValues(t *testing.T) {
 			first:  mmdbtype.Uint32(1),
 			second: mmdbtype.Int32(1),
 		},
+		{
+			// Bytes and String hash the same pre-salt bytes, so this pair is
+			// the one most dependent on the per-type salts.
+			name:   "bytes and string with the same contents",
+			first:  mmdbtype.Bytes("x"),
+			second: mmdbtype.String("x"),
+		},
 	}
 
 	for _, test := range tests {
