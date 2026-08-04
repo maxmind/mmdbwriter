@@ -602,3 +602,7 @@ type dataWriter struct {
 func (dw *dataWriter) WriteOrWritePointer(t DataType) (int64, error) {
 	return t.WriteTo(dw)
 }
+
+func (dw *dataWriter) WriteOrWritePointerString(t String) (int64, error) {
+	return t.WriteTo(dw)
+}

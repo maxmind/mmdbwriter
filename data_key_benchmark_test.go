@@ -43,6 +43,10 @@ func (kw *keyWriter) Key(value mmdbtype.DataType) error {
 	return nil
 }
 
+func (kw *keyWriter) WriteOrWritePointerString(value mmdbtype.String) (int64, error) {
+	return value.WriteTo(kw)
+}
+
 func (kw *keyWriter) WriteOrWritePointer(value mmdbtype.DataType) (int64, error) {
 	return value.WriteTo(kw)
 }

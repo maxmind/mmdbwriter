@@ -105,6 +105,13 @@ func (h *dataHasher) Hash(value mmdbtype.DataType) (dataMapHash, error) {
 	}
 }
 
+// HashString hashes a String without boxing it into a DataType. It must agree
+// with Hash for the same value; otherwise a map key and an equal String value
+// would land in different buckets and stop sharing a data section offset.
+func (h *dataHasher) HashString(value mmdbtype.String) dataMapHash {
+	return h.hashScalar(dataHashString, maphash.String(h.seed, string(value)))
+}
+
 func (h *dataHasher) hashScalar(kind dataHashKind, value uint64) dataMapHash {
 	return dataMapHash(dataHashMix64(h.typeSalts[kind] ^ value))
 }

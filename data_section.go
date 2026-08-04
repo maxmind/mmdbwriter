@@ -110,6 +110,69 @@ func (dw *dataWriter) WriteOrWritePointer(t mmdbtype.DataType) (int64, error) {
 	return size, nil
 }
 
+// WriteOrWritePointerString mirrors WriteOrWritePointer for a String, hashing
+// and comparing without boxing so a repeated map key costs no allocation. The
+// value is boxed only when a new offset is recorded.
+func (dw *dataWriter) WriteOrWritePointerString(t mmdbtype.String) (int64, error) {
+	if !dw.usePointers {
+		return t.WriteTo(dw)
+	}
+
+	dmHash := dw.dataMap.hasher.HashString(t)
+	written, ok := dw.findOffsetString(dmHash, t)
+	if ok && written.size > written.pointer.WrittenSize() {
+		return written.pointer.WriteTo(dw)
+	}
+
+	offset := dw.Len()
+	size, err := t.WriteTo(dw)
+	if err != nil || ok {
+		return size, err
+	}
+
+	if offset > math.MaxUint32 {
+		return 0, fmt.Errorf("offset of %d exceeds maximum when writing data", offset)
+	}
+
+	//nolint:gosec // we check for overflow above
+	dw.rememberOffset(dmHash, t, writtenType{
+		pointer: mmdbtype.Pointer(offset),
+		size:    size,
+	})
+	return size, nil
+}
+
+func (dw *dataWriter) findOffsetString(
+	hash dataMapHash,
+	value mmdbtype.String,
+) (writtenType, bool) {
+	index, ok := dw.offsets[hash]
+	if !ok {
+		return writtenType{}, false
+	}
+	for index != noOffsetIndex {
+		offset := &dw.offsetArena[index]
+		if offsetMatchesString(offset.data, value) {
+			return offset.written, true
+		}
+		index = offset.next
+	}
+	return writtenType{}, false
+}
+
+// offsetMatchesString reports whether data encodes the same String as value. It
+// normalizes pointer forms exactly as wireDataEqual does, since a stored value
+// may be one; comparing the query without boxing is the point, and data is
+// already an interface.
+func offsetMatchesString(data mmdbtype.DataType, value mmdbtype.String) bool {
+	data, ok := dereferenceDataType(data)
+	if !ok {
+		return false
+	}
+	existing, isString := data.(mmdbtype.String)
+	return isString && existing == value
+}
+
 func (dw *dataWriter) findOffset(
 	hash dataMapHash,
 	data mmdbtype.DataType,

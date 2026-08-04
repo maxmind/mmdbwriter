@@ -140,3 +140,34 @@ func TestWriteOrWritePointerRejectsCollidingOffset(t *testing.T) {
 	assert.Contains(t, dw.String(), string(value),
 		"the value was not written out")
 }
+
+// TestWriteOrWritePointerStringMatchesGenericPath pins the two invariants the
+// unboxed map key path depends on: it must hash the same as the generic path,
+// and it must recognize a stored pointer form, or an equal value would stop
+// sharing an offset.
+func TestWriteOrWritePointerStringMatchesGenericPath(t *testing.T) {
+	value := mmdbtype.String("a shared string worth pointing at")
+
+	t.Run("hashes agree with the generic path", func(t *testing.T) {
+		hasher := newDataHasher()
+
+		generic, err := hasher.Hash(value)
+		require.NoError(t, err)
+
+		assert.Equal(t, generic, hasher.HashString(value))
+	})
+
+	t.Run("a stored pointer form is reused", func(t *testing.T) {
+		dw := newDataWriter(newDataMap(), true)
+
+		pointerForm := value
+		_, err := dw.WriteOrWritePointer(&pointerForm)
+		require.NoError(t, err)
+
+		size, err := dw.WriteOrWritePointerString(value)
+		require.NoError(t, err)
+
+		assert.Equal(t, mmdbtype.Pointer(0).WrittenSize(), size,
+			"the map key did not reuse the offset written for the pointer form")
+	})
+}
