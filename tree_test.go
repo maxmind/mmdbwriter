@@ -1869,6 +1869,8 @@ func TestLoadRejectsUnsupportedMetadataDimensions(t *testing.T) {
 
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "unsupported IPVersion: 5")
+		assert.Contains(t, err.Error(), path,
+			"the error does not say which database failed")
 	})
 
 	t.Run("unsupported record size", func(t *testing.T) {
@@ -1887,6 +1889,8 @@ func TestLoadRejectsUnsupportedMetadataDimensions(t *testing.T) {
 
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "unsupported record_size in metadata: 0")
+		assert.Contains(t, err.Error(), path,
+			"the error does not say which database failed")
 	})
 
 	t.Run("absent ip version", func(t *testing.T) {

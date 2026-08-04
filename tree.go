@@ -227,7 +227,7 @@ func Load(path string, opts Options) (*Tree, error) {
 	if opts.IPVersion == 0 {
 		opts.IPVersion, err = metadataDimension("ip_version", metadata.IPVersion)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("loading %s: %w", path, err)
 		}
 	}
 
@@ -238,7 +238,7 @@ func Load(path string, opts Options) (*Tree, error) {
 	if opts.RecordSize == 0 {
 		opts.RecordSize, err = metadataDimension("record_size", metadata.RecordSize)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("loading %s: %w", path, err)
 		}
 	}
 
