@@ -127,7 +127,7 @@ func TestWriteOrWritePointerRejectsCollidingOffset(t *testing.T) {
 
 	// Plant a colliding entry for different data, large enough that a pointer
 	// would win on size if the exact comparison were skipped.
-	dw.rememberOffset(dataMapHash(hash), other, writtenType{
+	dw.rememberOffset(hash, other, writtenType{
 		pointer: mmdbtype.Pointer(0),
 		size:    int64(len(other) + 2),
 	})

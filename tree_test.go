@@ -70,7 +70,7 @@ func TestTreeInsertSplittingDataRecordMaintainsRefCounts(t *testing.T) {
 
 	hash, err := tree.dataMap.hasher.Hash(initialValue)
 	require.NoError(t, err)
-	key := dataMapHash(hash)
+	key := hash
 	initialMapValue := tree.dataMap.data[key]
 	require.NotNil(t, initialMapValue)
 	require.Equal(t, uint32(1), initialMapValue.refCount)
@@ -228,7 +228,7 @@ func TestTreeInsertPureFuncReleasesMemoAfterPartialError(t *testing.T) {
 
 	hash, err := tree.dataMap.hasher.Hash(result)
 	require.NoError(t, err)
-	stored := tree.dataMap.data[dataMapHash(hash)]
+	stored := tree.dataMap.data[hash]
 	require.NotNil(t, stored)
 	assert.Equal(
 		t,

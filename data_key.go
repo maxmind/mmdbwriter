@@ -15,6 +15,10 @@ import (
 // and length inputs before they are folded into a digest.
 const dataHashMix = uint64(0x9e3779b97f4a7c15)
 
+// dataMapHash is a digest from a dataHasher. Values are only comparable within
+// a single dataHasher instance, because each one is independently seeded.
+type dataMapHash uint64
+
 type dataHashKind byte
 
 const (
@@ -55,11 +59,7 @@ func newDataHasher() *dataHasher {
 	return hasher
 }
 
-func (h *dataHasher) Hash(value mmdbtype.DataType) (uint64, error) {
-	return h.hashValue(value)
-}
-
-func (h *dataHasher) hashValue(value mmdbtype.DataType) (uint64, error) {
+func (h *dataHasher) Hash(value mmdbtype.DataType) (dataMapHash, error) {
 	if value == nil {
 		return 0, errors.New("cannot hash a nil MMDB value")
 	}
@@ -105,47 +105,45 @@ func (h *dataHasher) hashValue(value mmdbtype.DataType) (uint64, error) {
 	}
 }
 
-func (h *dataHasher) hashScalar(kind dataHashKind, value uint64) uint64 {
-	return dataHashMix64(h.typeSalts[kind] ^ value)
+func (h *dataHasher) hashScalar(kind dataHashKind, value uint64) dataMapHash {
+	return dataMapHash(dataHashMix64(h.typeSalts[kind] ^ value))
 }
 
-func (h *dataHasher) hashBytes(kind dataHashKind, value []byte) uint64 {
+func (h *dataHasher) hashBytes(kind dataHashKind, value []byte) dataMapHash {
 	return h.hashScalar(kind, maphash.Bytes(h.seed, value))
 }
 
-func (h *dataHasher) hashMapContents(value mmdbtype.Map) (uint64, error) {
+func (h *dataHasher) hashMapContents(value mmdbtype.Map) (dataMapHash, error) {
 	// Both accumulators are commutative so map iteration order cannot affect the
 	// result. The second accumulator makes canceling sums less likely.
 	var sum, xor uint64
 	for key, child := range value {
-		childHash, err := h.hashValue(child)
+		childHash, err := h.Hash(child)
 		if err != nil {
 			return 0, fmt.Errorf("hashing map key %q: %w", key, err)
 		}
 		keyHash := maphash.String(h.seed, string(key))
-		entryHash := dataHashMix64(keyHash ^ bits.RotateLeft64(childHash, 17))
+		entryHash := dataHashMix64(keyHash ^ bits.RotateLeft64(uint64(childHash), 17))
 		sum += entryHash
 		xor ^= bits.RotateLeft64(entryHash, int(entryHash>>58))
 	}
-	digest := dataHashMix64(
-		h.typeSalts[dataHashMap] ^ uint64(
-			len(value),
-		)*dataHashMix ^ sum ^ bits.RotateLeft64(
-			xor,
-			23,
-		),
-	)
+	lengthHash := uint64(len(value)) * dataHashMix
+	digest := dataMapHash(dataHashMix64(
+		h.typeSalts[dataHashMap] ^ lengthHash ^ sum ^ bits.RotateLeft64(xor, 23),
+	))
 	return digest, nil
 }
 
-func (h *dataHasher) hashSliceContents(value mmdbtype.Slice) (uint64, error) {
-	hash := dataHashMix64(h.typeSalts[dataHashSlice] ^ uint64(len(value)))
+func (h *dataHasher) hashSliceContents(value mmdbtype.Slice) (dataMapHash, error) {
+	hash := dataMapHash(dataHashMix64(h.typeSalts[dataHashSlice] ^ uint64(len(value))))
 	for index, child := range value {
-		childHash, err := h.hashValue(child)
+		childHash, err := h.Hash(child)
 		if err != nil {
 			return 0, fmt.Errorf("hashing slice index %d: %w", index, err)
 		}
-		hash = dataHashMix64(hash ^ dataHashMix64(uint64(index)*dataHashMix^childHash))
+		hash = dataMapHash(dataHashMix64(
+			uint64(hash) ^ dataHashMix64(uint64(index)*dataHashMix^uint64(childHash)),
+		))
 	}
 	return hash, nil
 }

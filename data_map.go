@@ -7,10 +7,6 @@ import (
 	"github.com/maxmind/mmdbwriter/v2/mmdbtype"
 )
 
-// dataMapHash is a digest from a dataHasher. Values are only comparable within
-// a single dataHasher instance, because each one is independently seeded.
-type dataMapHash uint64
-
 type dataMapIdentityKind byte
 
 const (
@@ -57,8 +53,17 @@ func newDataMap() *dataMap {
 // store stores the value in the dataMap and returns the dataMapValue for it.
 // If the value is already in the dataMap, the reference count for it is
 // incremented.
+//
+// This deduplicates on content alone. storeWithIdentity is the variant that
+// first tries to match the value by identity, which is worthwhile for values
+// the caller is likely to present repeatedly; an inserter result is freshly
+// built each time, so it goes through here.
 func (dm *dataMap) store(v mmdbtype.DataType) (*dataMapValue, error) {
-	return dm.storeByContentHash(v)
+	hash, err := dm.hasher.Hash(v)
+	if err != nil {
+		return nil, err
+	}
+	return dm.storeByHash(v, hash), nil
 }
 
 func (dm *dataMap) storeWithIdentity(v mmdbtype.DataType) (*dataMapValue, error) {
@@ -80,7 +85,7 @@ func (dm *dataMap) storeWithIdentity(v mmdbtype.DataType) (*dataMapValue, error)
 		delete(dm.valueByDataIdentity, identity)
 	}
 
-	dmv, err := dm.storeByContentHash(v)
+	dmv, err := dm.store(v)
 	if err != nil {
 		return nil, err
 	}
@@ -94,14 +99,6 @@ func (dm *dataMap) storeWithIdentity(v mmdbtype.DataType) (*dataMapValue, error)
 		dm.valueByDataIdentity[identity] = dmv
 	}
 	return dmv, nil
-}
-
-func (dm *dataMap) storeByContentHash(v mmdbtype.DataType) (*dataMapValue, error) {
-	hash, err := dm.hasher.Hash(v)
-	if err != nil {
-		return nil, err
-	}
-	return dm.storeByHash(v, dataMapHash(hash)), nil
 }
 
 func (dm *dataMap) storeByHash(v mmdbtype.DataType, dmHash dataMapHash) *dataMapValue {

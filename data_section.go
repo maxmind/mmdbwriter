@@ -13,6 +13,11 @@ type writtenType struct {
 	size    int64
 }
 
+// noOffsetIndex terminates a chain of dataOffset entries. It is not the zero
+// value, so a dataOffset must always have next set explicitly; zero is a valid
+// arena index.
+const noOffsetIndex = -1
+
 type dataOffset struct {
 	data    mmdbtype.DataType
 	written writtenType
@@ -75,12 +80,11 @@ func (dw *dataWriter) WriteOrWritePointer(t mmdbtype.DataType) (int64, error) {
 		return t.WriteTo(dw)
 	}
 
-	hash, err := dw.dataMap.hasher.Hash(t)
+	dmHash, err := dw.dataMap.hasher.Hash(t)
 	if err != nil {
 		return 0, err
 	}
 
-	dmHash := dataMapHash(hash)
 	written, ok := dw.findOffset(dmHash, t)
 	if ok && written.size > written.pointer.WrittenSize() {
 		// Only use a pointer if it would take less space than writing the
@@ -111,14 +115,15 @@ func (dw *dataWriter) findOffset(
 	data mmdbtype.DataType,
 ) (writtenType, bool) {
 	index, ok := dw.offsets[hash]
-	// next == -1 terminates a chain; every nonnegative next is a live arena index.
-	for ok {
+	if !ok {
+		return writtenType{}, false
+	}
+	for index != noOffsetIndex {
 		offset := &dw.offsetArena[index]
-		if offset.matches(data) {
+		if wireDataEqual(offset.data, data) {
 			return offset.written, true
 		}
 		index = offset.next
-		ok = index >= 0
 	}
 	return writtenType{}, false
 }
@@ -128,21 +133,14 @@ func (dw *dataWriter) rememberOffset(
 	data mmdbtype.DataType,
 	written writtenType,
 ) {
-	dw.appendOffset(hash, dataOffset{
+	next := noOffsetIndex
+	if index, ok := dw.offsets[hash]; ok {
+		next = index
+	}
+	dw.offsetArena = append(dw.offsetArena, dataOffset{
 		data:    data,
 		written: written,
+		next:    next,
 	})
-}
-
-func (dw *dataWriter) appendOffset(hash dataMapHash, entry dataOffset) {
-	entry.next = -1
-	if index, ok := dw.offsets[hash]; ok {
-		entry.next = index
-	}
-	dw.offsetArena = append(dw.offsetArena, entry)
 	dw.offsets[hash] = len(dw.offsetArena) - 1
-}
-
-func (offset *dataOffset) matches(data mmdbtype.DataType) bool {
-	return wireDataEqual(offset.data, data)
 }
