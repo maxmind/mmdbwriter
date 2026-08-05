@@ -52,7 +52,7 @@ func BenchmarkTreeInsertTopLevelMergeOverlappingPasses(b *testing.B) {
 	for range b.N {
 		tree := newBenchmarkTree(b)
 		for _, spec := range specs {
-			err := tree.InsertFunc(spec.network, spec.value, inserter.TopLevelMerge)
+			err := tree.InsertPureFunc(spec.network, spec.value, inserter.TopLevelMerge)
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -70,10 +70,45 @@ func BenchmarkTreeInsertDeepMergeOverlappingPasses(b *testing.B) {
 	for range b.N {
 		tree := newBenchmarkTree(b)
 		for _, spec := range specs {
-			err := tree.InsertFunc(spec.network, spec.value, inserter.DeepMerge)
+			err := tree.InsertPureFunc(spec.network, spec.value, inserter.DeepMerge)
 			if err != nil {
 				b.Fatal(err)
 			}
+		}
+	}
+}
+
+func BenchmarkTreeInsertDeepMergeFragmentedNetwork(b *testing.B) {
+	const networkCount = 4_096
+	values := benchmarkUniqueValues(benchmarkEnterpriseValue(), 16)
+	overlay := mmdbtype.Map{
+		"traits": mmdbtype.Map{"new_field": mmdbtype.String("overlay")},
+	}
+	b.ReportMetric(networkCount, "records/op")
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for range b.N {
+		b.StopTimer()
+		tree := newBenchmarkTree(b)
+		for index := range networkCount {
+			address := netip.AddrFrom4(
+				[4]byte{1, byte(index >> 16), byte(index >> 8), byte(index)},
+			)
+			if err := tree.Insert(
+				netip.PrefixFrom(address, 32),
+				values[index%len(values)],
+			); err != nil {
+				b.Fatal(err)
+			}
+		}
+		b.StartTimer()
+		if err := tree.InsertPureFunc(
+			netip.MustParsePrefix("1.0.0.0/20"),
+			overlay,
+			inserter.DeepMerge,
+		); err != nil {
+			b.Fatal(err)
 		}
 	}
 }
@@ -178,7 +213,7 @@ func reportOverlappingBenchmarkShape(
 		insertBenchmarkSpecs(b, tree, specs)
 	} else {
 		for _, spec := range specs {
-			if err := tree.InsertFunc(spec.network, spec.value, insertFunc); err != nil {
+			if err := tree.InsertPureFunc(spec.network, spec.value, insertFunc); err != nil {
 				b.Fatal(err)
 			}
 		}
@@ -251,7 +286,7 @@ func insertChurnBenchmarkSpecs(b *testing.B, tree *Tree, cycles int) {
 		for specific := range 16 {
 			secondOctet := specific * 16
 			removePrefix := benchmarkCIDR(fmt.Sprintf("%d.%d.0.128/25", firstOctet, secondOctet))
-			if err := tree.InsertFunc(removePrefix, nil, inserter.Remove); err != nil {
+			if err := tree.InsertPureFunc(removePrefix, nil, inserter.Remove); err != nil {
 				b.Fatal(err)
 			}
 

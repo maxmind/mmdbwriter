@@ -48,7 +48,15 @@ type writer interface {
 // DataType represents a MaxMind DB data type.
 type DataType interface {
 	Copy() DataType
+
+	// Equal reports whether other encodes to the same bytes as the receiver. It
+	// is equality of the wire encoding, not of the Go value: an implementation
+	// must report false for values that differ in any encoded bit even when Go
+	// considers them equal, and true only when the two encode identically. The
+	// writer deduplicates records on this, so an implementation that is looser
+	// than the encoding will collapse records that should stay distinct.
 	Equal(DataType) bool
+
 	size() int
 	typeNum() typeNum
 	WriteTo(writer) (int64, error)
@@ -160,10 +168,12 @@ var _ DataType = (*Float32)(nil)
 // Copy the value.
 func (t Float32) Copy() DataType { return t }
 
-// Equal checks for equality.
+// Equal reports whether other is a Float32 with the same wire encoding.
+// Comparison is on the bit pattern rather than the Go value, so +0.0 and -0.0
+// are not equal and two identical NaNs are.
 func (t Float32) Equal(other DataType) bool {
 	otherT, ok := other.(Float32)
-	return ok && t == otherT
+	return ok && math.Float32bits(float32(t)) == math.Float32bits(float32(otherT))
 }
 
 func (t Float32) size() int {
@@ -210,10 +220,12 @@ var _ DataType = (*Float64)(nil)
 // Copy the value.
 func (t Float64) Copy() DataType { return t }
 
-// Equal checks for equality.
+// Equal reports whether other is a Float64 with the same wire encoding.
+// Comparison is on the bit pattern rather than the Go value, so +0.0 and -0.0
+// are not equal and two identical NaNs are.
 func (t Float64) Equal(other DataType) bool {
 	otherT, ok := other.(Float64)
-	return ok && t == otherT
+	return ok && math.Float64bits(float64(t)) == math.Float64bits(float64(otherT))
 }
 
 func (t Float64) size() int {
@@ -392,9 +404,8 @@ func (t Map) WriteTo(w writer) (int64, error) {
 	//
 	// For maps with a small number of keys (the common case for record
 	// schemas), use a stack-allocated buffer to avoid a per-WriteTo
-	// allocation. Map.WriteTo is on the hot path of every
-	// keyWriter.Key call during inserts, so this is amortized across
-	// the full build.
+	// allocation. Map.WriteTo is on the data-section serialization hot path, so
+	// this is amortized across the full write.
 	var stackKeys [16]string
 	var keys []string
 	if len(t) <= len(stackKeys) {
@@ -841,10 +852,11 @@ func (t *Uint128) Copy() DataType {
 	return &uv
 }
 
-// Equal checks for equality.
+// Equal reports whether other is a non-nil *Uint128 with the same value. A nil
+// *Uint128 is not equal to any value, including another nil *Uint128.
 func (t *Uint128) Equal(other DataType) bool {
 	otherT, ok := other.(*Uint128)
-	return ok && (*big.Int)(t).Cmp((*big.Int)(otherT)) == 0
+	return ok && t != nil && otherT != nil && (*big.Int)(t).Cmp((*big.Int)(otherT)) == 0
 }
 
 func (t *Uint128) size() int {

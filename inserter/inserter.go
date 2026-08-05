@@ -1,5 +1,10 @@
 // Package inserter provides some common inserter functions for
 // mmdbwriter.Tree.
+//
+// Every function in this package is pure: its result and error depend only on
+// its arguments. They are all safe to pass to mmdbwriter.Tree.InsertPureFunc
+// and mmdbwriter.Tree.InsertRangePureFunc, which may memoize repeated argument
+// pairs and share a result across records.
 package inserter
 
 import (
@@ -11,10 +16,17 @@ import (
 
 // Func resolves an insertion into a tree record. existingValue is nil for an
 // empty record, and newValue is the value passed to the insert method. Returning
-// nil leaves the record empty or removes the existing value.
+// nil leaves the record empty or removes the existing value. A Func is evaluated
+// separately for every covered record when passed to Tree.InsertFunc or
+// Tree.InsertRangeFunc. Tree.InsertPureFunc and Tree.InsertRangePureFunc may
+// memoize repeated argument pairs and share a non-nil result across records.
+//
+// A Func must not modify either argument, as values may be shared with other
+// records. Any non-nil returned value becomes tree-owned and must not be
+// modified after the function returns.
 type Func func(existingValue, newValue mmdbtype.DataType) (mmdbtype.DataType, error)
 
-// Remove any records for the network being inserted.
+// Remove removes any records for the network being inserted.
 func Remove(_, _ mmdbtype.DataType) (mmdbtype.DataType, error) {
 	return nil, nil
 }
@@ -52,7 +64,6 @@ func TopLevelMerge(existingValue, newValue mmdbtype.DataType) (mmdbtype.DataType
 			existingValue,
 		)
 	}
-
 	returnMap := make(mmdbtype.Map, len(existingMap)+len(newMap))
 	maps.Copy(returnMap, existingMap)
 	maps.Copy(returnMap, newMap)
@@ -61,45 +72,61 @@ func TopLevelMerge(existingValue, newValue mmdbtype.DataType) (mmdbtype.DataType
 }
 
 // DeepMerge recursively updates an existing value. Map and Slice values will be
-// merged recursively. Other values will be replaced by the new value.
+// merged recursively. Other values will be replaced by the new value. The
+// returned value may be the existing container or retain unchanged nested
+// containers from it. The result must therefore be treated as immutable.
 func DeepMerge(existingValue, newValue mmdbtype.DataType) (mmdbtype.DataType, error) {
-	return deepMerge(existingValue, newValue)
+	value, _, err := deepMerge(existingValue, newValue)
+	return value, err
 }
 
-func deepMerge(existingValue, newValue mmdbtype.DataType) (mmdbtype.DataType, error) {
+func deepMerge(
+	existingValue,
+	newValue mmdbtype.DataType,
+) (mmdbtype.DataType, bool, error) {
 	if existingValue == nil {
-		return newValue, nil
+		return newValue, newValue != nil, nil
 	}
 	if newValue == nil {
-		return existingValue, nil
+		return existingValue, false, nil
 	}
 	switch existingValue := existingValue.(type) {
 	case mmdbtype.Map:
 		newMap, ok := newValue.(mmdbtype.Map)
 		if !ok {
 			// The new value is not a map. Overwrite the existing value
-			return newValue, nil
+			return newValue, true, nil
 		}
 
-		returnMap := make(mmdbtype.Map, len(existingValue)+len(newMap))
-		maps.Copy(returnMap, existingValue)
+		var returnMap mmdbtype.Map
 		for k, v := range newMap {
-			nv, err := deepMerge(returnMap[k], v)
+			existingChild, exists := existingValue[k]
+			nv, changed, err := deepMerge(existingChild, v)
 			if err != nil {
-				return nil, err
+				return nil, false, err
+			}
+			if exists && !changed {
+				continue
+			}
+			if returnMap == nil {
+				returnMap = make(mmdbtype.Map, len(existingValue)+len(newMap))
+				maps.Copy(returnMap, existingValue)
 			}
 			returnMap[k] = nv
 		}
-		return returnMap, nil
+		if returnMap == nil {
+			return existingValue, false, nil
+		}
+		return returnMap, true, nil
 	case mmdbtype.Slice:
 		newSlice, ok := newValue.(mmdbtype.Slice)
 		if !ok {
-			return newValue, nil
+			return newValue, true, nil
 		}
 		length := max(len(newSlice), len(existingValue))
 
-		rv := make(mmdbtype.Slice, length)
-		for i := range rv {
+		var rv mmdbtype.Slice
+		for i := range length {
 			var ev, nv mmdbtype.DataType
 			if i < len(existingValue) {
 				ev = existingValue[i]
@@ -107,14 +134,29 @@ func deepMerge(existingValue, newValue mmdbtype.DataType) (mmdbtype.DataType, er
 			if i < len(newSlice) {
 				nv = newSlice[i]
 			}
-			var err error
-			rv[i], err = deepMerge(ev, nv)
+			merged, changed, err := deepMerge(ev, nv)
 			if err != nil {
-				return nil, err
+				return nil, false, err
 			}
+			if i < len(existingValue) && !changed {
+				continue
+			}
+			if rv == nil {
+				rv = make(mmdbtype.Slice, length)
+				// Restore skipped existing indices; new tail indices are
+				// assigned below, so the result cannot contain accidental holes.
+				copy(rv, existingValue)
+			}
+			rv[i] = merged
 		}
-		return rv, nil
+		if rv == nil {
+			return existingValue, false, nil
+		}
+		return rv, true, nil
 	default:
-		return newValue, nil
+		if existingValue.Equal(newValue) {
+			return existingValue, false, nil
+		}
+		return newValue, true, nil
 	}
 }

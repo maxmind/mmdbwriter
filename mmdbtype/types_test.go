@@ -367,6 +367,38 @@ func TestEqual(t *testing.T) {
 			expect: false,
 		},
 		{
+			name:   "Float64 signed zeros are not equal",
+			a:      Float64(0),
+			b:      Float64(math.Copysign(0, -1)),
+			expect: false,
+		},
+		{
+			name:   "Float32 signed zeros are not equal",
+			a:      Float32(0),
+			b:      Float32(float32(math.Copysign(0, -1))),
+			expect: false,
+		},
+		{
+			name:   "Float64 identical NaNs are equal",
+			a:      Float64(math.NaN()),
+			b:      Float64(math.NaN()),
+			expect: true,
+		},
+		{
+			name:   "Float32 identical NaNs are equal",
+			a:      Float32(float32(math.NaN())),
+			b:      Float32(float32(math.NaN())),
+			expect: true,
+		},
+		{
+			// math.NaN is 0x7FF8000000000001, so the payload must differ from
+			// that one to be a genuinely distinct encoding.
+			name:   "Float64 NaNs with different payloads are not equal",
+			a:      Float64(math.Float64frombits(0x7FF8000000000002)),
+			b:      Float64(math.NaN()),
+			expect: false,
+		},
+		{
 			name:   "Int32 same",
 			a:      Int32(1),
 			b:      Int32(1),
@@ -448,6 +480,24 @@ func TestEqual(t *testing.T) {
 			name:   "Uint128 different",
 			a:      (*Uint128)(big.NewInt(1)),
 			b:      (*Uint128)(big.NewInt(0)),
+			expect: false,
+		},
+		{
+			name:   "Uint128 compared to nil Uint128",
+			a:      (*Uint128)(big.NewInt(1)),
+			b:      (*Uint128)(nil),
+			expect: false,
+		},
+		{
+			name:   "nil Uint128 compared to Uint128",
+			a:      (*Uint128)(nil),
+			b:      (*Uint128)(big.NewInt(1)),
+			expect: false,
+		},
+		{
+			name:   "nil Uint128 compared to nil Uint128",
+			a:      (*Uint128)(nil),
+			b:      (*Uint128)(nil),
 			expect: false,
 		},
 		{

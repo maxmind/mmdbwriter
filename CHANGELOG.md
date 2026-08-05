@@ -17,9 +17,18 @@
   insertion paths. `inserter.ReplaceWith`, `inserter.TopLevelMergeWith`, and
   `inserter.DeepMergeWith` are replaced by `inserter.Replace`,
   `inserter.TopLevelMerge`, and `inserter.DeepMerge`. `inserter.FuncGenerator`
-  was removed, `Options.Inserter` now accepts `inserter.Func`, and
-  `Tree.InsertFunc` and `Tree.InsertRangeFunc` now take the new value as an
-  argument.
+  was removed, `Options.Inserter` now accepts an `inserter.Func`, and
+  `Tree.InsertFunc` and `Tree.InsertRangeFunc` now take the new value and a
+  function. These functions are evaluated separately for every covered record,
+  as in v1. Added `Tree.InsertPureFunc` and `Tree.InsertRangePureFunc` for
+  functions whose result and error depend only on their arguments. These methods
+  may memoize repeated argument pairs within an insertion;
+  `Tree.InsertRangePureFunc` shares the memo across the entire range. A nil
+  function passed to `Tree.InsertFunc`, `Tree.InsertRangeFunc`,
+  `Tree.InsertPureFunc`, or `Tree.InsertRangePureFunc` now returns an error;
+  `Options.Inserter` may still be nil, which is equivalent to
+  `inserter.Replace`. Non-nil results become tree-owned and must not be modified
+  after the function returns.
 - Reduced allocations on the tree insert and serialization hot paths, lowering
   memory pressure and GC overhead during large builds.
 - `Load` now caches decoded source records by data offset during loading. This
@@ -32,6 +41,34 @@
   nodes and materialized sparse paths are retained until the `Tree` is
   discarded. Workloads with heavy mutation churn may see higher peak memory than
   v1.
+- Removed `Options.KeyGenerator` and the `KeyGenerator` interface. There is no
+  replacement. Record values are now indexed by a seeded structural content
+  hash, and values are compared exactly before deduplication, so hash collisions
+  cannot substitute a different value. A generator supplied for performance can
+  simply be deleted, as the built-in hashing subsumes it. A generator that
+  deliberately returned the same key for values you wanted collapsed has no
+  equivalent: those values are now kept separate, which changes output rather
+  than failing to compile.
+- Changed `inserter.DeepMerge` to reuse existing maps and slices when a merge
+  does not change their contents and retain unchanged nested containers,
+  avoiding unnecessary cloning and reindexing. Its result must therefore be
+  treated as immutable.
+- `Load` now returns an error when a database's metadata declares an unsupported
+  `ip_version` or `record_size` rather than using the value unchecked.
+- `New` now returns an error for an unsupported `Options.RecordSize`. Such a
+  value previously reached serialization, where a negative one panicked and any
+  other unsupported one failed only after output had been written.
+- `New` now returns an error for a negative `Options.BuildEpoch`. It was
+  previously written to the metadata as a very large `build_epoch`, producing a
+  database that readers accept but that carries a nonsense build time.
+- `mmdbtype.Uint128.Equal` now returns false when either value is a nil
+  `*Uint128`. Previously a nil argument caused a panic.
+- `mmdbtype.Float32.Equal` and `mmdbtype.Float64.Equal` now compare the wire
+  encoding rather than the Go value. `+0.0` and `-0.0` are no longer equal, and
+  two NaNs with the same bit pattern now are. This makes equality agree with
+  deduplication, which is already exact. In v1 an inserted signed zero was kept
+  or discarded depending on whether an unrelated sibling key changed in the same
+  insertion; it is now always kept.
 
 ## 1.2.0 (2026-01-14)
 
