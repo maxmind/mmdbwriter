@@ -31,11 +31,46 @@
   after the function returns.
 - Reduced allocations on the tree insert and serialization hot paths, lowering
   memory pressure and GC overhead during large builds.
-- `Load` now caches decoded source records by data offset during loading. This
-  speeds up databases with repeated records, but the cache is retained until
-  `Load` completes and can increase peak memory for very large source databases.
-  Source networks that reference the same data offset also share a decoded
-  value, so custom inserters must copy values before modifying them.
+- Reworked value storage to intern every value node once in a content-addressed
+  store: scalars, strings, and each nested map and slice. A seeded structural
+  hash keys the store, and an exact comparison resolves each collision. Scalars
+  and strings hold their final MMDB wire encoding in shared arenas, and
+  containers hold canonical child references. The store otherwise releases
+  inserted Go value graphs instead of retaining them, which substantially
+  reduces peak memory for large builds with repeated or overlapping data. Two
+  caches trade some retention for speed. A bounded cache keeps up to about one
+  million recently inserted caller values, evicted least recently used, so
+  repeated inserts of the same object are cheap. Values that an inserter or
+  `Tree.Get` reads are materialized once and kept on their store nodes for later
+  lookups and merges. Values returned by `Tree.Get`, and existing values passed
+  to inserter functions, are shared, read-only views. They are equal to the
+  inserted values but are not necessarily the same Go objects. The new value an
+  inserter receives is the value passed to the insert call, or a shared view of
+  the decoded record during `Load`. Treat both arguments as read-only. Call
+  `Copy` before you modify such a value, and never modify a value after you
+  insert it.
+- `Load` now interns records into the value store directly from the database
+  decoder, without building intermediate Go map and slice graphs. A cache of one
+  stored reference per source data offset makes repeated records cheap. `Load`
+  releases the cache before it returns. Networks that share a data record share
+  one stored value, so custom inserters must copy values before modifying them.
+  A non-nil `Options.Inserter` also materializes a view of each decoded record
+  for its callback.
+- A `Tree` is not safe for concurrent use. In v1, concurrent lookups on a tree
+  that was not being modified were safe. In v2, lookups materialize shared views
+  lazily, so the caller must synchronize even concurrent `Tree.Get` calls.
+- Set the `MMDBWRITER_REFCOUNT_AUDIT` environment variable to make every tree
+  audit its reference counts after each successful insert and load. The audit is
+  a debugging tool. It slows each insert to a full walk of the tree and the
+  store.
+- Inserting a raw `mmdbtype.Pointer` value now returns an error. The previous
+  writer emitted it as a literal, dangling pointer that no reader could resolve.
+- Inserting a negative or wider-than-128-bit `mmdbtype.Uint128` now returns an
+  error. The wire encoding holds only the magnitude, so a negative value
+  previously encoded as its absolute value and produced incorrect data.
+- The two validations above apply to direct inserts and to inserter results. A
+  custom inserter can receive an unsupported input value and must replace or
+  discard it.
 - Reworked tree storage to use an append-only indexed arena. This reduces
   pointer overhead and keeps node references stable, but merged or abandoned
   nodes and materialized sparse paths are retained until the `Tree` is
