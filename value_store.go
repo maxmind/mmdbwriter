@@ -163,11 +163,12 @@ type callerIdentityEntry struct {
 	next  int
 }
 
-// callerIdentityCacheSize bounds the caller-identity cache. Each entry pins
-// the caller's value and the interned node it maps to, so the bound trades
-// retained memory for repeat-insert speed. It must comfortably exceed the
-// distinct values a build presents repeatedly; overlay passes over
-// Enterprise-scale sources reuse hundreds of thousands of decoded values.
+// callerIdentityCacheSize bounds the caller-identity cache. The cache serves
+// direct inserts that present the same object repeatedly, such as callers
+// that cache decoded records. Each entry pins the caller's value and the
+// interned node it maps to. The bound therefore trades retained memory for
+// repeat-insert speed. It must comfortably exceed the distinct values a
+// build presents repeatedly.
 const callerIdentityCacheSize = 1 << 20
 
 // valueStore hash-conses all nodes in an MMDB value tree. Buckets are keyed

@@ -1045,6 +1045,26 @@ func TestStoreDecoderCachesOffsets(t *testing.T) {
 	}
 }
 
+// TestInsertFuncReceivesCallerValueUninterned pins that an inserter receives
+// the caller's value as passed, without the tree interning it first: the
+// input here is unstorable, so interning it would fail the insert.
+func TestInsertFuncReceivesCallerValueUninterned(t *testing.T) {
+	tree := newTestTree(t, "mmdbwriter-uninterned")
+
+	input := mmdbtype.Pointer(7)
+	require.NoError(t, tree.InsertFunc(
+		netip.MustParsePrefix("1.2.3.0/24"),
+		input,
+		func(_, newValue mmdbtype.DataType) (mmdbtype.DataType, error) {
+			require.Equal(t, input, newValue)
+			return mmdbtype.String("value"), nil
+		},
+	))
+
+	_, got := tree.Get(netip.MustParseAddr("1.2.3.4"))
+	assert.Equal(t, mmdbtype.String("value"), got)
+}
+
 // TestLoadRoundTripsSmallUnsignedTypes covers the decoder branches for uint16
 // and uint32, which the all-types fixture stores as uint64.
 func TestLoadRoundTripsSmallUnsignedTypes(t *testing.T) {

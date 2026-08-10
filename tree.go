@@ -445,6 +445,9 @@ func (t *Tree) insertNormalizedRef(
 	}
 	t.valueStore.retain(value)
 	iRec := t.newInsertRecordRef(recordType, insertFunc, false, node, value)
+	if insertFunc != nil {
+		iRec.valueView = t.valueStore.materialize(value)
+	}
 	defer iRec.releaseResolved()
 	return t.insertPrepared(prefix, iRec)
 }
@@ -471,6 +474,15 @@ func (t *Tree) newInsertRecord(
 	node nodeIndex,
 	value mmdbtype.DataType,
 ) (*insertRecord, error) {
+	// An inserter receives the caller's value as passed. Only inserter
+	// results are interned. Interning the input here would cost a full intern
+	// and a materialized view per insert. Overlay passes decode a fresh value
+	// per source network, so that cost would buy nothing there.
+	if insertFunc != nil {
+		iRec := t.newInsertRecordRef(recordType, insertFunc, inserterPure, node, nilValueRef)
+		iRec.valueView = value
+		return iRec, nil
+	}
 	var ref valueRef
 	if recordType == recordTypeData && value != nil {
 		var err error
@@ -493,7 +505,7 @@ func (t *Tree) newInsertRecordRef(
 	node nodeIndex,
 	ref valueRef,
 ) *insertRecord {
-	iRec := &insertRecord{
+	return &insertRecord{
 		recordType:   recordType,
 		inserter:     insertFunc,
 		inserterPure: inserterPure,
@@ -503,10 +515,6 @@ func (t *Tree) newInsertRecordRef(
 
 		store: t.valueStore,
 	}
-	if insertFunc != nil {
-		iRec.valueView = t.valueStore.materialize(ref)
-	}
-	return iRec
 }
 
 func (t *Tree) normalizeInsertPrefix(prefix netip.Prefix) (netip.Prefix, error) {

@@ -74,8 +74,10 @@ type insertRecord struct {
 
 	recordType recordType
 	value      valueRef
-	// valueView is the materialized form of value, built only when an inserter
-	// needs it as an argument.
+	// valueView is the value handed to the inserter as its new-value argument:
+	// the caller's value as passed for the insert entry points, or a
+	// store-materialized view when the insert began from an interned
+	// reference, as when loading.
 	valueView mmdbtype.DataType
 	// callerValue is the caller's object for a direct insert. Its identity is
 	// registered only after the insert succeeds, so a failed insert cannot
