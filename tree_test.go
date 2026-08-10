@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"hash/maphash"
 	"math"
 	"math/big"
 	"net/netip"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/oschwald/maxminddb-golang/v2"
+	"github.com/oschwald/maxminddb-golang/v2/mmdbdata"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -105,6 +107,45 @@ func TestWriteToDoesNotGrowValueStore(t *testing.T) {
 	assert.Len(t, tree.valueStore.nodes, nodesBefore)
 	assert.Len(t, tree.valueStore.freeRefs, freeBefore)
 }
+
+// TestLoadWithCustomInserter covers loading through a non-nil Options.Inserter,
+// which materializes a view of each decoded record for the inserter.
+func TestLoadWithCustomInserter(t *testing.T) {
+	tree, err := New(Options{
+		DatabaseType:            "mmdbwriter-load-inserter",
+		Description:             map[string]string{"en": "Test database"},
+		IncludeReservedNetworks: true,
+		IPVersion:               4,
+		RecordSize:              24,
+	})
+	require.NoError(t, err)
+	require.NoError(t, tree.Insert(
+		netip.MustParsePrefix("1.2.3.0/24"),
+		mmdbtype.Map{"base": mmdbtype.String("value")},
+	))
+
+	var buf bytes.Buffer
+	_, writeErr := tree.WriteTo(&buf)
+	require.NoError(t, writeErr)
+
+	f, err := os.CreateTemp(t.TempDir(), "mmdbwriter-load-inserter-*.mmdb")
+	require.NoError(t, err)
+	defer func() { require.NoError(t, os.Remove(f.Name())) }()
+	_, err = f.Write(buf.Bytes())
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	loaded, err := Load(f.Name(), Options{
+		IPVersion:               4,
+		IncludeReservedNetworks: true,
+		Inserter:                inserter.TopLevelMerge,
+	})
+	require.NoError(t, err)
+
+	_, got := loaded.Get(netip.MustParseAddr("1.2.3.4"))
+	assert.Equal(t, mmdbtype.Map{"base": mmdbtype.String("value")}, got)
+}
+
 func TestTreeNodeBlocksGrowAndWrite(t *testing.T) {
 	tree, err := New(Options{
 		DatabaseType:            "Test",
@@ -874,6 +915,189 @@ func TestLoadDecodeErrorIncludesNetwork(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unmarshaling record for network 1.2.3.0/24")
+}
+
+// TestStoreDecoderCachesOffsets pins that a repeated source offset hits the
+// decoder's cache: the second decode of the same record does no hashing,
+// which re-interning the record by content could not avoid.
+func TestStoreDecoderCachesOffsets(t *testing.T) {
+	tree, err := New(Options{
+		DatabaseType:            "mmdbwriter-decoder-cache",
+		Description:             map[string]string{"en": "Test database"},
+		IncludeReservedNetworks: true,
+		IPVersion:               4,
+		RecordSize:              24,
+	})
+	require.NoError(t, err)
+	value := mmdbtype.Map{"shared": mmdbtype.String("value")}
+	require.NoError(t, tree.Insert(netip.MustParsePrefix("1.1.1.0/24"), value))
+	require.NoError(t, tree.Insert(netip.MustParsePrefix("2.2.2.0/24"), value))
+
+	var buf bytes.Buffer
+	_, writeErr := tree.WriteTo(&buf)
+	require.NoError(t, writeErr)
+
+	reader, err := maxminddb.OpenBytes(buf.Bytes())
+	require.NoError(t, err)
+	defer reader.Close()
+
+	hashCount := 0
+	seed := maphash.MakeSeed()
+	store := newValueStoreWithHash(func(b []byte) uint64 {
+		hashCount++
+		return maphash.Bytes(seed, b)
+	})
+	decoder := newStoreDecoder(store)
+	defer decoder.close()
+
+	var refs []valueRef
+	for res := range reader.Networks() {
+		require.NoError(t, res.Err())
+		require.NoError(t, res.Decode(decoder))
+		refs = append(refs, decoder.takeResult())
+	}
+	require.Len(t, refs, 2)
+	assert.Equal(t, refs[0], refs[1])
+
+	hashesAfterFirst := hashCount
+	// Decode the same record once more; the offset cache must answer it.
+	for res := range reader.Networks() {
+		require.NoError(t, res.Err())
+		require.NoError(t, res.Decode(decoder))
+		store.release(decoder.takeResult())
+		break
+	}
+	assert.Equal(t, hashesAfterFirst, hashCount,
+		"a cached offset was re-interned by content")
+
+	for _, ref := range refs {
+		store.release(ref)
+	}
+}
+
+// TestLoadRoundTripsSmallUnsignedTypes covers the decoder branches for uint16
+// and uint32, which the all-types fixture stores as uint64.
+func TestLoadRoundTripsSmallUnsignedTypes(t *testing.T) {
+	value := mmdbtype.Map{
+		"uint16": mmdbtype.Uint16(0x64),
+		"uint32": mmdbtype.Uint32(0x10000000),
+	}
+	tree, err := New(Options{
+		BuildEpoch:              123456789,
+		DatabaseType:            "mmdbwriter-load-small-uints",
+		Description:             map[string]string{"en": "Test database"},
+		IncludeReservedNetworks: true,
+		IPVersion:               4,
+		RecordSize:              24,
+	})
+	require.NoError(t, err)
+	require.NoError(t, tree.Insert(netip.MustParsePrefix("1.2.3.0/24"), value))
+
+	var buf bytes.Buffer
+	_, writeErr := tree.WriteTo(&buf)
+	require.NoError(t, writeErr)
+
+	f, err := os.CreateTemp(t.TempDir(), "mmdbwriter-load-small-uints-*.mmdb")
+	require.NoError(t, err)
+	defer func() { require.NoError(t, os.Remove(f.Name())) }()
+	_, err = f.Write(buf.Bytes())
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	loaded, err := Load(f.Name(), Options{
+		BuildEpoch:              123456789,
+		IPVersion:               4,
+		IncludeReservedNetworks: true,
+	})
+	require.NoError(t, err)
+
+	_, got := loaded.Get(netip.MustParseAddr("1.2.3.4"))
+	assert.Equal(t, value, got)
+
+	var rewritten bytes.Buffer
+	_, writeErr = loaded.WriteTo(&rewritten)
+	require.NoError(t, writeErr)
+	assert.Equal(t, buf.Bytes(), rewritten.Bytes())
+}
+
+// TestStoreDecoderReleasesOverwrittenResult pins that a repeated Decode
+// without takeResult does not leak the first result's reference.
+func TestStoreDecoderReleasesOverwrittenResult(t *testing.T) {
+	store := newValueStore()
+	decoder := newStoreDecoder(store)
+
+	// A map with one string entry: {"k": "a"}.
+	first := []byte{0xe1, 0x41, 'k', 0x41, 'a'}
+	require.NoError(t, decoder.UnmarshalMaxMindDB(mmdbdata.NewDecoder(first, 0)))
+	// Pad the second buffer so its value has a distinct offset. The offset
+	// cache would otherwise answer it with the first result.
+	second := []byte{0x00, 0xe1, 0x41, 'k', 0x41, 'b'}
+	require.NoError(t, decoder.UnmarshalMaxMindDB(mmdbdata.NewDecoder(second, 1)))
+
+	store.release(decoder.takeResult())
+	decoder.close()
+	assert.Zero(t, liveValueNodeCount(store),
+		"an overwritten result leaked its reference")
+}
+
+// TestStoreDecoderRejectsDuplicateMapKeys pins that a malformed map with a
+// repeated key fails instead of interning an ambiguous container.
+func TestStoreDecoderRejectsDuplicateMapKeys(t *testing.T) {
+	store := newValueStore()
+	decoder := newStoreDecoder(store)
+
+	// A map with two entries that share the key "k".
+	data := []byte{0xe2, 0x41, 'k', 0x41, 'a', 0x41, 'k', 0x41, 'b'}
+	err := decoder.UnmarshalMaxMindDB(mmdbdata.NewDecoder(data, 0))
+	require.ErrorContains(t, err, `map has duplicate key "k"`)
+
+	decoder.close()
+	assert.Zero(t, liveValueNodeCount(store),
+		"a rejected map leaked its children")
+}
+
+// TestLoadSharesRefsForSharedOffsets pins the decoder's offset cache: source
+// networks that point at the same data record must intern to one shared
+// reference rather than decoding the record once per network.
+func TestLoadSharesRefsForSharedOffsets(t *testing.T) {
+	tree, err := New(Options{
+		DatabaseType:            "mmdbwriter-load-shared-offset",
+		Description:             map[string]string{"en": "Test database"},
+		IncludeReservedNetworks: true,
+		IPVersion:               4,
+		RecordSize:              24,
+	})
+	require.NoError(t, err)
+
+	value := mmdbtype.Map{"shared": mmdbtype.String("value")}
+	require.NoError(t, tree.Insert(netip.MustParsePrefix("1.1.1.0/24"), value))
+	require.NoError(t, tree.Insert(netip.MustParsePrefix("2.2.2.0/24"), value))
+
+	var buf bytes.Buffer
+	_, writeErr := tree.WriteTo(&buf)
+	require.NoError(t, writeErr)
+
+	f, err := os.CreateTemp(t.TempDir(), "mmdbwriter-load-shared-offset-*.mmdb")
+	require.NoError(t, err)
+	defer func() { require.NoError(t, os.Remove(f.Name())) }()
+	_, err = f.Write(buf.Bytes())
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	loaded, err := Load(f.Name(), Options{
+		IPVersion:               4,
+		IncludeReservedNetworks: true,
+	})
+	require.NoError(t, err)
+
+	_, first := loaded.getNode(loaded.root, [16]byte{1, 1, 1}, 0)
+	_, second := loaded.getNode(loaded.root, [16]byte{2, 2, 2}, 0)
+	require.Equal(t, recordTypeData, first.recordType)
+	require.Equal(t, recordTypeData, second.recordType)
+	assert.Equal(t, first.value, second.value, "shared offsets should share one reference")
+	assert.EqualValues(t, 2, loaded.valueStore.node(first.value).refCount,
+		"only the two records should reference the shared value after loading")
+	assert.Equal(t, value, loaded.valueStore.materialize(first.value))
 }
 
 func TestTreeInsertAndGet(t *testing.T) {

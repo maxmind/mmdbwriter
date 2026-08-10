@@ -210,9 +210,15 @@ func metadataDimension(name string, value uint) (int, error) {
 	return int(value), nil
 }
 
-// Load loads an existing database into the writer. Source records that share a
-// data offset also share a decoded value. An Options.Inserter must treat its
-// arguments as immutable and copy a value before modifying it.
+// Load loads an existing database into the writer. It interns records into
+// the value store directly from the database, without building intermediate
+// map and slice graphs. Source networks that share a data offset share one
+// stored value.
+// During the load, a cache holds one reference per distinct offset in the
+// source data section. Load releases the cache before it returns. A
+// non-nil Options.Inserter instead receives a materialized view of each
+// decoded record. The inserter must treat its arguments as immutable and must
+// copy a value before modifying it.
 func Load(path string, opts Options) (*Tree, error) {
 	db, err := maxminddb.Open(path)
 	if err != nil {
@@ -252,8 +258,10 @@ func Load(path string, opts Options) (*Tree, error) {
 		return nil, fmt.Errorf("creating tree for %s: %w", path, err)
 	}
 
-	unmarshaler := mmdbtype.NewUnmarshaler()
-	dataByOffset := map[uintptr]mmdbtype.DataType{}
+	// The decoder interns records straight into the value store. It caches
+	// one reference per source data offset, so shared records decode once.
+	decoder := newStoreDecoder(tree.valueStore)
+	defer decoder.close()
 
 	var networkOpts []maxminddb.NetworksOption
 	if opts.IPVersion == 6 && opts.DisableIPv4Aliasing {
@@ -266,31 +274,25 @@ func Load(path string, opts Options) (*Tree, error) {
 			return nil, fmt.Errorf("loading network %s: %w", prefix, err)
 		}
 
-		offset := res.Offset()
-		value, ok := dataByOffset[offset]
-		if !ok {
-			unmarshaler.Clear()
-			err := res.Decode(unmarshaler)
-			if err != nil {
-				return nil, fmt.Errorf("unmarshaling record for network %s: %w", prefix, err)
-			}
-			value = unmarshaler.Result()
-			dataByOffset[offset] = value
+		if err := res.Decode(decoder); err != nil {
+			return nil, fmt.Errorf("unmarshaling record for network %s: %w", prefix, err)
 		}
+		value := decoder.takeResult()
 
 		prefix, err := tree.normalizeLoadPrefix(prefix)
 		if err != nil {
+			tree.valueStore.release(value)
 			return nil, err
 		}
 
-		err = tree.insertNormalized(
+		err = tree.insertNormalizedRef(
 			prefix,
 			recordTypeData,
 			tree.inserter,
-			false,
 			noNodeIndex,
 			value,
 		)
+		tree.valueStore.release(value)
 		if err != nil {
 			return nil, fmt.Errorf("loading network %s: %w", prefix, err)
 		}
@@ -406,21 +408,20 @@ func (t *Tree) insert(
 	return t.insertPrepared(prefix, iRec)
 }
 
-func (t *Tree) insertNormalized(
+// insertNormalizedRef inserts an already interned value. It borrows the
+// caller's reference, taking one of its own for the insert.
+func (t *Tree) insertNormalizedRef(
 	prefix netip.Prefix,
 	recordType recordType,
 	insertFunc inserter.Func,
-	inserterPure bool,
 	node nodeIndex,
-	value mmdbtype.DataType,
+	value valueRef,
 ) error {
 	if t.treeDepth == 32 && !prefix.Addr().Is4() {
 		return errors.New("IPv6 prefixes cannot be inserted into an IPv4 tree")
 	}
-	iRec, err := t.newInsertRecord(recordType, insertFunc, inserterPure, node, value)
-	if err != nil {
-		return err
-	}
+	t.valueStore.retain(value)
+	iRec := t.newInsertRecordRef(recordType, insertFunc, false, node, value)
 	defer iRec.releaseResolved()
 	return t.insertPrepared(prefix, iRec)
 }
@@ -455,6 +456,18 @@ func (t *Tree) newInsertRecord(
 			return nil, err
 		}
 	}
+	return t.newInsertRecordRef(recordType, insertFunc, inserterPure, node, ref), nil
+}
+
+// newInsertRecordRef builds an insertRecord that owns the given reference,
+// which releaseResolved releases.
+func (t *Tree) newInsertRecordRef(
+	recordType recordType,
+	insertFunc inserter.Func,
+	inserterPure bool,
+	node nodeIndex,
+	ref valueRef,
+) *insertRecord {
 	iRec := &insertRecord{
 		recordType:   recordType,
 		inserter:     insertFunc,
@@ -468,7 +481,7 @@ func (t *Tree) newInsertRecord(
 	if insertFunc != nil {
 		iRec.valueView = t.valueStore.materialize(ref)
 	}
-	return iRec, nil
+	return iRec
 }
 
 func (t *Tree) normalizeInsertPrefix(prefix netip.Prefix) (netip.Prefix, error) {
