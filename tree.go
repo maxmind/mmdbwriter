@@ -416,6 +416,12 @@ func (t *Tree) insert(
 		return err
 	}
 	err = t.insertPrepared(prefix, iRec)
+	if err == nil {
+		// Register the identity only once the tree references the value. A
+		// registration that survived a failed insert would serve stale data
+		// if the caller mutated and retried the same object.
+		t.valueStore.rememberCallerIdentity(iRec.callerValue, iRec.value)
+	}
 	// The audit only balances once the memo and value references are gone, so
 	// release explicitly rather than by defer.
 	iRec.releaseResolved()
@@ -473,7 +479,9 @@ func (t *Tree) newInsertRecord(
 			return nil, err
 		}
 	}
-	return t.newInsertRecordRef(recordType, insertFunc, inserterPure, node, ref), nil
+	iRec := t.newInsertRecordRef(recordType, insertFunc, inserterPure, node, ref)
+	iRec.callerValue = value
+	return iRec, nil
 }
 
 // newInsertRecordRef builds an insertRecord that owns the given reference,
@@ -684,6 +692,12 @@ func (t *Tree) insertRange(
 		if err != nil {
 			break
 		}
+	}
+	if err == nil {
+		// Register the identity only once the tree references the value. A
+		// registration that survived a failed insert would serve stale data
+		// if the caller mutated and retried the same object.
+		t.valueStore.rememberCallerIdentity(iRec.callerValue, iRec.value)
 	}
 	// The audit only balances once the memo and value references are gone, so
 	// release explicitly rather than by defer.

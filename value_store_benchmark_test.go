@@ -55,6 +55,7 @@ func BenchmarkValueStoreEnterpriseValue(b *testing.B) {
 		if err != nil {
 			b.Fatal(err)
 		}
+		store.rememberCallerIdentity(value, canonical)
 		b.Cleanup(func() { store.release(canonical) })
 		// Warm the caller-identity cache with every copy, so the measurement
 		// covers cache hits at every b.N instead of a b.N-dependent mix of
@@ -70,10 +71,12 @@ func BenchmarkValueStoreEnterpriseValue(b *testing.B) {
 		b.ReportAllocs()
 		b.ResetTimer()
 		for i := range b.N {
-			ref, err := store.intern(values[i%len(values)])
+			value := values[i%len(values)]
+			ref, err := store.intern(value)
 			if err != nil {
 				b.Fatal(err)
 			}
+			store.rememberCallerIdentity(value, ref)
 			store.release(ref)
 		}
 	})
@@ -90,14 +93,17 @@ func BenchmarkValueStoreEnterpriseValue(b *testing.B) {
 		if err != nil {
 			b.Fatal(err)
 		}
+		store.rememberCallerIdentity(value, canonical)
 		b.Cleanup(func() { store.release(canonical) })
 		b.ReportAllocs()
 		b.ResetTimer()
 		for i := range b.N {
-			ref, err := store.intern(values[i%len(values)])
+			value := values[i%len(values)]
+			ref, err := store.intern(value)
 			if err != nil {
 				b.Fatal(err)
 			}
+			store.rememberCallerIdentity(value, ref)
 			store.release(ref)
 		}
 	})
@@ -109,10 +115,12 @@ func BenchmarkValueStoreEnterpriseValue(b *testing.B) {
 		b.ReportAllocs()
 		b.ResetTimer()
 		for i := range b.N {
-			ref, err := store.intern(values[i%len(values)])
+			value := values[i%len(values)]
+			ref, err := store.intern(value)
 			if err != nil {
 				b.Fatal(err)
 			}
+			store.rememberCallerIdentity(value, ref)
 			store.release(ref)
 		}
 	})

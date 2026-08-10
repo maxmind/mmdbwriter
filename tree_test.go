@@ -87,6 +87,25 @@ func TestTreeInsertSplittingDataRecordMaintainsRefCounts(t *testing.T) {
 	assert.Equal(t, valueKindInvalid, tree.valueStore.nodes[initialRef].kind)
 }
 
+// TestFailedInsertDoesNotCacheCallerIdentity pins that the caller-identity
+// cache registers a value only after its insert succeeds. A registration that
+// survived a failed insert would serve the pre-mutation data if the caller
+// mutated and retried the same object.
+func TestFailedInsertDoesNotCacheCallerIdentity(t *testing.T) {
+	tree, err := New(Options{IPVersion: 4})
+	require.NoError(t, err)
+
+	value := mmdbtype.Map{"name": mmdbtype.String("before")}
+	err = tree.Insert(netip.MustParsePrefix("10.0.0.0/8"), value)
+	require.Error(t, err, "inserting into a reserved network should fail")
+
+	value["name"] = mmdbtype.String("after")
+	require.NoError(t, tree.Insert(netip.MustParsePrefix("1.2.3.0/24"), value))
+
+	_, got := tree.Get(netip.MustParseAddr("1.2.3.4"))
+	assert.Equal(t, mmdbtype.Map{"name": mmdbtype.String("after")}, got)
+}
+
 // TestWriteToDoesNotGrowValueStore pins that serialization leaves the tree's
 // store untouched: metadata goes through a separate store.
 func TestWriteToDoesNotGrowValueStore(t *testing.T) {
@@ -106,6 +125,57 @@ func TestWriteToDoesNotGrowValueStore(t *testing.T) {
 
 	assert.Len(t, tree.valueStore.nodes, nodesBefore)
 	assert.Len(t, tree.valueStore.freeRefs, freeBefore)
+}
+
+// TestSuccessfulInsertCachesCallerIdentity pins the documented cache
+// semantics: after a successful insert, an in-place mutation of the same
+// object is invisible to a later insert of that object, which reuses the
+// data from before the mutation.
+func TestSuccessfulInsertCachesCallerIdentity(t *testing.T) {
+	tree := newTestTree(t, "mmdbwriter-success-cache")
+
+	value := mmdbtype.Map{"name": mmdbtype.String("before")}
+	require.NoError(t, tree.Insert(netip.MustParsePrefix("1.2.3.0/24"), value))
+
+	// The contract forbids this mutation. The cache serves the old data.
+	value["name"] = mmdbtype.String("after")
+	require.NoError(t, tree.Insert(netip.MustParsePrefix("2.2.2.0/24"), value))
+
+	_, got := tree.Get(netip.MustParseAddr("2.2.2.4"))
+	assert.Equal(t, mmdbtype.Map{"name": mmdbtype.String("before")}, got)
+}
+
+// TestFailedInsertRangeDoesNotCacheCallerIdentity is the InsertRange variant
+// of the failed-insert regression: a range that partially succeeds before a
+// reserved subnet fails must not leave the caller's object registered.
+func TestFailedInsertRangeDoesNotCacheCallerIdentity(t *testing.T) {
+	tree, err := New(Options{IPVersion: 4})
+	require.NoError(t, err)
+
+	value := mmdbtype.Map{"name": mmdbtype.String("before")}
+	// The first /24 succeeds; the second falls in reserved 10.0.0.0/8.
+	err = tree.InsertRange(
+		netip.MustParseAddr("9.255.255.0"),
+		netip.MustParseAddr("10.0.0.255"),
+		value,
+	)
+	require.Error(t, err, "a range into a reserved network should fail")
+
+	_, got := tree.Get(netip.MustParseAddr("9.255.255.1"))
+	require.Equal(t, mmdbtype.Map{"name": mmdbtype.String("before")}, got,
+		"the subnet inserted before the failure should keep the original value")
+
+	value["name"] = mmdbtype.String("after")
+	require.NoError(t, tree.InsertRange(
+		netip.MustParseAddr("11.0.0.0"),
+		netip.MustParseAddr("11.0.0.255"),
+		value,
+	))
+
+	_, got = tree.Get(netip.MustParseAddr("11.0.0.1"))
+	assert.Equal(t, mmdbtype.Map{"name": mmdbtype.String("after")}, got)
+	_, got = tree.Get(netip.MustParseAddr("9.255.255.1"))
+	assert.Equal(t, mmdbtype.Map{"name": mmdbtype.String("before")}, got)
 }
 
 // TestLoadWithCustomInserter covers loading through a non-nil Options.Inserter,

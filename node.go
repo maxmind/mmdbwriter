@@ -76,7 +76,11 @@ type insertRecord struct {
 	value      valueRef
 	// valueView is the materialized form of value, built only when an inserter
 	// needs it as an argument.
-	valueView    mmdbtype.DataType
+	valueView mmdbtype.DataType
+	// callerValue is the caller's object for a direct insert. Its identity is
+	// registered only after the insert succeeds, so a failed insert cannot
+	// serve stale data if the caller mutates and retries the object.
+	callerValue  mmdbtype.DataType
 	inserterPure bool
 	memo         map[valueRef]valueRef
 	memoFirst    valueRef

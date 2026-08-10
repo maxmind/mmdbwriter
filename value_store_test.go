@@ -384,6 +384,7 @@ func TestValueStoreCachesUint128PointerIdentity(t *testing.T) {
 	store := newValueStore()
 	ref, err := store.intern(valuePointer)
 	require.NoError(t, err)
+	store.rememberCallerIdentity(valuePointer, ref)
 
 	sameRef, err := store.intern(valuePointer)
 	require.NoError(t, err)
@@ -479,9 +480,11 @@ func TestValueStoreCallerIdentityCacheIsLRU(t *testing.T) {
 
 	firstRef, err := store.intern(first)
 	require.NoError(t, err)
+	store.rememberCallerIdentity(first, firstRef)
 	store.release(firstRef)
 	secondRef, err := store.intern(second)
 	require.NoError(t, err)
+	store.rememberCallerIdentity(second, secondRef)
 	store.release(secondRef)
 
 	// Refresh first so second becomes the least-recently-used entry.
@@ -490,6 +493,7 @@ func TestValueStoreCallerIdentityCacheIsLRU(t *testing.T) {
 	store.release(firstRef)
 	thirdRef, err := store.intern(third)
 	require.NoError(t, err)
+	store.rememberCallerIdentity(third, thirdRef)
 	store.release(thirdRef)
 
 	firstIdentity, _ := dataIdentity(first)

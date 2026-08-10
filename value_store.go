@@ -410,12 +410,7 @@ func (s *valueStore) intern(value mmdbtype.DataType) (valueRef, error) {
 		}
 	}
 
-	ref, err := s.internUncached(value)
-	if err != nil {
-		return nilValueRef, err
-	}
-	s.rememberCallerIdentity(value, ref)
-	return ref, nil
+	return s.internUncached(value)
 }
 
 func (s *valueStore) internUncached(value mmdbtype.DataType) (valueRef, error) {
