@@ -68,28 +68,43 @@ func TestTreeInsertSplittingDataRecordMaintainsRefCounts(t *testing.T) {
 	initialValue := mmdbtype.String("initial")
 	require.NoError(t, tree.Insert(netip.MustParsePrefix("1.1.0.0/24"), initialValue))
 
-	hash, err := tree.dataMap.hasher.Hash(initialValue)
-	require.NoError(t, err)
-	key := hash
-	initialMapValue := tree.dataMap.data[key]
-	require.NotNil(t, initialMapValue)
-	require.Equal(t, uint32(1), initialMapValue.refCount)
+	_, initialRecord := tree.getNode(tree.root, [16]byte{1, 1}, 0)
+	initialRef := initialRecord.value
+	initialRefCount := tree.valueStore.node(initialRef).refCount
 
 	require.NoError(t, tree.Insert(
 		netip.MustParsePrefix("1.1.0.128/25"),
 		mmdbtype.String("upper"),
 	))
-	assert.Equal(t, uint32(1), initialMapValue.refCount)
-	assert.Same(t, initialMapValue, tree.dataMap.data[key])
+	assert.Equal(t, initialRefCount, tree.valueStore.node(initialRef).refCount)
 
 	require.NoError(t, tree.Insert(
 		netip.MustParsePrefix("1.1.0.0/25"),
 		mmdbtype.String("lower"),
 	))
-	assert.Zero(t, initialMapValue.refCount)
-	assert.NotContains(t, tree.dataMap.data, key)
+	assert.Equal(t, valueKindInvalid, tree.valueStore.nodes[initialRef].kind)
 }
 
+// TestWriteToDoesNotGrowValueStore pins that serialization leaves the tree's
+// store untouched: metadata goes through a separate store.
+func TestWriteToDoesNotGrowValueStore(t *testing.T) {
+	tree := newTestTree(t, "mmdbwriter-writeto-store")
+	require.NoError(t, tree.Insert(
+		netip.MustParsePrefix("1.2.3.0/24"),
+		mmdbtype.Map{"name": mmdbtype.String("value")},
+	))
+	nodesBefore := len(tree.valueStore.nodes)
+	freeBefore := len(tree.valueStore.freeRefs)
+
+	for range 2 {
+		var buf bytes.Buffer
+		_, err := tree.WriteTo(&buf)
+		require.NoError(t, err)
+	}
+
+	assert.Len(t, tree.valueStore.nodes, nodesBefore)
+	assert.Len(t, tree.valueStore.freeRefs, freeBefore)
+}
 func TestTreeNodeBlocksGrowAndWrite(t *testing.T) {
 	tree, err := New(Options{
 		DatabaseType:            "Test",
@@ -192,12 +207,17 @@ func TestTreeInsertPureFuncMemoizesDistinctExistingValues(t *testing.T) {
 	// Two distinct existing values promote the memo to its map form, so this
 	// also pins that releaseResolved drains every entry rather than the first.
 	// The four covered records now share one value and merge back into a single
-	// record, so exactly one reference should remain.
-	require.Len(t, tree.dataMap.data, 1, "the memo retained replaced values")
-	for _, dmv := range tree.dataMap.data {
-		assert.EqualValues(t, 1, dmv.refCount,
+	// record, so exactly one live value with one reference should remain.
+	live := 0
+	for ref := range tree.valueStore.nodes {
+		if tree.valueStore.nodes[ref].kind == valueKindInvalid {
+			continue
+		}
+		live++
+		assert.EqualValues(t, 1, tree.valueStore.nodes[ref].refCount,
 			"the memo held references after the insert finished")
 	}
+	assert.Equal(t, 1, live, "the memo retained replaced values")
 }
 
 func TestTreeInsertPureFuncReleasesMemoAfterPartialError(t *testing.T) {
@@ -226,14 +246,13 @@ func TestTreeInsertPureFuncReleasesMemoAfterPartialError(t *testing.T) {
 	)
 	require.ErrorIs(t, err, insertErr)
 
-	hash, err := tree.dataMap.hasher.Hash(result)
-	require.NoError(t, err)
-	stored := tree.dataMap.data[hash]
-	require.NotNil(t, stored)
+	_, storedRecord := tree.getNode(tree.root, [16]byte{1, 2, 3, 0}, 0)
+	require.Equal(t, recordTypeData, storedRecord.recordType)
+	require.Equal(t, result, tree.valueStore.materialize(storedRecord.value))
 	assert.Equal(
 		t,
 		uint32(1),
-		stored.refCount,
+		tree.valueStore.node(storedRecord.value).refCount,
 		"only the inserted record should hold a reference after the memo is released",
 	)
 
@@ -403,7 +422,7 @@ func TestTreeInsertFuncReturnsErrorForNilUint128Result(t *testing.T) {
 			result: func(value *mmdbtype.Uint128) mmdbtype.DataType {
 				return value
 			},
-			expectedError: "cannot hash a nil *mmdbtype.Uint128",
+			expectedError: "cannot intern a nil *mmdbtype.Uint128",
 		},
 		{
 			name: "nested",
@@ -413,7 +432,7 @@ func TestTreeInsertFuncReturnsErrorForNilUint128Result(t *testing.T) {
 			result: func(value *mmdbtype.Uint128) mmdbtype.DataType {
 				return mmdbtype.Map{"value": value}
 			},
-			expectedError: `hashing map key "value": cannot hash a nil *mmdbtype.Uint128`,
+			expectedError: `interning value for map key "value": cannot intern a nil *mmdbtype.Uint128`,
 		},
 	}
 
@@ -1648,11 +1667,10 @@ func s2ip(v string) *any {
 	return &i
 }
 
-// TestInsertPureFuncEqualResultKeepsReference pins the addRef inside the branch
-// where a pure inserter returns a value equal to the existing one. Without it,
-// releaseResolved drops the record's own reference and unlinks a value a record
-// still points at. It does not pin the branch itself: falling through to
-// dataMap.store instead is behaviorally equivalent.
+// TestInsertPureFuncEqualResultKeepsReference pins the reference accounting
+// when a pure inserter returns a value equal to the existing one: interning
+// the result resolves to the same canonical node and takes the one reference
+// the memo owns, and releaseResolved releases exactly that reference.
 func TestInsertPureFuncEqualResultKeepsReference(t *testing.T) {
 	tree := newTestTree(t, "mmdbwriter-pure-equal")
 
@@ -1667,16 +1685,13 @@ func TestInsertPureFuncEqualResultKeepsReference(t *testing.T) {
 		},
 	))
 
-	require.Len(t, tree.dataMap.data, 1,
+	require.Equal(t, 1, liveValueNodeCount(tree.valueStore),
 		"the retained value was unlinked while a record still referenced it")
-	for _, dmv := range tree.dataMap.data {
-		assert.NotZero(t, dmv.refCount,
-			"the retained value has no references but is still in the tree")
-	}
 
 	require.NoError(t, tree.Insert(
 		netip.MustParsePrefix("2.0.0.0/8"), mmdbtype.String("value")))
-	assert.Len(t, tree.dataMap.data, 1, "an equal value failed to deduplicate")
+	assert.Equal(t, 1, liveValueNodeCount(tree.valueStore),
+		"an equal value failed to deduplicate")
 }
 
 // TestInsertFuncReleasesRedundantStoredReference covers the other uncovered
@@ -1689,16 +1704,14 @@ func TestInsertFuncReleasesRedundantStoredReference(t *testing.T) {
 	prefix := netip.MustParsePrefix("1.0.0.0/8")
 	require.NoError(t, tree.Insert(prefix, mmdbtype.String("shared")))
 
-	require.Len(t, tree.dataMap.data, 1)
-	var stored *dataMapValue
-	for _, value := range tree.dataMap.data {
-		stored = value
-	}
-	require.EqualValues(t, 1, stored.refCount)
+	_, storedRecord := tree.getNode(tree.root, [16]byte{1}, 0)
+	require.Equal(t, recordTypeData, storedRecord.recordType)
+	storedRef := storedRecord.value
+	require.EqualValues(t, 1, tree.valueStore.node(storedRef).refCount)
 
-	// A pointer form is not Equal to the value form, so resolve stores it. The
-	// store deduplicates back onto the record's own value, leaving a reference
-	// that must be released.
+	// A pointer form normalizes to the value form, so interning the result
+	// deduplicates back onto the record's own value, leaving a reference that
+	// must be released.
 	shared := mmdbtype.String("shared")
 	require.NoError(t, tree.InsertFunc(
 		prefix,
@@ -1708,8 +1721,9 @@ func TestInsertFuncReleasesRedundantStoredReference(t *testing.T) {
 		},
 	))
 
-	assert.Len(t, tree.dataMap.data, 1)
-	assert.EqualValues(t, 1, stored.refCount, "a redundant stored reference leaked")
+	assert.Equal(t, 1, liveValueNodeCount(tree.valueStore))
+	assert.EqualValues(t, 1, tree.valueStore.node(storedRef).refCount,
+		"a redundant stored reference leaked")
 }
 
 // TestInsertPureFuncMatchesInsertFuncOutput is the differential that most
@@ -1771,7 +1785,7 @@ func TestInsertPureFuncNilResultRemovesRecords(t *testing.T) {
 		inserter.Remove,
 	))
 
-	assert.Empty(t, tree.dataMap.data, "removed values were not released")
+	assert.Zero(t, liveValueNodeCount(tree.valueStore), "removed values were not released")
 }
 
 // TestInsertPureFuncCreatesPathFromEmptySpace covers the compressed-path branch
@@ -2028,13 +2042,13 @@ func TestInsertNilValueRemovesRecord(t *testing.T) {
 
 	prefix := netip.MustParsePrefix("1.0.0.0/8")
 	require.NoError(t, tree.Insert(prefix, mmdbtype.String("value")))
-	require.Len(t, tree.dataMap.data, 1)
+	require.Equal(t, 1, liveValueNodeCount(tree.valueStore))
 
 	require.NoError(t, tree.Insert(prefix, nil))
 
 	_, value := tree.Get(netip.MustParseAddr("1.2.3.4"))
 	assert.Nil(t, value)
-	assert.Empty(t, tree.dataMap.data, "the removed value was not released")
+	assert.Zero(t, liveValueNodeCount(tree.valueStore), "the removed value was not released")
 }
 
 // TestInserterNilResultOverEmptySpaceIsNoOp covers the guard for an inserter
@@ -2086,7 +2100,7 @@ func TestInserterNilResultOverEmptySpaceIsNoOp(t *testing.T) {
 
 			_, value := tree.Get(netip.MustParseAddr("9.9.9.1"))
 			assert.Nil(t, value)
-			assert.Empty(t, tree.dataMap.data)
+			assert.Zero(t, liveValueNodeCount(tree.valueStore))
 
 			var buf bytes.Buffer
 			_, writeErr := tree.WriteTo(&buf)
@@ -2095,9 +2109,9 @@ func TestInserterNilResultOverEmptySpaceIsNoOp(t *testing.T) {
 	}
 }
 
-// TestInsertReportsHashErrorFromIdentityPath covers the hash failure returned
-// through storeWithIdentity, which is the path a plain Insert takes.
-func TestInsertReportsHashErrorFromIdentityPath(t *testing.T) {
+// TestInsertReportsNilNestedValueError covers the intern failure for a nil
+// nested value, which is the path a plain Insert takes.
+func TestInsertReportsNilNestedValueError(t *testing.T) {
 	tree := newTestTree(t, "mmdbwriter-identity-error")
 
 	err := tree.Insert(
@@ -2106,12 +2120,12 @@ func TestInsertReportsHashErrorFromIdentityPath(t *testing.T) {
 	)
 
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), `hashing map key "u"`)
-	assert.Contains(t, err.Error(), "cannot hash a nil *mmdbtype.Uint128")
+	assert.Contains(t, err.Error(), `interning value for map key "u"`)
+	assert.Contains(t, err.Error(), "cannot intern a nil *mmdbtype.Uint128")
 	// A Map has an identity key, so the failure happens after the identity
-	// lookup and must not leave anything cached.
-	assert.Empty(t, tree.dataMap.valueByDataIdentity)
-	assert.Empty(t, tree.dataMap.data)
+	// lookup and must not leave anything cached or retained.
+	assert.Empty(t, tree.valueStore.callerByIdentity)
+	assert.Zero(t, liveValueNodeCount(tree.valueStore))
 }
 
 // newTestTree builds the tree shape most tests want. Tests that depend on a

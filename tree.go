@@ -82,19 +82,24 @@ type Options struct {
 	// direct-value fast path. Passing `inserter.Replace` explicitly has the same
 	// behavior but skips that optimization.
 	//
-	// An Inserter must not modify either argument. Values may be shared with
-	// other records, and Load reuses decoded values for source networks that
-	// reference the same data offset. Copy a value before modifying it. The
-	// function is evaluated separately for every covered record. Any non-nil
-	// returned value becomes tree-owned and must not be modified after return.
+	// An Inserter must not modify either argument. The existing value is a
+	// shared, read-only view. It is equal to, but not necessarily the same
+	// object as, the value originally inserted. The new value is the value
+	// passed to the insert call, or a shared view of the decoded record
+	// during Load. Nested containers can be shared across records, so copy a
+	// value before you modify it. The tree calls the function separately for
+	// every covered record. Any non-nil returned value becomes tree-owned and
+	// must not be modified after return.
 	Inserter inserter.Func
 }
 
-// Tree represents an MaxMind DB search tree.
+// Tree represents an MaxMind DB search tree. A Tree is not safe for
+// concurrent use. Lookups materialize shared views lazily, so the caller must
+// synchronize even concurrent Get calls.
 type Tree struct {
 	buildEpoch              int64
 	databaseType            string
-	dataMap                 *dataMap
+	valueStore              *valueStore
 	description             map[string]string
 	disableMetadataPointers bool
 	ipVersion               int
@@ -144,7 +149,7 @@ func New(opts Options) (*Tree, error) {
 		tree.ipVersion = opts.IPVersion
 	}
 
-	tree.dataMap = newDataMap()
+	tree.valueStore = newValueStore()
 
 	if opts.Languages != nil {
 		tree.languages = opts.Languages
@@ -313,8 +318,10 @@ func (t *Tree) normalizeLoadPrefix(prefix netip.Prefix) (netip.Prefix, error) {
 // Insert inserts a data value into the tree using the Tree's inserter function
 // (defaults to inserter.Replace).
 //
-// You must never modify the value after insertion as values may be shared with
-// other records.
+// You must never modify the value after insertion. Values may be shared with
+// other records, and the tree caches values by object identity: if you mutate
+// an inserted object in place, a later insert of that object can reuse the
+// data from before the mutation.
 //
 // This is not safe to call from multiple threads.
 func (t *Tree) Insert(prefix netip.Prefix, value mmdbtype.DataType) error {
@@ -391,7 +398,10 @@ func (t *Tree) insert(
 			return err
 		}
 	}
-	iRec := t.newInsertRecord(recordType, insertFunc, inserterPure, node, value)
+	iRec, err := t.newInsertRecord(recordType, insertFunc, inserterPure, node, value)
+	if err != nil {
+		return err
+	}
 	defer iRec.releaseResolved()
 	return t.insertPrepared(prefix, iRec)
 }
@@ -407,7 +417,10 @@ func (t *Tree) insertNormalized(
 	if t.treeDepth == 32 && !prefix.Addr().Is4() {
 		return errors.New("IPv6 prefixes cannot be inserted into an IPv4 tree")
 	}
-	iRec := t.newInsertRecord(recordType, insertFunc, inserterPure, node, value)
+	iRec, err := t.newInsertRecord(recordType, insertFunc, inserterPure, node, value)
+	if err != nil {
+		return err
+	}
 	defer iRec.releaseResolved()
 	return t.insertPrepared(prefix, iRec)
 }
@@ -433,17 +446,29 @@ func (t *Tree) newInsertRecord(
 	inserterPure bool,
 	node nodeIndex,
 	value mmdbtype.DataType,
-) *insertRecord {
-	return &insertRecord{
+) (*insertRecord, error) {
+	var ref valueRef
+	if recordType == recordTypeData && value != nil {
+		var err error
+		ref, err = t.valueStore.intern(value)
+		if err != nil {
+			return nil, err
+		}
+	}
+	iRec := &insertRecord{
 		recordType:   recordType,
 		inserter:     insertFunc,
 		inserterPure: inserterPure,
 		insertedNode: node,
 		tree:         t,
-		value:        value,
+		value:        ref,
 
-		dataMap: t.dataMap,
+		store: t.valueStore,
 	}
+	if insertFunc != nil {
+		iRec.valueView = t.valueStore.materialize(ref)
+	}
+	return iRec, nil
 }
 
 func (t *Tree) normalizeInsertPrefix(prefix netip.Prefix) (netip.Prefix, error) {
@@ -619,7 +644,10 @@ func (t *Tree) insertRange(
 	if !r.IsValid() {
 		return errors.New("start & end IPs did not give valid range")
 	}
-	iRec := t.newInsertRecord(recordType, insertFunc, inserterPure, node, value)
+	iRec, err := t.newInsertRecord(recordType, insertFunc, inserterPure, node, value)
+	if err != nil {
+		return err
+	}
 	defer iRec.releaseResolved()
 	subnets := r.Prefixes()
 	for _, subnet := range subnets {
@@ -693,7 +721,12 @@ func (t *Tree) insertReservedNetworks() error {
 // Get the value for the given IP address from the tree. If the nil interface
 // is returned, that means the tree does not have a value for the IP. If ip is
 // invalid or cannot be looked up in this tree's IP version, the returned prefix
-// is the zero value.
+// is the zero value. Returned values are shared, read-only views that are equal
+// to, but not necessarily the same objects as, the inserted values. Call Copy
+// before modifying one.
+//
+// Get is not safe to call concurrently with any other Tree method, including
+// other Get calls, because a lookup materializes its view lazily.
 func (t *Tree) Get(ip netip.Addr) (netip.Prefix, mmdbtype.DataType) {
 	lookupIP, ok := t.lookupIP(ip)
 	if !ok {
@@ -703,7 +736,7 @@ func (t *Tree) Get(ip netip.Addr) (netip.Prefix, mmdbtype.DataType) {
 
 	var value mmdbtype.DataType
 	if r.recordType == recordTypeData {
-		value = r.value.data
+		value = t.valueStore.materialize(r.value)
 	}
 
 	return t.getPrefixForAddr(ip, prefixLen), value
@@ -732,7 +765,7 @@ func (t *Tree) WriteTo(w io.Writer) (int64, error) {
 	recordBuf := make([]byte, 2*t.recordSize/8)
 
 	usePointers := true
-	dataWriter := newDataWriter(t.dataMap, usePointers)
+	dataWriter := newDataWriter(t.valueStore, usePointers)
 
 	nodeCount, numBytes, err := t.writeNode(buf, t.root, dataWriter, recordBuf)
 	if err != nil {
@@ -766,7 +799,9 @@ func (t *Tree) WriteTo(w io.Writer) (int64, error) {
 		return numBytes, fmt.Errorf("writing metadata start marker: %w", err)
 	}
 
-	metadataWriter := newDataWriter(dataWriter.dataMap, !t.disableMetadataPointers)
+	// The metadata gets its own store, so WriteTo does not mutate the tree's
+	// store and the metadata writer's offset table stays metadata-sized.
+	metadataWriter := newDataWriter(newValueStore(), !t.disableMetadataPointers)
 	_, err = t.writeMetadata(metadataWriter)
 	if err != nil {
 		return numBytes, fmt.Errorf("writing metadata: %w", err)
@@ -927,5 +962,12 @@ func (t *Tree) writeMetadata(dw *dataWriter) (int64, error) {
 		//nolint:gosec // recordSize is always 24, 28, or 32
 		"record_size": mmdbtype.Uint16(t.recordSize),
 	}
-	return metadata.WriteTo(dw)
+	ref, err := dw.store.intern(metadata)
+	if err != nil {
+		return 0, err
+	}
+	defer dw.store.release(ref)
+	start := dw.Len()
+	_, err = dw.maybeWrite(ref)
+	return int64(dw.Len() - start), err
 }

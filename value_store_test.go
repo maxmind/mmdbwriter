@@ -1,6 +1,7 @@
 package mmdbwriter
 
 import (
+	"math"
 	"math/big"
 	"reflect"
 	"testing"
@@ -336,6 +337,125 @@ func TestCallerIdentityEvictionReleasesReference(t *testing.T) {
 	require.True(t, ok)
 	assert.NotContains(t, store.callerByIdentity, firstIdentity)
 	store.release(secondRef)
+}
+
+// TestValueStorePreservesFloatEncodings pins the wire-exact identity of the
+// store: values that differ only in a float sign bit are distinct.
+func TestValueStorePreservesFloatEncodings(t *testing.T) {
+	tests := []struct {
+		name     string
+		positive mmdbtype.DataType
+		negative mmdbtype.DataType
+	}{
+		{
+			name:     "float64",
+			positive: mmdbtype.Float64(0),
+			negative: mmdbtype.Float64(math.Copysign(0, -1)),
+		},
+		{
+			name:     "float32",
+			positive: mmdbtype.Float32(0),
+			negative: mmdbtype.Float32(float32(math.Copysign(0, -1))),
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := newValueStoreWithHash(func([]byte) uint64 { return 1 })
+
+			positiveRef, err := store.intern(mmdbtype.Map{"value": test.positive})
+			require.NoError(t, err)
+			negativeRef, err := store.intern(mmdbtype.Map{"value": test.negative})
+			require.NoError(t, err)
+
+			assert.NotEqual(t, positiveRef, negativeRef)
+			store.release(positiveRef)
+			store.release(negativeRef)
+		})
+	}
+}
+
+func TestValueStoreCachesUint128PointerIdentity(t *testing.T) {
+	value := mmdbtype.Uint128(*big.NewInt(12345))
+	valuePointer := &value
+	identity, ok := dataIdentity(valuePointer)
+	require.True(t, ok)
+
+	store := newValueStore()
+	ref, err := store.intern(valuePointer)
+	require.NoError(t, err)
+
+	sameRef, err := store.intern(valuePointer)
+	require.NoError(t, err)
+
+	assert.Equal(t, ref, sameRef)
+	assert.Contains(t, store.callerByIdentity, identity)
+	store.release(ref)
+	store.release(sameRef)
+}
+
+func TestSliceIdentityPointerDoesNotAllocate(t *testing.T) {
+	value := mmdbtype.Slice{mmdbtype.String("value")}
+	var pointer uintptr
+	allocations := testing.AllocsPerRun(1_000, func() {
+		pointer = sliceIdentityPointer(value)
+	})
+
+	assert.NotZero(t, pointer)
+	assert.Zero(t, allocations)
+}
+
+func TestEmptyContainerIdentitiesAreCanonical(t *testing.T) {
+	nilMapIdentity, ok := dataIdentity(mmdbtype.Map(nil))
+	require.True(t, ok)
+	emptyMapIdentity, ok := dataIdentity(mmdbtype.Map{})
+	require.True(t, ok)
+	assert.Equal(t, nilMapIdentity, emptyMapIdentity)
+
+	nilSliceIdentity, ok := dataIdentity(mmdbtype.Slice(nil))
+	require.True(t, ok)
+	emptySliceIdentity, ok := dataIdentity(make(mmdbtype.Slice, 0, 1))
+	require.True(t, ok)
+	assert.Equal(t, nilSliceIdentity, emptySliceIdentity)
+}
+
+// TestMemoPinsItsKeys pins that the insert memo owns a reference to each key.
+// Without it, a released key ref could be recycled for a new value and
+// produce a false memo hit.
+func TestMemoPinsItsKeys(t *testing.T) {
+	store := newValueStore()
+	first, err := store.internUncached(mmdbtype.String("first"))
+	require.NoError(t, err)
+	firstResult, err := store.internUncached(mmdbtype.String("first result"))
+	require.NoError(t, err)
+
+	iRec := &insertRecord{store: store, inserterPure: true}
+	iRec.rememberResolved(first, firstResult)
+	assert.Equal(t, uint32(2), store.nodes[first].refCount,
+		"the memo did not pin its key")
+
+	// A second entry promotes the memo to its map form.
+	second, err := store.internUncached(mmdbtype.String("second"))
+	require.NoError(t, err)
+	iRec.rememberResolved(second, nilValueRef)
+	assert.Equal(t, uint32(2), store.nodes[second].refCount)
+
+	iRec.releaseResolved()
+	store.release(first)
+	store.release(second)
+	assert.Zero(t, liveValueNodeCount(store))
+}
+
+// liveValueNodeCount reports how many store nodes are live. Tests use it to
+// pin that releases fully drain the store.
+func liveValueNodeCount(store *valueStore) int {
+	live := 0
+	for index := range store.nodes {
+		if store.nodes[index].kind != valueKindInvalid {
+			live++
+		}
+	}
+	return live
 }
 
 func TestDataIdentityDistinguishesKindsAndRejectsNilUint128(t *testing.T) {

@@ -10,6 +10,7 @@ import (
 	"math/big"
 	"reflect"
 	"slices"
+	"unsafe"
 
 	"github.com/maxmind/mmdbwriter/v2/mmdbtype"
 )
@@ -212,6 +213,57 @@ func newValueStoreWithHash(hashFunc func([]byte) uint64) *valueStore {
 	}
 }
 
+// dereferenceDataType normalizes pointers to MMDB types whose DataType methods
+// have value receivers. The bool reports whether the pointer, if any, was
+// non-nil. Uint128 is intentionally left as a pointer because only its pointer
+// form implements DataType. *Uint128 is therefore exempt: it is returned
+// unchanged with a true result even when it is nil, so callers must nil-check
+// it themselves.
+func dereferenceDataType(value mmdbtype.DataType) (mmdbtype.DataType, bool) {
+	switch value := value.(type) {
+	case *mmdbtype.Bool:
+		return dereference(value)
+	case *mmdbtype.Bytes:
+		return dereference(value)
+	case *mmdbtype.Float32:
+		return dereference(value)
+	case *mmdbtype.Float64:
+		return dereference(value)
+	case *mmdbtype.Int32:
+		return dereference(value)
+	case *mmdbtype.Map:
+		return dereference(value)
+	case *mmdbtype.Pointer:
+		return dereference(value)
+	case *mmdbtype.Slice:
+		return dereference(value)
+	case *mmdbtype.String:
+		return dereference(value)
+	case *mmdbtype.Uint16:
+		return dereference(value)
+	case *mmdbtype.Uint32:
+		return dereference(value)
+	case *mmdbtype.Uint64:
+		return dereference(value)
+	default:
+		return value, true
+	}
+}
+
+func dereference[T mmdbtype.DataType](value *T) (mmdbtype.DataType, bool) {
+	if value == nil {
+		return nil, false
+	}
+	return *value, true
+}
+
+func sliceIdentityPointer[T any](value []T) uintptr {
+	// The pointer is used only as an identity while a typed strong reference
+	// keeps the slice live. It is never dereferenced or converted back.
+	//nolint:gosec // converting to uintptr is intentional for the identity key
+	return uintptr(unsafe.Pointer(unsafe.SliceData(value)))
+}
+
 func dataIdentity(value mmdbtype.DataType) (dataIdentityKey, bool) {
 	value, ok := dereferenceDataType(value)
 	if !ok {
@@ -405,7 +457,7 @@ func (s *valueStore) internMap(value mmdbtype.Map) (valueRef, error) {
 		childRef, err := s.intern(child)
 		if err != nil {
 			releaseChildren()
-			return nilValueRef, err
+			return nilValueRef, fmt.Errorf("interning value for map key %q: %w", key, err)
 		}
 		children = append(children, childRef)
 	}
@@ -426,7 +478,7 @@ func (s *valueStore) internSlice(value mmdbtype.Slice) (valueRef, error) {
 			for _, ref := range children {
 				s.release(ref)
 			}
-			return nilValueRef, err
+			return nilValueRef, fmt.Errorf("interning slice index %d: %w", index, err)
 		}
 		children = append(children, ref)
 	}
