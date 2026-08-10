@@ -201,6 +201,90 @@ func BenchmarkTreeLoadOverlappingPasses(b *testing.B) {
 	}
 }
 
+// BenchmarkEnterpriseLoadThenOverlay models the production Enterprise build:
+// load a City-scale source database and rewrite every record through several
+// merge overlay passes. The network count must stay large enough to exercise
+// the caller-identity cache and the load-path offset cache at realistic
+// occupancy.
+func BenchmarkEnterpriseLoadThenOverlay(b *testing.B) {
+	base, overlays := enterpriseBenchmarkLayers(8_192)
+	source := newBenchmarkTree(b)
+	for _, spec := range base {
+		if err := source.Insert(spec.network, spec.value); err != nil {
+			b.Fatal(err)
+		}
+	}
+	file, err := os.CreateTemp(b.TempDir(), "mmdbwriter-enterprise-*.mmdb")
+	if err != nil {
+		b.Fatal(err)
+	}
+	if _, err := source.WriteTo(file); err != nil {
+		b.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		b.Fatal(err)
+	}
+
+	b.ReportMetric(float64(len(base)), "networks/op")
+	b.ReportMetric(float64(len(overlays)), "overlays/op")
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		tree, err := Load(file.Name(), Options{IncludeReservedNetworks: true})
+		if err != nil {
+			b.Fatal(err)
+		}
+		for _, layer := range overlays {
+			for _, spec := range layer {
+				if err := tree.InsertFunc(
+					spec.network,
+					spec.value,
+					inserter.DeepMerge,
+				); err != nil {
+					b.Fatal(err)
+				}
+			}
+		}
+	}
+}
+
+func enterpriseBenchmarkLayers(
+	networkCount int,
+) ([]benchmarkInsertSpec, [][]benchmarkInsertSpec) {
+	base := make([]benchmarkInsertSpec, networkCount)
+	overlays := make([][]benchmarkInsertSpec, 4)
+	for index := range overlays {
+		overlays[index] = make([]benchmarkInsertSpec, networkCount)
+	}
+	for index := range networkCount {
+		address := netip.AddrFrom4([4]byte{1, byte(index >> 16), byte(index >> 8), byte(index)})
+		prefix := netip.PrefixFrom(address, 32)
+		base[index] = benchmarkInsertSpec{
+			network: prefix,
+			value: benchmarkDeepMergeValue(
+				[]string{"GB", "US", "DE", "JP"}[index%4],
+				"city",
+				uint16(index%100),
+			),
+		}
+		overlays[0][index] = benchmarkInsertSpec{network: prefix, value: mmdbtype.Map{
+			"traits": mmdbtype.Map{
+				"confidence": mmdbtype.Uint16(index % 100),
+			},
+		}}
+		overlays[1][index] = benchmarkInsertSpec{network: prefix, value: mmdbtype.Map{
+			"traits": mmdbtype.Map{"user_type": mmdbtype.String("business")},
+		}}
+		overlays[2][index] = benchmarkInsertSpec{network: prefix, value: mmdbtype.Map{
+			"traits": mmdbtype.Map{"isp": mmdbtype.String("Example ISP")},
+		}}
+		overlays[3][index] = benchmarkInsertSpec{network: prefix, value: mmdbtype.Map{
+			"traits": mmdbtype.Map{"domain": mmdbtype.String("example.test")},
+		}}
+	}
+	return base, overlays
+}
+
 func reportOverlappingBenchmarkShape(
 	b *testing.B,
 	specs []benchmarkInsertSpec,
