@@ -425,6 +425,21 @@ func TestEmptyContainerIdentitiesAreCanonical(t *testing.T) {
 	assert.Equal(t, nilSliceIdentity, emptySliceIdentity)
 }
 
+// TestPutPairScratchClearsEntries pins that pooled map scratch does not pin
+// caller-owned keys and values between uses.
+func TestPutPairScratchClearsEntries(t *testing.T) {
+	store := newValueStore()
+	ref, err := store.intern(mmdbtype.Map{"key": mmdbtype.String("value")})
+	require.NoError(t, err)
+	store.release(ref)
+
+	pairs := store.takePairScratch()
+	require.NotZero(t, cap(pairs), "internMap did not return its scratch to the pool")
+	for _, pair := range pairs[:cap(pairs)] {
+		assert.Zero(t, pair, "a pooled map entry still references caller data")
+	}
+}
+
 // TestMemoPinsItsKeys pins that the insert memo owns a reference to each key.
 // Without it, a released key ref could be recycled for a new value and
 // produce a false memo hit.

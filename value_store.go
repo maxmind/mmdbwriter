@@ -10,6 +10,7 @@ import (
 	"math/big"
 	"reflect"
 	"slices"
+	"strings"
 	"unsafe"
 
 	"github.com/maxmind/mmdbwriter/v2/mmdbtype"
@@ -198,11 +199,18 @@ type valueStore struct {
 	// payloads into the arena, so the buffer never outlives one call. Scalars
 	// do not nest, so one buffer suffices where containers need pools.
 	encodeScratch scalarWriter
-	// keyScratch and childScratch pool the per-container working slices.
+	// pairScratch and childScratch pool the per-container working slices.
 	// Containers nest, so each internMap or internSlice call takes a slice
 	// and returns it when done.
-	keyScratch   [][]string
+	pairScratch  [][]mapEntry
 	childScratch [][]valueRef
+}
+
+// mapEntry carries one key and value of a map being interned, so the map is
+// iterated once and sorted without further lookups.
+type mapEntry struct {
+	key   string
+	child mmdbtype.DataType
 }
 
 func newValueStore() *valueStore {
@@ -451,17 +459,21 @@ func (s *valueStore) internUncached(value mmdbtype.DataType) (valueRef, error) {
 	}
 }
 
-func (s *valueStore) takeKeyScratch() []string {
-	if n := len(s.keyScratch); n != 0 {
-		keys := s.keyScratch[n-1]
-		s.keyScratch = s.keyScratch[:n-1]
-		return keys[:0]
+func (s *valueStore) takePairScratch() []mapEntry {
+	if n := len(s.pairScratch); n != 0 {
+		pairs := s.pairScratch[n-1]
+		s.pairScratch = s.pairScratch[:n-1]
+		return pairs[:0]
 	}
 	return nil
 }
 
-func (s *valueStore) putKeyScratch(keys []string) {
-	s.keyScratch = append(s.keyScratch, keys)
+func (s *valueStore) putPairScratch(pairs []mapEntry) {
+	// Entries reference caller-owned keys and values; clear the full backing
+	// array so pooling does not pin those object graphs.
+	pairs = pairs[:cap(pairs)]
+	clear(pairs)
+	s.pairScratch = append(s.pairScratch, pairs)
 }
 
 func (s *valueStore) takeChildScratch() []valueRef {
@@ -478,12 +490,14 @@ func (s *valueStore) putChildScratch(children []valueRef) {
 }
 
 func (s *valueStore) internMap(value mmdbtype.Map) (valueRef, error) {
-	keys := s.takeKeyScratch()
-	defer func() { s.putKeyScratch(keys) }()
-	for key := range value {
-		keys = append(keys, string(key))
+	pairs := s.takePairScratch()
+	defer func() { s.putPairScratch(pairs) }()
+	for key, child := range value {
+		pairs = append(pairs, mapEntry{key: string(key), child: child})
 	}
-	slices.Sort(keys)
+	slices.SortFunc(pairs, func(left, right mapEntry) int {
+		return strings.Compare(left.key, right.key)
+	})
 
 	children := s.takeChildScratch()
 	defer func() { s.putChildScratch(children) }()
@@ -492,22 +506,21 @@ func (s *valueStore) internMap(value mmdbtype.Map) (valueRef, error) {
 			s.release(child)
 		}
 	}
-	for _, key := range keys {
-		keyRef, err := s.internString(mmdbtype.String(key))
+	for _, pair := range pairs {
+		keyRef, err := s.internString(mmdbtype.String(pair.key))
 		if err != nil {
 			releaseChildren()
 			return nilValueRef, err
 		}
 		children = append(children, keyRef)
-		child := value[mmdbtype.String(key)]
-		if child == nil {
+		if pair.child == nil {
 			releaseChildren()
-			return nilValueRef, fmt.Errorf("map key %q has a nil value", key)
+			return nilValueRef, fmt.Errorf("map key %q has a nil value", pair.key)
 		}
-		childRef, err := s.intern(child)
+		childRef, err := s.intern(pair.child)
 		if err != nil {
 			releaseChildren()
-			return nilValueRef, fmt.Errorf("interning value for map key %q: %w", key, err)
+			return nilValueRef, fmt.Errorf("interning value for map key %q: %w", pair.key, err)
 		}
 		children = append(children, childRef)
 	}
