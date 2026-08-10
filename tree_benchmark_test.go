@@ -203,8 +203,10 @@ func BenchmarkTreeLoadOverlappingPasses(b *testing.B) {
 
 // BenchmarkEnterpriseLoadThenOverlay models the production Enterprise build:
 // load a City-scale source database and rewrite every record through several
-// merge overlay passes. The network count must stay large enough to exercise
-// the caller-identity cache and the load-path offset cache at realistic
+// merge overlay passes. Overlay values are copied per insert because the
+// production passes decode a fresh value for every source network; presenting
+// one long-lived value per layer would overstate identity-cache hits. The
+// network count must stay large enough to exercise the caches at realistic
 // occupancy.
 func BenchmarkEnterpriseLoadThenOverlay(b *testing.B) {
 	base, overlays := enterpriseBenchmarkLayers(8_192)
@@ -238,7 +240,7 @@ func BenchmarkEnterpriseLoadThenOverlay(b *testing.B) {
 			for _, spec := range layer {
 				if err := tree.InsertFunc(
 					spec.network,
-					spec.value,
+					spec.value.Copy(),
 					inserter.DeepMerge,
 				); err != nil {
 					b.Fatal(err)
