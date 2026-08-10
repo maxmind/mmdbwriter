@@ -67,6 +67,15 @@ func TestValueStoreAuditRejectsCorruptStores(t *testing.T) {
 			want: "in 0 hash buckets",
 		},
 		{
+			name: "bucket chain cycle",
+			corrupt: func(t *testing.T, tree *Tree) {
+				t.Helper()
+				ref := requireDataRef(t, tree)
+				tree.valueStore.nodes[ref].nextInBucket = ref
+			},
+			want: "bucket chain cycle",
+		},
+		{
 			name: "duplicate freelist entry",
 			corrupt: func(t *testing.T, tree *Tree) {
 				t.Helper()

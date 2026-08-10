@@ -90,15 +90,20 @@ func (s *valueStore) audit(external map[valueRef]uint64) error {
 		return err
 	}
 	bucketCounts := make([]int, len(s.nodes))
-	for hash, bucket := range s.buckets {
-		for _, ref := range bucket {
-			if ref == nilValueRef || int(ref) >= len(s.nodes) {
+	for hash, head := range s.buckets {
+		steps := 0
+		for ref := head; ref != nilValueRef; ref = s.nodes[ref].nextInBucket {
+			if uint64(ref) >= uint64(len(s.nodes)) {
 				return fmt.Errorf("refcount audit found invalid bucket ref %d", ref)
 			}
 			if s.nodes[ref].kind == valueKindInvalid || s.nodes[ref].hash != hash {
 				return fmt.Errorf("refcount audit found ref %d in the wrong hash bucket", ref)
 			}
 			bucketCounts[ref]++
+			steps++
+			if steps > len(s.nodes) {
+				return fmt.Errorf("refcount audit found a bucket chain cycle for hash %d", hash)
+			}
 		}
 	}
 	freeCounts := make([]int, len(s.nodes))

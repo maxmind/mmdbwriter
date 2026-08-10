@@ -298,7 +298,12 @@ func TestReleaseUnlinksMidChainNode(t *testing.T) {
 	third, err := store.intern(mmdbtype.String("third"))
 	require.NoError(t, err)
 
-	// The chain head is the most recent node, so second is mid-chain.
+	// Verify second sits mid-chain before releasing it, so the test keeps
+	// exercising a non-head unlink if insertion order ever changes.
+	head := store.buckets[7]
+	require.Equal(t, third, head)
+	require.Equal(t, second, store.nodes[head].nextInBucket)
+
 	store.release(second)
 
 	firstAgain, err := store.intern(mmdbtype.String("first"))

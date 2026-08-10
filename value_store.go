@@ -49,7 +49,11 @@ type valueNode struct {
 	childrenLen    uint32
 
 	refCount uint32
-	kind     valueKind
+	// nextInBucket chains the live nodes that share a hash bucket. The chain
+	// replaces a per-bucket slice and is pointer-free, so the garbage
+	// collector never scans it.
+	nextInBucket valueRef
+	kind         valueKind
 
 	// Materialized values are immutable store-owned views. Keeping the view on
 	// the canonical node lets every record share nested maps and slices.
@@ -171,7 +175,9 @@ const callerIdentityCacheSize = 1 << 20
 type valueStore struct {
 	nodes    []valueNode
 	freeRefs []valueRef
-	buckets  map[uint64][]valueRef
+	// buckets holds the head of each hash chain. Nodes link the rest through
+	// nextInBucket.
+	buckets  map[uint64]valueRef
 	payloads byteArena
 	children refArena
 
@@ -212,7 +218,7 @@ func newValueStoreWithHash(hashFunc func([]byte) uint64) *valueStore {
 	}
 	return &valueStore{
 		nodes:                  make([]valueNode, 1), // ref zero is nil
-		buckets:                map[uint64][]valueRef{},
+		buckets:                map[uint64]valueRef{},
 		materializedByIdentity: map[dataIdentityKey]valueRef{},
 		callerByIdentity:       map[dataIdentityKey]int{},
 		callerIdentityHead:     -1,
@@ -356,21 +362,22 @@ func (s *valueStore) release(ref valueRef) {
 			continue
 		}
 
-		// Remove the exact ref from its collision bucket before the slot can
-		// be reused. Bucket order is otherwise stable and has no observable
+		// Unlink the exact ref from its collision chain before the slot can
+		// be reused. Chain order is otherwise stable and has no observable
 		// effect.
-		bucket := s.buckets[node.hash]
-		for i, candidate := range bucket {
-			if candidate == current {
-				bucket[i] = bucket[len(bucket)-1]
-				bucket = bucket[:len(bucket)-1]
-				break
+		if head := s.buckets[node.hash]; head == current {
+			if node.nextInBucket == nilValueRef {
+				delete(s.buckets, node.hash)
+			} else {
+				s.buckets[node.hash] = node.nextInBucket
 			}
-		}
-		if len(bucket) == 0 {
-			delete(s.buckets, node.hash)
 		} else {
-			s.buckets[node.hash] = bucket
+			for prev := head; prev != nilValueRef; prev = s.nodes[prev].nextInBucket {
+				if s.nodes[prev].nextInBucket == current {
+					s.nodes[prev].nextInBucket = node.nextInBucket
+					break
+				}
+			}
 		}
 
 		if node.hasIdentity {
@@ -558,8 +565,8 @@ func (s *valueStore) internNode(
 	children []valueRef,
 ) (valueRef, bool, error) {
 	hash := s.hashNode(kind, payload, children)
-	for _, ref := range s.buckets[hash] {
-		node := s.node(ref)
+	for ref := s.buckets[hash]; ref != nilValueRef; ref = s.nodes[ref].nextInBucket {
+		node := &s.nodes[ref]
 		if node.kind == kind &&
 			bytes.Equal(s.payload(node), payload) &&
 			slices.Equal(s.childRefs(node), children) {
@@ -607,9 +614,10 @@ func (s *valueStore) internNode(
 		childrenOffset: childrenOffset,
 		childrenLen:    uint32(len(children)), //nolint:gosec // child arena accepted this length
 		refCount:       1,
+		nextInBucket:   s.buckets[hash],
 		kind:           kind,
 	}
-	s.buckets[hash] = append(s.buckets[hash], ref)
+	s.buckets[hash] = ref
 	return ref, true, nil
 }
 
