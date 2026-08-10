@@ -413,6 +413,17 @@ func (s *valueStore) intern(value mmdbtype.DataType) (valueRef, error) {
 	return s.internUncached(value)
 }
 
+// internString takes a concrete String so map keys avoid boxing into
+// DataType, which otherwise allocates for every key of every container.
+func (s *valueStore) internString(value mmdbtype.String) (valueRef, error) {
+	s.encodeScratch.Reset()
+	if _, err := value.WriteTo(&s.encodeScratch); err != nil {
+		return nilValueRef, fmt.Errorf("encoding %T for value store: %w", value, err)
+	}
+	ref, _, err := s.internNode(valueKindString, s.encodeScratch.Bytes(), nil)
+	return ref, err
+}
+
 func (s *valueStore) internUncached(value mmdbtype.DataType) (valueRef, error) {
 	switch value := value.(type) {
 	case mmdbtype.Map:
@@ -475,7 +486,7 @@ func (s *valueStore) internMap(value mmdbtype.Map) (valueRef, error) {
 		}
 	}
 	for _, key := range keys {
-		keyRef, err := s.intern(mmdbtype.String(key))
+		keyRef, err := s.internString(mmdbtype.String(key))
 		if err != nil {
 			releaseChildren()
 			return nilValueRef, err

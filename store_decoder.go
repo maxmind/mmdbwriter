@@ -103,7 +103,7 @@ func (d *storeDecoder) decodeRef(decoder *mmdbdata.Decoder) (valueRef, error) {
 		var value string
 		value, err = decoder.ReadString()
 		if err == nil {
-			ref, err = d.store.internUncached(mmdbtype.String(value))
+			ref, err = d.store.internString(mmdbtype.String(value))
 		}
 	case mmdbdata.KindFloat64:
 		var value float64
@@ -194,7 +194,7 @@ func (d *storeDecoder) decodeMap(decoder *mmdbdata.Decoder) (valueRef, error) {
 			release()
 			return nilValueRef, iteratorErr
 		}
-		keyRef, keyErr := d.store.internUncached(mmdbtype.String(key))
+		keyRef, keyErr := d.store.internString(mmdbtype.String(key))
 		if keyErr != nil {
 			release()
 			return nilValueRef, keyErr
