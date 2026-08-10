@@ -9,6 +9,7 @@ import (
 	"io"
 	"math"
 	"net/netip"
+	"os"
 	"time"
 
 	"github.com/oschwald/maxminddb-golang/v2"
@@ -121,6 +122,9 @@ type Tree struct {
 
 	nodeCount int
 	inserter  inserter.Func
+	// refcountAudit runs the full ownership audit after every successful
+	// insert and load. It is read from MMDBWRITER_REFCOUNT_AUDIT in New.
+	refcountAudit bool
 }
 
 // New creates a new Tree.
@@ -135,6 +139,7 @@ func New(opts Options) (*Tree, error) {
 		nodeBlocks:              [][]node{make([]node, nodeBlockSize)},
 		nodeCountAllocated:      1,
 		root:                    rootNodeIndex,
+		refcountAudit:           os.Getenv("MMDBWRITER_REFCOUNT_AUDIT") != "",
 	}
 
 	if opts.BuildEpoch != 0 {
@@ -297,6 +302,12 @@ func Load(path string, opts Options) (*Tree, error) {
 			return nil, fmt.Errorf("loading network %s: %w", prefix, err)
 		}
 	}
+	// The audit only balances once the decoder's offset cache has released
+	// its references. close is idempotent, so the deferred call is a no-op.
+	decoder.close()
+	if err := tree.maybeAuditValueStore(); err != nil {
+		return nil, err
+	}
 	return tree, nil
 }
 
@@ -404,8 +415,14 @@ func (t *Tree) insert(
 	if err != nil {
 		return err
 	}
-	defer iRec.releaseResolved()
-	return t.insertPrepared(prefix, iRec)
+	err = t.insertPrepared(prefix, iRec)
+	// The audit only balances once the memo and value references are gone, so
+	// release explicitly rather than by defer.
+	iRec.releaseResolved()
+	if err != nil {
+		return err
+	}
+	return t.maybeAuditValueStore()
 }
 
 // insertNormalizedRef inserts an already interned value. It borrows the
@@ -661,16 +678,20 @@ func (t *Tree) insertRange(
 	if err != nil {
 		return err
 	}
-	defer iRec.releaseResolved()
 	subnets := r.Prefixes()
 	for _, subnet := range subnets {
-		err := t.insertPrepared(subnet, iRec)
+		err = t.insertPrepared(subnet, iRec)
 		if err != nil {
-			return err
+			break
 		}
 	}
-
-	return nil
+	// The audit only balances once the memo and value references are gone, so
+	// release explicitly rather than by defer.
+	iRec.releaseResolved()
+	if err != nil {
+		return err
+	}
+	return t.maybeAuditValueStore()
 }
 
 func (t *Tree) insertStringNetwork(
