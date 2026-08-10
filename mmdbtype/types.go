@@ -839,7 +839,11 @@ func (t Uint64) WriteTo(w writer) (int64, error) {
 	return numBytes + int64(size), nil
 }
 
-// Uint128 is the MaxMind DB unsigned 128-bit integer type.
+// Uint128 is the MaxMind DB unsigned 128-bit integer type. A value stored in
+// a Tree must be in the range [0, 2^128-1]. Inserting a value outside the
+// range returns an error. A custom inserter can still receive such a value
+// in its input, since only direct inserts and inserter results are
+// validated.
 type Uint128 big.Int
 
 var _ DataType = (*Uint128)(nil)
