@@ -188,6 +188,15 @@ type valueStore struct {
 	// avoids recursion through deep values and amortizes the worklist
 	// allocation across releases.
 	releaseScratch []valueRef
+	// encodeScratch is reused for every scalar encoding. internNode copies
+	// payloads into the arena, so the buffer never outlives one call. Scalars
+	// do not nest, so one buffer suffices where containers need pools.
+	encodeScratch scalarWriter
+	// keyScratch and childScratch pool the per-container working slices.
+	// Containers nest, so each internMap or internSlice call takes a slice
+	// and returns it when done.
+	keyScratch   [][]string
+	childScratch [][]valueRef
 }
 
 func newValueStore() *valueStore {
@@ -420,23 +429,51 @@ func (s *valueStore) internUncached(value mmdbtype.DataType) (valueRef, error) {
 		if err != nil {
 			return nilValueRef, err
 		}
-		var writer scalarWriter
-		if _, err := value.WriteTo(&writer); err != nil {
+		s.encodeScratch.Reset()
+		if _, err := value.WriteTo(&s.encodeScratch); err != nil {
 			return nilValueRef, fmt.Errorf("encoding %T for value store: %w", value, err)
 		}
-		ref, _, err := s.internNode(kind, writer.Bytes(), nil)
+		ref, _, err := s.internNode(kind, s.encodeScratch.Bytes(), nil)
 		return ref, err
 	}
 }
 
+func (s *valueStore) takeKeyScratch() []string {
+	if n := len(s.keyScratch); n != 0 {
+		keys := s.keyScratch[n-1]
+		s.keyScratch = s.keyScratch[:n-1]
+		return keys[:0]
+	}
+	return nil
+}
+
+func (s *valueStore) putKeyScratch(keys []string) {
+	s.keyScratch = append(s.keyScratch, keys)
+}
+
+func (s *valueStore) takeChildScratch() []valueRef {
+	if n := len(s.childScratch); n != 0 {
+		children := s.childScratch[n-1]
+		s.childScratch = s.childScratch[:n-1]
+		return children[:0]
+	}
+	return nil
+}
+
+func (s *valueStore) putChildScratch(children []valueRef) {
+	s.childScratch = append(s.childScratch, children)
+}
+
 func (s *valueStore) internMap(value mmdbtype.Map) (valueRef, error) {
-	keys := make([]string, 0, len(value))
+	keys := s.takeKeyScratch()
+	defer func() { s.putKeyScratch(keys) }()
 	for key := range value {
 		keys = append(keys, string(key))
 	}
 	slices.Sort(keys)
 
-	children := make([]valueRef, 0, len(keys)*2)
+	children := s.takeChildScratch()
+	defer func() { s.putChildScratch(children) }()
 	releaseChildren := func() {
 		for _, child := range children {
 			s.release(child)
@@ -465,7 +502,8 @@ func (s *valueStore) internMap(value mmdbtype.Map) (valueRef, error) {
 }
 
 func (s *valueStore) internSlice(value mmdbtype.Slice) (valueRef, error) {
-	children := make([]valueRef, 0, len(value))
+	children := s.takeChildScratch()
+	defer func() { s.putChildScratch(children) }()
 	for index, child := range value {
 		if child == nil {
 			for _, ref := range children {

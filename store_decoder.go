@@ -219,7 +219,8 @@ func (d *storeDecoder) decodeMap(decoder *mmdbdata.Decoder) (valueRef, error) {
 			return nilValueRef, fmt.Errorf("map has duplicate key %q", key)
 		}
 	}
-	children := make([]valueRef, 0, len(pairs)*2)
+	children := d.store.takeChildScratch()
+	defer func() { d.store.putChildScratch(children) }()
 	for _, pair := range pairs {
 		children = append(children, pair.keyRef, pair.valueRef)
 	}
@@ -227,15 +228,14 @@ func (d *storeDecoder) decodeMap(decoder *mmdbdata.Decoder) (valueRef, error) {
 }
 
 func (d *storeDecoder) decodeSlice(decoder *mmdbdata.Decoder) (valueRef, error) {
-	iterator, size, err := decoder.ReadSlice()
+	iterator, _, err := decoder.ReadSlice()
 	if err != nil {
 		return nilValueRef, fmt.Errorf("reading slice: %w", err)
 	}
-	children := make(
-		[]valueRef,
-		0,
-		int(size), // #nosec G115 -- Decoder container sizes are bounded by the source buffer.
-	)
+	// The declared size comes from the source database header, so grow into
+	// the pooled slice instead of trusting the header for one allocation.
+	children := d.store.takeChildScratch()
+	defer func() { d.store.putChildScratch(children) }()
 	for iteratorErr := range iterator {
 		if iteratorErr != nil {
 			for _, child := range children {
