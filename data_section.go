@@ -53,7 +53,7 @@ func (dw *dataWriter) maybeWrite(ref valueRef) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	if offset > math.MaxUint32 {
+	if int64(offset) > int64(math.MaxUint32) {
 		return 0, fmt.Errorf("offset of %d exceeds maximum when writing data", offset)
 	}
 	dw.offsets[ref] = writtenType{
@@ -92,7 +92,7 @@ func (dw *dataWriter) writeValue(ref valueRef) (int64, error) {
 
 func (dw *dataWriter) rememberOffset(ref valueRef, offset int, size int64) {
 	dw.ensureOffset(ref)
-	if dw.offsets[ref].written || offset > math.MaxUint32 {
+	if dw.offsets[ref].written || int64(offset) > int64(math.MaxUint32) {
 		return
 	}
 	dw.offsets[ref] = writtenType{

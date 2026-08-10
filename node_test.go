@@ -10,8 +10,11 @@ import (
 )
 
 func TestNewNodeIndexRejectsSentinel(t *testing.T) {
+	// On 32-bit platforms the sentinel wraps to a negative int, which the
+	// negative-index guard rejects instead of the sentinel comparison.
+	sentinel := uint64(noNodeIndex)
 	require.Panics(t, func() {
-		newNodeIndex(int(noNodeIndex))
+		newNodeIndex(int(sentinel)) //nolint:gosec // intentional boundary conversion
 	})
 }
 

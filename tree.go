@@ -923,8 +923,8 @@ func (t *Tree) copyNode(buf []byte, n *node, dataWriter *dataWriter) error {
 		return err
 	}
 
-	maxRecord := 1 << t.recordSize
-	if left >= maxRecord || right >= maxRecord {
+	maxRecord := int64(1) << t.recordSize
+	if int64(left) >= maxRecord || int64(right) >= maxRecord {
 		return fmt.Errorf(
 			"exceeded record capacity by attempting to write (%d, %d) to node with %d bit record size; "+
 				"try increasing RecordSize or reducing the size of the database",
@@ -975,7 +975,7 @@ func (t *Tree) writeMetadata(dw *dataWriter) (int64, error) {
 	for _, v := range t.languages {
 		languages = append(languages, mmdbtype.String(v))
 	}
-	if t.nodeCount > math.MaxUint32 {
+	if int64(t.nodeCount) > int64(math.MaxUint32) {
 		return 0, fmt.Errorf("node count of %d exceeds the maximum allowed value", t.nodeCount)
 	}
 	metadata := mmdbtype.Map{
