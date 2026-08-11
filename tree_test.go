@@ -2141,6 +2141,10 @@ func writeMetadataPatchedDB(t *testing.T, key string, value byte) string {
 	dbBytes := append([]byte(nil), buf.Bytes()...)
 	i := bytes.LastIndex(dbBytes, []byte(key))
 	require.GreaterOrEqual(t, i, 0)
+	// A uint16 with a one-byte payload has control byte 0xa1. Verify it so a
+	// metadata layout change fails here instead of patching the wrong byte.
+	require.Equal(t, byte(0xa1), dbBytes[i+len(key)],
+		"metadata value for %q is no longer a one-byte uint16", key)
 	dbBytes[i+len(key)+1] = value
 
 	f, err := os.CreateTemp(t.TempDir(), "mmdbwriter-metadata-*.mmdb")
