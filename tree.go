@@ -101,10 +101,15 @@ type Options struct {
 	// value before you modify it. The tree calls the function separately for
 	// every covered record. Any non-nil returned value becomes tree-owned and
 	// must not be modified after return.
+	//
+	// Only direct inserts and inserter results are validated, so the function
+	// can receive an unsupported input value, such as a raw mmdbtype.Pointer,
+	// and must replace or discard it. If the function fails partway through
+	// the covered records, the records already visited keep their new values.
 	Inserter inserter.Func
 }
 
-// Tree represents an MaxMind DB search tree. A Tree is not safe for
+// Tree represents a MaxMind DB search tree. A Tree is not safe for
 // concurrent use. Lookups materialize shared views lazily, so the caller must
 // synchronize even concurrent Get calls.
 type Tree struct {
@@ -234,7 +239,7 @@ func metadataDimension(name string, value uint) (int, error) {
 // stored value.
 // During the load, a cache holds one reference per distinct offset in the
 // source data section. Load releases the cache before it returns. A
-// non-nil Options.Inserter instead receives a materialized view of each
+// non-nil Options.Inserter also receives a materialized view of each
 // decoded record. The inserter must treat its arguments as immutable and must
 // copy a value before modifying it.
 func Load(path string, opts Options) (*Tree, error) {
@@ -346,9 +351,10 @@ func (t *Tree) normalizeLoadPrefix(prefix netip.Prefix) (netip.Prefix, error) {
 // (defaults to inserter.Replace).
 //
 // You must never modify the value after insertion. Values may be shared with
-// other records, and the tree caches values by object identity: if you mutate
-// an inserted object in place, a later insert of that object can reuse the
-// data from before the mutation.
+// other records, and direct inserts of maps, slices, byte slices, and
+// *Uint128 values are cached by object identity: if you mutate an inserted
+// object in place, a later insert of that object can reuse the data from
+// before the mutation.
 //
 // This is not safe to call from multiple threads.
 func (t *Tree) Insert(prefix netip.Prefix, value mmdbtype.DataType) error {
@@ -370,7 +376,9 @@ func (t *Tree) Insert(prefix netip.Prefix, value mmdbtype.DataType) error {
 //
 // The function is called separately for every covered record. Any
 // non-nil value it returns becomes tree-owned and must not be modified after the
-// function returns. A nil insertFunc returns an error.
+// function returns. A nil insertFunc returns an error. If the function fails
+// partway through the covered records, the call returns the error but the
+// records already visited keep their new values.
 //
 // This is not safe to call from multiple threads.
 func (t *Tree) InsertFunc(
