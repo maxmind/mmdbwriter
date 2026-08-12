@@ -197,6 +197,12 @@ func (iRec *insertRecord) releaseResolved() {
 	}
 }
 
+// replaceDataRecord is the guarded mutation path for a record's value: it
+// releases the old value exactly once and stores the new one. The owned flag
+// is resolve's ownership handoff. When the caller already owns the incoming
+// reference, the record adopts it; otherwise the record retains its own. A
+// value equal to the old one leaves the record untouched, releasing the
+// incoming reference if it was owned.
 func (iRec *insertRecord) replaceDataRecord(
 	r *record,
 	value valueRef,
@@ -328,6 +334,10 @@ func (iRec *insertRecord) insertRecord(
 				}
 				iRec.replaceDataRecord(r, value, owned)
 			} else {
+				// This mirrors replaceDataRecord's release-then-overwrite for
+				// a non-data target. It stays inline because the split case
+				// below transfers the old reference instead of releasing it,
+				// so a shared helper would cover only part of the pattern.
 				oldValue := r.value
 				r.nodeIndex = iRec.insertedNode
 				r.recordType = iRec.recordType
