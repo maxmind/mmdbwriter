@@ -1220,6 +1220,61 @@ func TestStoreDecoderRejectsDuplicateMapKeys(t *testing.T) {
 		"a rejected map leaked its children")
 }
 
+// TestStoreDecoderReleasesChildrenOnContainerErrors pins that the container
+// error paths release every partial child, so a truncated or corrupt source
+// database yields an error instead of a refcount panic on hostile input.
+func TestStoreDecoderReleasesChildrenOnContainerErrors(t *testing.T) {
+	tests := []struct {
+		name string
+		data []byte
+		want []string
+	}{
+		{
+			name: "truncated map value",
+			data: []byte{0xe1, 0x41, 'k', 0x4a},
+			want: []string{`decoding value for map key "k"`, "decoding String at offset 3"},
+		},
+		{
+			name: "truncated slice element",
+			data: []byte{0x02, 0x04, 0x41, 'a', 0x4a},
+			want: []string{"decoding slice index 1", "decoding String at offset 4"},
+		},
+		{
+			name: "unsupported nested type",
+			data: []byte{0xe1, 0x41, 'k', 0x00, 0x09},
+			want: []string{
+				`decoding value for map key "k"`,
+				"unsupported data type Unknown(16) at offset 3",
+			},
+		},
+		{
+			name: "truncated nested map",
+			data: []byte{0xe1, 0x41, 'k', 0xe1, 0x41, 'n', 0x4a},
+			want: []string{
+				`decoding value for map key "k"`,
+				"decoding Map at offset 3",
+				`decoding value for map key "n"`,
+				"decoding String at offset 6",
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := newValueStore()
+			decoder := newStoreDecoder(store)
+			err := decoder.UnmarshalMaxMindDB(mmdbdata.NewDecoder(test.data, 0))
+			require.Error(t, err)
+			for _, want := range test.want {
+				require.ErrorContains(t, err, want)
+			}
+			decoder.close()
+			assert.Zero(t, liveValueNodeCount(store),
+				"the failed decode leaked references")
+		})
+	}
+}
+
 // TestLoadSharesRefsForSharedOffsets pins the decoder's offset cache: source
 // networks that point at the same data record must intern to one shared
 // reference rather than decoding the record once per network.
