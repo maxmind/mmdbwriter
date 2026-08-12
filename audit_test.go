@@ -2,6 +2,7 @@ package mmdbwriter
 
 import (
 	"errors"
+	"fmt"
 	"net/netip"
 	"testing"
 
@@ -41,6 +42,8 @@ func TestRefcountAuditMode(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.True(t, tree.refcountAudit)
+	assert.True(t, tree.valueStore.poisonFreedRefs,
+		"audit mode did not poison released refs")
 
 	// Each insert runs the audit; the second merges the two half networks.
 	value := mmdbtype.String("same")
@@ -51,6 +54,26 @@ func TestRefcountAuditMode(t *testing.T) {
 	assert.Equal(t, netip.MustParsePrefix("1.2.3.0/24"), prefix,
 		"the half networks did not merge")
 	assert.Equal(t, value, got)
+
+	staleIP, _ := tree.prefixInsertIP(prefix)
+	_, staleRecord := tree.getNode(tree.root, staleIP, 0)
+	require.Equal(t, recordTypeData, staleRecord.recordType)
+	stale := staleRecord.value
+	require.NoError(t, tree.Insert(
+		netip.MustParsePrefix("1.2.3.0/24"), mmdbtype.String("replacement")))
+	assert.Empty(t, tree.valueStore.freeRefs,
+		"audit mode queued a released ref for reuse")
+	require.PanicsWithValue(t,
+		fmt.Sprintf("mmdbwriter: invalid value reference %d", stale),
+		func() { tree.valueStore.node(stale) })
+
+	freshPrefix := netip.MustParsePrefix("2.2.2.0/24")
+	require.NoError(t, tree.Insert(freshPrefix, mmdbtype.String("fresh")))
+	freshIP, _ := tree.prefixInsertIP(freshPrefix)
+	_, freshRecord := tree.getNode(tree.root, freshIP, 0)
+	require.Equal(t, recordTypeData, freshRecord.recordType)
+	assert.NotEqual(t, stale, freshRecord.value,
+		"audit mode recycled a released ref")
 }
 
 func TestRefcountAuditEnvironmentOverride(t *testing.T) {
@@ -59,6 +82,8 @@ func TestRefcountAuditEnvironmentOverride(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, tree.refcountAudit,
 		"the environment variable did not enable the audit")
+	assert.True(t, tree.valueStore.poisonFreedRefs,
+		"the environment variable did not enable ref poisoning")
 }
 
 // TestAuditFailureReturnsTypedError pins that an audit failure surfaces as a
@@ -232,6 +257,29 @@ func TestDirectValueFailureRunsAudit(t *testing.T) {
 	}
 }
 
+// TestPoisonedStoreDetectsUseAfterRelease pins that a poisoned store never
+// recycles a released slot, so a stale ref panics instead of silently
+// reading whatever value reused it.
+func TestPoisonedStoreDetectsUseAfterRelease(t *testing.T) {
+	store := newValueStore()
+	store.poisonFreedRefs = true
+
+	stale, err := store.internUncached(mmdbtype.String("stale"))
+	require.NoError(t, err)
+	store.release(stale)
+	assert.Empty(t, store.freeRefs, "the poisoned store queued a freed slot")
+
+	fresh, err := store.internUncached(mmdbtype.String("fresh"))
+	require.NoError(t, err)
+	assert.NotEqual(t, stale, fresh, "the poisoned store recycled a slot")
+	require.PanicsWithValue(t,
+		fmt.Sprintf("mmdbwriter: invalid value reference %d", stale),
+		func() { store.node(stale) })
+
+	store.release(fresh)
+	require.NoError(t, store.audit(map[valueRef]uint64{}))
+}
+
 // TestValueStoreAuditRejectsCorruptStores corrupts each store structure the
 // audit validates and asserts the matching error.
 func TestValueStoreAuditRejectsCorruptStores(t *testing.T) {
@@ -262,6 +310,9 @@ func TestValueStoreAuditRejectsCorruptStores(t *testing.T) {
 			name: "duplicate freelist entry",
 			corrupt: func(t *testing.T, tree *Tree) {
 				t.Helper()
+				// The subtest corrupts the recycling freelist, so force the
+				// recycling mode even when the audit env var poisons refs.
+				tree.valueStore.poisonFreedRefs = false
 				scratch, err := tree.valueStore.internUncached(mmdbtype.String("scratch"))
 				require.NoError(t, err)
 				tree.valueStore.release(scratch)

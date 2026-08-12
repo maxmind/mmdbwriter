@@ -65,7 +65,10 @@
   `*RefcountAuditError`, which means the tree's internal invariants are broken
   and retrying cannot help. Setting the `MMDBWRITER_REFCOUNT_AUDIT` environment
   variable turns the audit on for every tree in the process. The audit is a
-  debugging tool. It slows each insert to a full walk of the tree and the store.
+  debugging tool. It slows each insert to a full walk of the tree and the store,
+  and it disables recycling of released value-node slots so stale references
+  remain invalid. Mutation-heavy trees retain those slots until they are
+  discarded.
 - Inserting a raw `mmdbtype.Pointer` value now returns an error. The previous
   writer emitted it as a literal, dangling pointer that no reader could resolve.
 - Inserting a negative or wider-than-128-bit `mmdbtype.Uint128` now returns an

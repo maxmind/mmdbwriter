@@ -80,9 +80,11 @@ type Options struct {
 	// RefcountAudit makes this tree audit its value-store reference counts
 	// after every insert that reaches the value store, including failed
 	// inserts, and after every successful load. The audit is a debugging tool.
-	// It slows each insert to a full walk of the tree and the store. Setting
-	// the MMDBWRITER_REFCOUNT_AUDIT environment variable turns the audit on
-	// for every tree in the process.
+	// It slows each insert to a full walk of the tree and the store and disables
+	// recycling of released value-node slots, so mutation-heavy trees retain
+	// those slots until the tree is discarded. Setting the
+	// MMDBWRITER_REFCOUNT_AUDIT environment variable turns the audit on for every
+	// tree in the process.
 	RefcountAudit bool
 
 	// Inserter is the function used when calling `Insert`. Leaving it nil
@@ -165,6 +167,7 @@ func New(opts Options) (*Tree, error) {
 	}
 
 	tree.valueStore = newValueStore()
+	tree.valueStore.poisonFreedRefs = tree.refcountAudit
 
 	if opts.Languages != nil {
 		tree.languages = opts.Languages

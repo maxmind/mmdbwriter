@@ -190,6 +190,13 @@ type valueStore struct {
 	callerIdentityTail     int
 	callerIdentityLimit    int
 
+	// poisonFreedRefs skips free-slot recycling, so a stale ref hits the
+	// invalid-reference panic instead of silently reading whatever value
+	// reused its slot. The Tree turns it on with the reference-count audit.
+	// It trades unbounded slot growth for use-after-release detection, so it
+	// must stay off in production.
+	poisonFreedRefs bool
+
 	hashFunc    func([]byte) uint64
 	hashScratch []byte
 	// releaseScratch is the reusable worklist for cascading releases. It
@@ -409,7 +416,9 @@ func (s *valueStore) release(ref valueRef) {
 		s.payloads.release(node.payloadOffset, node.payloadLen)
 		s.children.release(node.childrenOffset, node.childrenLen)
 		*node = valueNode{}
-		s.freeRefs = append(s.freeRefs, current)
+		if !s.poisonFreedRefs {
+			s.freeRefs = append(s.freeRefs, current)
+		}
 	}
 	s.releaseScratch = worklist
 }

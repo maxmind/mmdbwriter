@@ -109,22 +109,9 @@ func (s *valueStore) audit(external map[valueRef]uint64) error {
 	if err := s.addCallerIdentityRefs(expected); err != nil {
 		return err
 	}
-	bucketCounts := make([]int, len(s.nodes))
-	for hash, head := range s.buckets {
-		steps := 0
-		for ref := head; ref != nilValueRef; ref = s.nodes[ref].nextInBucket {
-			if uint64(ref) >= uint64(len(s.nodes)) {
-				return fmt.Errorf("refcount audit found invalid bucket ref %d", ref)
-			}
-			if s.nodes[ref].kind == valueKindInvalid || s.nodes[ref].hash != hash {
-				return fmt.Errorf("refcount audit found ref %d in the wrong hash bucket", ref)
-			}
-			bucketCounts[ref]++
-			steps++
-			if steps > len(s.nodes) {
-				return fmt.Errorf("refcount audit found a bucket chain cycle for hash %d", hash)
-			}
-		}
+	bucketCounts, err := s.auditBuckets()
+	if err != nil {
+		return err
 	}
 	freeCounts := make([]int, len(s.nodes))
 	for _, ref := range s.freeRefs {
@@ -133,10 +120,16 @@ func (s *valueStore) audit(external map[valueRef]uint64) error {
 		}
 		freeCounts[ref]++
 	}
+	// Poisoned stores never queue freed slots, so every released slot must
+	// be absent from the freelist rather than listed once.
+	wantFree := 1
+	if s.poisonFreedRefs {
+		wantFree = 0
+	}
 	for index := 1; index < len(s.nodes); index++ {
 		node := &s.nodes[index]
 		if node.kind == valueKindInvalid {
-			if freeCounts[index] != 1 {
+			if freeCounts[index] != wantFree {
 				return fmt.Errorf(
 					"refcount audit found free ref %d listed %d times",
 					index,
@@ -203,6 +196,31 @@ func (s *valueStore) addCallerIdentityRefs(expected []uint64) error {
 		expected[entry.ref]++
 	}
 	return nil
+}
+
+// auditBuckets walks every hash chain and counts how many chains reach each
+// node, validating chain membership and detecting cycles on the way.
+func (s *valueStore) auditBuckets() ([]int, error) {
+	bucketCounts := make([]int, len(s.nodes))
+	for hash, head := range s.buckets {
+		steps := 0
+		for ref := head; ref != nilValueRef; ref = s.nodes[ref].nextInBucket {
+			if uint64(ref) >= uint64(len(s.nodes)) {
+				return nil, fmt.Errorf("refcount audit found invalid bucket ref %d", ref)
+			}
+			if s.nodes[ref].kind == valueKindInvalid || s.nodes[ref].hash != hash {
+				return nil, fmt.Errorf(
+					"refcount audit found ref %d in the wrong hash bucket", ref)
+			}
+			bucketCounts[ref]++
+			steps++
+			if steps > len(s.nodes) {
+				return nil, fmt.Errorf(
+					"refcount audit found a bucket chain cycle for hash %d", hash)
+			}
+		}
+	}
+	return bucketCounts, nil
 }
 
 // arenaExtent is one claimed range in an arena, for the arena audit.
