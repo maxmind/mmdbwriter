@@ -425,19 +425,7 @@ func (t *Tree) insert(
 		return err
 	}
 	err = t.insertPrepared(prefix, iRec)
-	if err == nil {
-		// Register the identity only once the tree references the value. A
-		// registration that survived a failed insert would serve stale data
-		// if the caller mutated and retried the same object.
-		t.valueStore.rememberCallerIdentity(iRec.callerValue, iRec.value)
-	}
-	// The audit only balances once the memo and value references are gone, so
-	// release explicitly rather than by defer.
-	iRec.releaseResolved()
-	if err != nil {
-		return err
-	}
-	return t.maybeAuditValueStore()
+	return t.finishInsert(iRec, err)
 }
 
 // insertNormalizedRef inserts an already interned value. It borrows the
@@ -524,6 +512,22 @@ func (t *Tree) newInsertRecordRef(
 
 		store: t.valueStore,
 	}
+}
+
+// finishInsert completes an insertion. It registers the caller identity only
+// once the tree references the value: a registration that survived a failed
+// insert would serve stale data if the caller mutated and retried the same
+// object. The audit only balances once the memo and value references are
+// gone, so the release runs explicitly before it.
+func (t *Tree) finishInsert(iRec *insertRecord, err error) error {
+	if err == nil {
+		t.valueStore.rememberCallerIdentity(iRec.callerValue, iRec.value)
+	}
+	iRec.releaseResolved()
+	if err != nil {
+		return err
+	}
+	return t.maybeAuditValueStore()
 }
 
 func (t *Tree) normalizeInsertPrefix(prefix netip.Prefix) (netip.Prefix, error) {
@@ -710,19 +714,7 @@ func (t *Tree) insertRange(
 			break
 		}
 	}
-	if err == nil {
-		// Register the identity only once the tree references the value. A
-		// registration that survived a failed insert would serve stale data
-		// if the caller mutated and retried the same object.
-		t.valueStore.rememberCallerIdentity(iRec.callerValue, iRec.value)
-	}
-	// The audit only balances once the memo and value references are gone, so
-	// release explicitly rather than by defer.
-	iRec.releaseResolved()
-	if err != nil {
-		return err
-	}
-	return t.maybeAuditValueStore()
+	return t.finishInsert(iRec, err)
 }
 
 func (t *Tree) insertStringNetwork(
