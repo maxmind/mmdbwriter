@@ -331,6 +331,84 @@ func TestValueStoreAuditRejectsCorruptStores(t *testing.T) {
 			want: "dead materialized ref",
 		},
 		{
+			name: "overlapping payload extents",
+			corrupt: func(t *testing.T, tree *Tree) {
+				t.Helper()
+				first, err := tree.valueStore.internUncached(mmdbtype.String("abcd"))
+				require.NoError(t, err)
+				second, err := tree.valueStore.internUncached(mmdbtype.String("wxyz"))
+				require.NoError(t, err)
+				tree.valueStore.nodes[second].payloadOffset = tree.valueStore.nodes[first].payloadOffset
+			},
+			want: "overlapping extents at payload arena offset",
+		},
+		{
+			name: "free extent overlapping a live payload",
+			corrupt: func(t *testing.T, tree *Tree) {
+				t.Helper()
+				ref, err := tree.valueStore.internUncached(mmdbtype.String("live"))
+				require.NoError(t, err)
+				node := tree.valueStore.nodes[ref]
+				tree.valueStore.payloads.release(node.payloadOffset, node.payloadLen)
+			},
+			want: "overlapping extents at payload arena offset",
+		},
+		{
+			name: "double-listed free child extent",
+			corrupt: func(t *testing.T, tree *Tree) {
+				t.Helper()
+				ref, err := tree.valueStore.intern(mmdbtype.Slice{mmdbtype.String("gone")})
+				require.NoError(t, err)
+				node := tree.valueStore.nodes[ref]
+				offset, length := node.childrenOffset, node.childrenLen
+				tree.valueStore.release(ref)
+				tree.valueStore.children.release(offset, length)
+			},
+			want: "overlapping extents at child arena offset",
+		},
+		{
+			name: "free extent past the arena end",
+			corrupt: func(t *testing.T, tree *Tree) {
+				t.Helper()
+				tree.valueStore.payloads.release(
+					// #nosec G115 -- test arenas stay far below 2^32 bytes.
+					uint32(len(tree.valueStore.payloads.data)), 8)
+			},
+			want: "past the arena end",
+		},
+		{
+			name: "zero-length live extent with nonzero offset",
+			corrupt: func(t *testing.T, tree *Tree) {
+				t.Helper()
+				ref, err := tree.valueStore.intern(mmdbtype.Slice{})
+				require.NoError(t, err)
+				tree.valueStore.nodes[ref].childrenOffset = 1
+			},
+			want: "zero-length child extent at offset 1",
+		},
+		{
+			name: "zero-length free extent",
+			corrupt: func(_ *testing.T, tree *Tree) {
+				if tree.valueStore.payloads.free == nil {
+					tree.valueStore.payloads.free = map[uint32][]uint32{}
+				}
+				tree.valueStore.payloads.free[0] = []uint32{0}
+			},
+			want: "zero-length free payload extent",
+		},
+		{
+			name: "unclaimed payload extent",
+			corrupt: func(t *testing.T, tree *Tree) {
+				t.Helper()
+				ref, err := tree.valueStore.internUncached(mmdbtype.String("unclaimed"))
+				require.NoError(t, err)
+				length := tree.valueStore.nodes[ref].payloadLen
+				tree.valueStore.release(ref)
+				delete(tree.valueStore.payloads.free, length)
+			},
+			want: "unclaimed payload arena offset",
+		},
+		{
 			name: "caller identity index mismatch",
 			corrupt: func(t *testing.T, tree *Tree) {
 				t.Helper()

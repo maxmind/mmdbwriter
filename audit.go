@@ -103,6 +103,9 @@ func (s *valueStore) audit(external map[valueRef]uint64) error {
 	if err := s.auditMaterializedIdentities(); err != nil {
 		return err
 	}
+	if err := s.auditArenas(); err != nil {
+		return err
+	}
 	if err := s.addCallerIdentityRefs(expected); err != nil {
 		return err
 	}
@@ -198,6 +201,96 @@ func (s *valueStore) addCallerIdentityRefs(expected []uint64) error {
 			return fmt.Errorf("refcount audit found invalid caller identity ref %d", entry.ref)
 		}
 		expected[entry.ref]++
+	}
+	return nil
+}
+
+// arenaExtent is one claimed range in an arena, for the arena audit.
+type arenaExtent struct {
+	offset uint32
+	length uint32
+}
+
+// auditArenas verifies that the live payload and child extents are disjoint
+// and that every free-list extent is inside the arena, overlaps nothing, and
+// appears once. A violated extent invariant is the one ownership mistake
+// that corrupts records silently: two nodes sharing bytes stay readable and
+// keep their reference counts balanced.
+func (s *valueStore) auditArenas() error {
+	var payloads, children []arenaExtent
+	for index := 1; index < len(s.nodes); index++ {
+		node := &s.nodes[index]
+		if node.kind == valueKindInvalid {
+			continue
+		}
+		payloads = append(payloads,
+			arenaExtent{offset: node.payloadOffset, length: node.payloadLen})
+		children = append(children,
+			arenaExtent{offset: node.childrenOffset, length: node.childrenLen})
+	}
+	err := auditArenaExtents("payload", len(s.payloads.data), payloads, s.payloads.free)
+	if err != nil {
+		return err
+	}
+	return auditArenaExtents("child", len(s.children.data), children, s.children.free)
+}
+
+// auditArenaExtents marks each extent's range and reports the first byte
+// claimed twice or not at all. A live zero-length extent must use offset zero;
+// zero-length extents never belong on a freelist.
+func auditArenaExtents(
+	name string,
+	size int,
+	live []arenaExtent,
+	free map[uint32][]uint32,
+) error {
+	claimed := make([]bool, size)
+	mark := func(offset, length uint32) error {
+		if int64(offset)+int64(length) > int64(size) {
+			return fmt.Errorf(
+				"arena audit found a %s extent [%d, %d) past the arena end %d",
+				name, offset, int64(offset)+int64(length), size)
+		}
+		for index := offset; index < offset+length; index++ {
+			if claimed[index] {
+				return fmt.Errorf(
+					"arena audit found overlapping extents at %s arena offset %d",
+					name, index)
+			}
+			claimed[index] = true
+		}
+		return nil
+	}
+	for _, extent := range live {
+		if extent.length == 0 {
+			if extent.offset != 0 {
+				return fmt.Errorf(
+					"arena audit found a zero-length %s extent at offset %d",
+					name, extent.offset)
+			}
+			continue
+		}
+		if err := mark(extent.offset, extent.length); err != nil {
+			return err
+		}
+	}
+	for length, offsets := range free {
+		for _, offset := range offsets {
+			if length == 0 {
+				return fmt.Errorf(
+					"arena audit found a zero-length free %s extent at offset %d",
+					name, offset)
+			}
+			if err := mark(offset, length); err != nil {
+				return err
+			}
+		}
+	}
+	for index, isClaimed := range claimed {
+		if !isClaimed {
+			return fmt.Errorf(
+				"arena audit found unclaimed %s arena offset %d", name, index)
+		}
 	}
 	return nil
 }
