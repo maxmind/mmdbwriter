@@ -60,8 +60,7 @@ const (
 // caller must run releaseResolved once insertion finishes. It releases the
 // memo references and the reference interned for the inserted value itself.
 // memoFirst and memoResult hold the single entry until a second distinct key
-// promotes both into memo. From that point they are stale, so readers must
-// check memo first.
+// promotes both into memo, which clears them.
 type insertRecord struct {
 	inserter func(existingValue, newValue mmdbtype.DataType) (mmdbtype.DataType, error)
 
@@ -148,7 +147,7 @@ func (iRec *insertRecord) rememberResolved(existing, result valueRef) {
 	iRec.store.retain(existing)
 	// Keep the common one-result case allocation-free. A second distinct
 	// existing value promotes the first entry into the map.
-	if !iRec.memoSet {
+	if iRec.memo == nil && !iRec.memoSet {
 		iRec.memoFirst = existing
 		iRec.memoResult = result
 		iRec.memoSet = true
@@ -158,33 +157,44 @@ func (iRec *insertRecord) rememberResolved(existing, result valueRef) {
 		iRec.memo = map[valueRef]valueRef{
 			iRec.memoFirst: iRec.memoResult,
 		}
+		// Clear the single-entry fields at promotion, so a reader that
+		// forgets to check the map first reads nil instead of a stale hit.
+		iRec.memoFirst = nilValueRef
+		iRec.memoResult = nilValueRef
+		iRec.memoSet = false
 	}
 	iRec.memo[existing] = result
 }
 
 // releaseResolved releases every reference the insertRecord owns: the value
 // interned when the insert began, the memoized inserter results, and the memo
-// keys. It clears each field as it releases, so a second call is a no-op.
-// That lets callers both defer it for panic safety and call it explicitly
-// before the audit runs.
+// keys. It detaches every field before releasing anything, so a release panic
+// cannot make the deferred second call retry the same reference and mask the
+// original failure. A second call is otherwise a no-op. That lets callers both
+// defer it for panic safety and call it explicitly before the audit runs.
 func (iRec *insertRecord) releaseResolved() {
-	iRec.store.release(iRec.value)
+	value := iRec.value
+	memo := iRec.memo
+	memoFirst := iRec.memoFirst
+	memoResult := iRec.memoResult
+	memoSet := iRec.memoSet
+
 	iRec.value = nilValueRef
-	if iRec.memo != nil {
-		for key, value := range iRec.memo {
-			iRec.store.release(key)
-			iRec.store.release(value)
-		}
-		iRec.memo = nil
-	} else if iRec.memoSet {
-		iRec.store.release(iRec.memoFirst)
-		iRec.store.release(iRec.memoResult)
-	}
-	// memoFirst and memoResult are stale once the map exists, so both
-	// branches clear them.
+	iRec.memo = nil
 	iRec.memoFirst = nilValueRef
 	iRec.memoResult = nilValueRef
 	iRec.memoSet = false
+
+	iRec.store.release(value)
+	if memo != nil {
+		for key, value := range memo {
+			iRec.store.release(key)
+			iRec.store.release(value)
+		}
+	} else if memoSet {
+		iRec.store.release(memoFirst)
+		iRec.store.release(memoResult)
+	}
 }
 
 func (iRec *insertRecord) replaceDataRecord(
