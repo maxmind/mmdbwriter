@@ -28,7 +28,10 @@
   `Tree.InsertPureFunc`, or `Tree.InsertRangePureFunc` now returns an error;
   `Options.Inserter` may still be nil, which is equivalent to
   `inserter.Replace`. Non-nil results become tree-owned and must not be modified
-  after the function returns.
+  after the function returns. As in v1, a function that fails partway through
+  the covered records leaves the records already visited holding their new
+  values; interning now validates values per record, so more error kinds can
+  fire mid-walk.
 - Reduced allocations on the tree insert and serialization hot paths, lowering
   memory pressure and GC overhead during large builds.
 - Reworked value storage to intern every value node once in a content-addressed
@@ -37,25 +40,27 @@
   and strings hold their final MMDB wire encoding in shared arenas, and
   containers hold canonical child references. The store otherwise releases
   inserted Go value graphs instead of retaining them, which substantially
-  reduces peak memory for large builds with repeated or overlapping data. Two
-  caches trade some retention for speed. A bounded cache keeps up to about one
-  million recently inserted caller values, evicted least recently used, so
-  repeated inserts of the same object are cheap. Values that an inserter or
-  `Tree.Get` reads are materialized once and kept on their store nodes for later
-  lookups and merges. Values returned by `Tree.Get`, and existing values passed
-  to inserter functions, are shared, read-only views. They are equal to the
-  inserted values but are not necessarily the same Go objects. The new value an
-  inserter receives is the value passed to the insert call, or a shared view of
-  the decoded record during `Load`. Treat both arguments as read-only. Call
-  `Copy` before you modify such a value, and never modify a value after you
-  insert it.
+  reduces peak memory for large builds with repeated or overlapping data.
+- Two store caches trade some retention for speed. A bounded cache keeps up to
+  about one million caller values from direct inserts of maps, slices, byte
+  slices, and `*Uint128` values, evicted least recently used, so repeated
+  inserts of the same object are cheap. Values that an inserter or `Tree.Get`
+  reads are materialized once and kept on their store nodes for later lookups
+  and merges.
+- Values returned by `Tree.Get`, and existing values passed to inserter
+  functions, are shared, read-only views. They are equal to the inserted values
+  but are not necessarily the same Go objects. The new value an inserter
+  receives is the value passed to the insert call, or a shared view of the
+  decoded record during `Load`. Treat both arguments as read-only. Call `Copy`
+  before you modify such a value, and never modify a value after you insert it.
 - `Load` now interns records into the value store directly from the database
   decoder, without building intermediate Go map and slice graphs. A cache of one
   stored reference per source data offset makes repeated records cheap. `Load`
   releases the cache before it returns. Networks that share a data record share
   one stored value, so custom inserters must copy values before modifying them.
   A non-nil `Options.Inserter` also materializes a view of each decoded record
-  for its callback.
+  for its callback. `Load` now returns an error for a source record whose map
+  repeats a key. The previous decoder collapsed duplicate keys silently.
 - A `Tree` is not safe for concurrent use. In v1, concurrent lookups on a tree
   that was not being modified were safe. In v2, lookups materialize shared views
   lazily, so the caller must synchronize even concurrent `Tree.Get` calls.
