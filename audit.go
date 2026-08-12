@@ -66,6 +66,9 @@ func (t *Tree) auditValueStore() error {
 			seenPaths[record.nodeIndex] = true
 			return walkRecord(t.paths[record.nodeIndex].record)
 		case recordTypeEmpty, recordTypeReserved, recordTypeAlias:
+			// Alias records point at the IPv4 root node the walk already
+			// reaches as a fixed node. Following them would trip the
+			// multiple-owning-paths check.
 			return nil
 		default:
 			return fmt.Errorf("refcount audit found record type %d", record.recordType)

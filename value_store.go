@@ -51,8 +51,9 @@ type valueNode struct {
 
 	refCount uint32
 	// nextInBucket chains the live nodes that share a hash bucket. The chain
-	// replaces a per-bucket slice and is pointer-free, so the garbage
-	// collector never scans it.
+	// replaces a per-bucket slice, avoiding that slice's pointer overhead
+	// and allocations. The node array is still scanned, since materialized
+	// holds an interface.
 	nextInBucket valueRef
 	kind         valueKind
 
@@ -63,6 +64,12 @@ type valueNode struct {
 	hasIdentity  bool
 }
 
+// byteArena and refArena hold node payloads and child lists as extents. The
+// contract is unchecked here and audited opt-in: exactly one release per
+// successful put, extents never overlap, and offset 0 with length 0 means no
+// storage. refArena.release clears its extent so a stale slot never carries
+// live-looking references; released payload bytes are inert, so byteArena
+// leaves them.
 type byteArena struct {
 	data []byte
 	free map[uint32][]uint32
@@ -149,6 +156,13 @@ const (
 	dataIdentityUint128
 )
 
+// dataIdentityKey identifies a caller's Go object. All three fields are
+// load-bearing. kind separates empty values, since every empty Bytes, Map,
+// and Slice carries ptr zero and there is exactly one canonical node per
+// empty value. size separates reslices such as s[:3] and s[:5], which share
+// a data pointer. ptr is valid only while something pins the object: the
+// caller-identity cache pins entry.value, and materializedByIdentity is
+// pinned by the node's materialized view.
 type dataIdentityKey struct {
 	ptr  uintptr
 	kind dataIdentityKind
@@ -226,7 +240,9 @@ func newValueStore() *valueStore {
 }
 
 // newValueStoreWithHash exists so tests can force hash collisions. A nil
-// hashFunc selects the seeded default.
+// hashFunc selects the seeded default. The seed is fresh per store because
+// record contents can be attacker-supplied: a fixed seed would allow
+// precomputed collision sets that degrade every bucket chain at once.
 func newValueStoreWithHash(hashFunc func([]byte) uint64) *valueStore {
 	if hashFunc == nil {
 		seed := maphash.MakeSeed()
@@ -423,6 +439,9 @@ func (s *valueStore) release(ref valueRef) {
 	s.releaseScratch = worklist
 }
 
+// intern canonicalizes a value into the store and returns a reference the
+// caller owns and must release. A nil value interns to the nil reference,
+// which release ignores.
 func (s *valueStore) intern(value mmdbtype.DataType) (valueRef, error) {
 	if value == nil {
 		return nilValueRef, nil
@@ -584,8 +603,9 @@ func (s *valueStore) internOwnedChildren(
 		}
 		return nilValueRef, err
 	}
-	// internNode retains children only when it creates a new parent. A dedupe
-	// hit consumes the temporary tree by releasing it here.
+	// When internNode creates a parent it takes over the caller's child
+	// references without retaining them. A dedupe hit leaves them with the
+	// caller, which releases them here.
 	if !created {
 		for _, child := range children {
 			s.release(child)
@@ -594,6 +614,11 @@ func (s *valueStore) internOwnedChildren(
 	return ref, nil
 }
 
+// internNode returns a canonical node for the given content and whether it
+// created one. The created result decides child ownership: a new parent
+// adopts the caller's child references as its child-array edges, while a
+// dedupe hit leaves them with the caller to release. The returned parent
+// reference is owned by the caller in both cases.
 func (s *valueStore) internNode(
 	kind valueKind,
 	payload []byte,
@@ -785,6 +810,10 @@ func kindOf(value mmdbtype.DataType) (valueKind, error) {
 	}
 }
 
+// materialize returns a shared, read-only Go view of the referenced value. The
+// call requires a live ref and transfers no reference. Once returned, a view
+// retained by its caller remains valid even if the store node is later
+// released; only the store ref and its identity mapping expire with the node.
 func (s *valueStore) materialize(ref valueRef) mmdbtype.DataType {
 	if ref == nilValueRef {
 		return nil
@@ -895,7 +924,9 @@ func scalarPayload(encoded []byte) []byte {
 
 // scalarWriter implements mmdbtype's private writer interface without hashing
 // or pointer generation. Every intern attempt encodes its scalar, but the
-// store retains only one final encoding per canonical node.
+// store retains only one final encoding per canonical node. Its pointer
+// methods below are unreachable by construction: only containers call them,
+// and containers never pass through the scalar encoder.
 type scalarWriter struct{ bytes.Buffer }
 
 func (w *scalarWriter) WriteOrWritePointer(value mmdbtype.DataType) (int64, error) {
