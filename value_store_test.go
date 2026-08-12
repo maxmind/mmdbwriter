@@ -1,6 +1,7 @@
 package mmdbwriter
 
 import (
+	"fmt"
 	"math"
 	"math/big"
 	"reflect"
@@ -423,6 +424,22 @@ func TestEmptyContainerIdentitiesAreCanonical(t *testing.T) {
 	emptySliceIdentity, ok := dataIdentity(make(mmdbtype.Slice, 0, 1))
 	require.True(t, ok)
 	assert.Equal(t, nilSliceIdentity, emptySliceIdentity)
+}
+
+// TestPutPairScratchClearsEntries pins that pooled map scratch does not pin
+// caller-owned keys and values between uses.
+// TestReleasePanicsWhenNodeMissingFromItsBucket pins that release refuses to
+// recycle a slot its hash chain no longer reaches, instead of spreading the
+// corruption silently.
+func TestReleasePanicsWhenNodeMissingFromItsBucket(t *testing.T) {
+	store := newValueStore()
+	ref, err := store.internUncached(mmdbtype.String("orphan"))
+	require.NoError(t, err)
+	clear(store.buckets)
+
+	require.PanicsWithValue(t,
+		fmt.Sprintf("mmdbwriter: released ref %d is missing from its hash bucket", ref),
+		func() { store.release(ref) })
 }
 
 // TestPutPairScratchClearsEntries pins that pooled map scratch does not pin

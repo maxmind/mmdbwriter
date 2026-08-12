@@ -373,20 +373,29 @@ func (s *valueStore) release(ref valueRef) {
 
 		// Unlink the exact ref from its collision chain before the slot can
 		// be reused. Chain order is otherwise stable and has no observable
-		// effect.
+		// effect. A node missing from its chain means the store is already
+		// corrupt, and continuing would recycle a slot the chain still
+		// points at, so refuse loudly instead of spreading the damage.
+		unlinked := false
 		if head := s.buckets[node.hash]; head == current {
 			if node.nextInBucket == nilValueRef {
 				delete(s.buckets, node.hash)
 			} else {
 				s.buckets[node.hash] = node.nextInBucket
 			}
+			unlinked = true
 		} else {
 			for prev := head; prev != nilValueRef; prev = s.nodes[prev].nextInBucket {
 				if s.nodes[prev].nextInBucket == current {
 					s.nodes[prev].nextInBucket = node.nextInBucket
+					unlinked = true
 					break
 				}
 			}
+		}
+		if !unlinked {
+			panic(fmt.Sprintf(
+				"mmdbwriter: released ref %d is missing from its hash bucket", current))
 		}
 
 		if node.hasIdentity {
