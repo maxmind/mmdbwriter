@@ -145,6 +145,80 @@ func TestSuccessfulInsertCachesCallerIdentity(t *testing.T) {
 	assert.Equal(t, mmdbtype.Map{"name": mmdbtype.String("before")}, got)
 }
 
+// TestPanickingInserterReleasesItsReferences pins that a panic from a
+// caller-supplied inserter does not leak the insert record's references.
+func TestPanickingInserterReleasesItsReferences(t *testing.T) {
+	tree := newTestTree(t, "mmdbwriter-inserter-panic")
+	require.NoError(t, tree.Insert(
+		netip.MustParsePrefix("1.0.0.0/25"),
+		mmdbtype.Map{"name": mmdbtype.String("left")},
+	))
+	require.NoError(t, tree.Insert(
+		netip.MustParsePrefix("1.0.0.128/25"),
+		mmdbtype.Map{"name": mmdbtype.String("right")},
+	))
+	liveBefore := liveValueNodeCount(tree.valueStore)
+
+	calls := 0
+	require.Panics(t, func() {
+		//nolint:errcheck // the panic propagates before the return
+		tree.InsertPureFunc(
+			netip.MustParsePrefix("1.0.0.0/24"),
+			mmdbtype.Map{"name": mmdbtype.String("new")},
+			func(existing, _ mmdbtype.DataType) (mmdbtype.DataType, error) {
+				calls++
+				if calls == 2 {
+					panic("inserter failure")
+				}
+				return existing, nil
+			},
+		)
+	})
+
+	require.NoError(t, tree.auditValueStore(),
+		"the recovered panic left the store unbalanced")
+	assert.Equal(t, liveBefore, liveValueNodeCount(tree.valueStore),
+		"the panicking insert leaked references")
+}
+
+// TestPanickingRangeInserterReleasesItsReferences is the InsertRange variant
+// of TestPanickingInserterReleasesItsReferences. It pins the range entry
+// point's separate panic-safety defer.
+func TestPanickingRangeInserterReleasesItsReferences(t *testing.T) {
+	tree := newTestTree(t, "mmdbwriter-range-inserter-panic")
+	require.NoError(t, tree.Insert(
+		netip.MustParsePrefix("1.0.0.0/25"),
+		mmdbtype.Map{"name": mmdbtype.String("left")},
+	))
+	require.NoError(t, tree.Insert(
+		netip.MustParsePrefix("1.0.0.128/25"),
+		mmdbtype.Map{"name": mmdbtype.String("right")},
+	))
+	liveBefore := liveValueNodeCount(tree.valueStore)
+
+	calls := 0
+	require.Panics(t, func() {
+		//nolint:errcheck // the panic propagates before the return
+		tree.InsertRangePureFunc(
+			netip.MustParseAddr("1.0.0.0"),
+			netip.MustParseAddr("1.0.0.255"),
+			mmdbtype.Map{"name": mmdbtype.String("new")},
+			func(existing, _ mmdbtype.DataType) (mmdbtype.DataType, error) {
+				calls++
+				if calls == 2 {
+					panic("inserter failure")
+				}
+				return existing, nil
+			},
+		)
+	})
+
+	require.NoError(t, tree.auditValueStore(),
+		"the recovered range panic left the store unbalanced")
+	assert.Equal(t, liveBefore, liveValueNodeCount(tree.valueStore),
+		"the panicking range insert leaked references")
+}
+
 // TestFailedInsertRangeDoesNotCacheCallerIdentity is the InsertRange variant
 // of the failed-insert regression: a range that partially succeeds before a
 // reserved subnet fails must not leave the caller's object registered.

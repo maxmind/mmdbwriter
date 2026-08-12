@@ -424,6 +424,10 @@ func (t *Tree) insert(
 	if err != nil {
 		return err
 	}
+	// finishInsert releases the record's references before the audit runs.
+	// The defer is the panic-safety net: a caller-supplied inserter can
+	// panic mid-traversal, and releaseResolved is a no-op once it has run.
+	defer iRec.releaseResolved()
 	err = t.insertPrepared(prefix, iRec)
 	return t.finishInsert(iRec, err)
 }
@@ -707,6 +711,8 @@ func (t *Tree) insertRange(
 	if err != nil {
 		return err
 	}
+	// The defer is the panic-safety net, as in insert.
+	defer iRec.releaseResolved()
 	subnets := r.Prefixes()
 	for _, subnet := range subnets {
 		err = t.insertPrepared(subnet, iRec)

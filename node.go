@@ -164,20 +164,27 @@ func (iRec *insertRecord) rememberResolved(existing, result valueRef) {
 
 // releaseResolved releases every reference the insertRecord owns: the value
 // interned when the insert began, the memoized inserter results, and the memo
-// keys.
+// keys. It clears each field as it releases, so a second call is a no-op.
+// That lets callers both defer it for panic safety and call it explicitly
+// before the audit runs.
 func (iRec *insertRecord) releaseResolved() {
 	iRec.store.release(iRec.value)
+	iRec.value = nilValueRef
 	if iRec.memo != nil {
 		for key, value := range iRec.memo {
 			iRec.store.release(key)
 			iRec.store.release(value)
 		}
-		return
-	}
-	if iRec.memoSet {
+		iRec.memo = nil
+	} else if iRec.memoSet {
 		iRec.store.release(iRec.memoFirst)
 		iRec.store.release(iRec.memoResult)
 	}
+	// memoFirst and memoResult are stale once the map exists, so both
+	// branches clear them.
+	iRec.memoFirst = nilValueRef
+	iRec.memoResult = nilValueRef
+	iRec.memoSet = false
 }
 
 func (iRec *insertRecord) replaceDataRecord(
