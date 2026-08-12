@@ -60,6 +60,26 @@ func TestRefcountAuditEnvironmentOverride(t *testing.T) {
 		"the environment variable did not enable the audit")
 }
 
+// TestAuditFailureReturnsTypedError pins that an audit failure surfaces as a
+// *RefcountAuditError, distinguishable from a rejected input.
+func TestAuditFailureReturnsTypedError(t *testing.T) {
+	tree, err := New(Options{
+		IPVersion:               4,
+		IncludeReservedNetworks: true,
+		RefcountAudit:           true,
+	})
+	require.NoError(t, err)
+	require.NoError(t, tree.Insert(
+		netip.MustParsePrefix("1.2.0.0/16"), mmdbtype.String("first")))
+
+	ref := requireDataRef(t, tree)
+	tree.valueStore.nodes[ref].refCount++
+	err = tree.Insert(netip.MustParsePrefix("2.2.2.0/24"), mmdbtype.String("second"))
+	require.Error(t, err)
+	var auditErr *RefcountAuditError
+	require.ErrorAs(t, err, &auditErr)
+}
+
 // TestValueStoreAuditRejectsCorruptStores corrupts each store structure the
 // audit validates and asserts the matching error.
 func TestValueStoreAuditRejectsCorruptStores(t *testing.T) {

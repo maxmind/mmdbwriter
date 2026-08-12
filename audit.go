@@ -5,15 +5,31 @@ import (
 	"fmt"
 )
 
+// RefcountAuditError reports that the reference-count audit found the tree's
+// internal invariants violated. It signals a bug in this library or memory
+// corruption, not a problem with the caller's input, so retrying the failed
+// call cannot help.
+type RefcountAuditError struct {
+	err error
+}
+
+func (e *RefcountAuditError) Error() string { return e.err.Error() }
+
+func (e *RefcountAuditError) Unwrap() error { return e.err }
+
 // maybeAuditValueStore runs the ownership audit when the tree was created
 // with Options.RefcountAudit or with MMDBWRITER_REFCOUNT_AUDIT set. Callers
-// invoke it after a successful insert or load, once they release every
-// temporary reference.
+// invoke it after an insert or load, once every temporary reference has been
+// released. A failure comes back as a *RefcountAuditError, so callers can
+// tell a broken tree from a rejected input.
 func (t *Tree) maybeAuditValueStore() error {
 	if !t.refcountAudit {
 		return nil
 	}
-	return t.auditValueStore()
+	if err := t.auditValueStore(); err != nil {
+		return &RefcountAuditError{err: err}
+	}
+	return nil
 }
 
 // auditValueStore checks every ownership edge in the tree and value DAG. It

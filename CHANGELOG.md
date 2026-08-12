@@ -60,10 +60,11 @@
   that was not being modified were safe. In v2, lookups materialize shared views
   lazily, so the caller must synchronize even concurrent `Tree.Get` calls.
 - Added `Options.RefcountAudit`, which makes the tree audit its reference counts
-  after each successful insert and load. Setting the `MMDBWRITER_REFCOUNT_AUDIT`
-  environment variable turns the audit on for every tree in the process. The
-  audit is a debugging tool. It slows each insert to a full walk of the tree and
-  the store.
+  after each insert and load. An audit failure comes back as a
+  `*RefcountAuditError`, which means the tree's internal invariants are broken
+  and retrying cannot help. Setting the `MMDBWRITER_REFCOUNT_AUDIT` environment
+  variable turns the audit on for every tree in the process. The audit is a
+  debugging tool. It slows each insert to a full walk of the tree and the store.
 - Inserting a raw `mmdbtype.Pointer` value now returns an error. The previous
   writer emitted it as a literal, dangling pointer that no reader could resolve.
 - Inserting a negative or wider-than-128-bit `mmdbtype.Uint128` now returns an
