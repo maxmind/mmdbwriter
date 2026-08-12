@@ -268,18 +268,9 @@ func TestLoadWithCustomInserter(t *testing.T) {
 		mmdbtype.Map{"base": mmdbtype.String("value")},
 	))
 
-	var buf bytes.Buffer
-	_, writeErr := tree.WriteTo(&buf)
-	require.NoError(t, writeErr)
+	path := writeTempDB(t, tree)
 
-	f, err := os.CreateTemp(t.TempDir(), "mmdbwriter-load-inserter-*.mmdb")
-	require.NoError(t, err)
-	defer func() { require.NoError(t, os.Remove(f.Name())) }()
-	_, err = f.Write(buf.Bytes())
-	require.NoError(t, err)
-	require.NoError(t, f.Close())
-
-	loaded, err := Load(f.Name(), Options{
+	loaded, err := Load(path, Options{
 		IPVersion:               4,
 		IncludeReservedNetworks: true,
 		Inserter:                inserter.TopLevelMerge,
@@ -961,20 +952,15 @@ func TestLoadWrapsInsertErrorWithNetwork(t *testing.T) {
 		mmdbtype.String("value"),
 	))
 
-	f, err := os.CreateTemp(t.TempDir(), "mmdbwriter-load-error-*.mmdb")
-	require.NoError(t, err)
-	defer func() { require.NoError(t, os.Remove(f.Name())) }()
+	path := writeTempDB(t, tree)
 
-	_, err = tree.WriteTo(f)
-	require.NoError(t, err)
-	require.NoError(t, f.Close())
-
-	_, err = Load(f.Name(), Options{
+	_, err = Load(path, Options{
 		IPVersion:               4,
 		IncludeReservedNetworks: true,
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "loading network 2001:db8::/32")
+	assert.Contains(t, err.Error(), path)
 	assert.Contains(t, err.Error(), "IPv6 prefixes cannot be inserted into an IPv4 tree")
 }
 
@@ -1005,20 +991,15 @@ func TestLoadChecksIteratorErrorBeforeOffsetCache(t *testing.T) {
 	// the right child pointer so its iterator result has Err set and Offset 0.
 	dbBytes[3], dbBytes[4], dbBytes[5] = 0xFF, 0xFF, 0xFF
 
-	f, err := os.CreateTemp(t.TempDir(), "mmdbwriter-load-corrupt-*.mmdb")
-	require.NoError(t, err)
-	defer func() { require.NoError(t, os.Remove(f.Name())) }()
+	path := writeTempFile(t, dbBytes)
 
-	_, err = f.Write(dbBytes)
-	require.NoError(t, err)
-	require.NoError(t, f.Close())
-
-	_, err = Load(f.Name(), Options{
+	_, err = Load(path, Options{
 		IPVersion:               4,
 		IncludeReservedNetworks: true,
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "loading network 128.0.0.0/1")
+	assert.Contains(t, err.Error(), path)
 	assert.Contains(t, err.Error(), "search tree is corrupt")
 }
 
@@ -1045,20 +1026,16 @@ func TestLoadDecodeErrorIncludesNetwork(t *testing.T) {
 	// Extended type 16 is validly encoded but unsupported by the unmarshaler.
 	dbBytes[dataStart], dbBytes[dataStart+1] = 0, 9
 
-	f, err := os.CreateTemp(t.TempDir(), "mmdbwriter-load-corrupt-data-*.mmdb")
-	require.NoError(t, err)
-	defer func() { require.NoError(t, os.Remove(f.Name())) }()
+	path := writeTempFile(t, dbBytes)
 
-	_, err = f.Write(dbBytes)
-	require.NoError(t, err)
-	require.NoError(t, f.Close())
-
-	_, err = Load(f.Name(), Options{
+	_, err = Load(path, Options{
 		IPVersion:               4,
 		IncludeReservedNetworks: true,
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unmarshaling record for network 1.2.3.0/24")
+	assert.Contains(t, err.Error(), path)
+	assert.Contains(t, err.Error(), "unsupported data type Unknown(16) at offset 0")
 }
 
 // TestStoreDecoderCachesOffsets pins that a repeated source offset hits the
@@ -1161,14 +1138,9 @@ func TestLoadRoundTripsSmallUnsignedTypes(t *testing.T) {
 	_, writeErr := tree.WriteTo(&buf)
 	require.NoError(t, writeErr)
 
-	f, err := os.CreateTemp(t.TempDir(), "mmdbwriter-load-small-uints-*.mmdb")
-	require.NoError(t, err)
-	defer func() { require.NoError(t, os.Remove(f.Name())) }()
-	_, err = f.Write(buf.Bytes())
-	require.NoError(t, err)
-	require.NoError(t, f.Close())
+	path := writeTempFile(t, buf.Bytes())
 
-	loaded, err := Load(f.Name(), Options{
+	loaded, err := Load(path, Options{
 		BuildEpoch:              123456789,
 		IPVersion:               4,
 		IncludeReservedNetworks: true,
@@ -1379,13 +1351,9 @@ func TestEmptyContainersRoundTrip(t *testing.T) {
 	}
 	require.NoError(t, tree.Insert(netip.MustParsePrefix("1.2.3.0/24"), value))
 
-	file, err := os.CreateTemp(t.TempDir(), "mmdbwriter-empty-*.mmdb")
-	require.NoError(t, err)
-	_, err = tree.WriteTo(file)
-	require.NoError(t, err)
-	require.NoError(t, file.Close())
+	path := writeTempDB(t, tree)
 
-	loaded, err := Load(file.Name(), Options{IncludeReservedNetworks: true})
+	loaded, err := Load(path, Options{IncludeReservedNetworks: true})
 	require.NoError(t, err)
 	_, got := loaded.Get(netip.MustParseAddr("1.2.3.4"))
 	assert.Equal(t, value, got)
@@ -1412,14 +1380,9 @@ func TestLoadSharesRefsForSharedOffsets(t *testing.T) {
 	_, writeErr := tree.WriteTo(&buf)
 	require.NoError(t, writeErr)
 
-	f, err := os.CreateTemp(t.TempDir(), "mmdbwriter-load-shared-offset-*.mmdb")
-	require.NoError(t, err)
-	defer func() { require.NoError(t, os.Remove(f.Name())) }()
-	_, err = f.Write(buf.Bytes())
-	require.NoError(t, err)
-	require.NoError(t, f.Close())
+	path := writeTempFile(t, buf.Bytes())
 
-	loaded, err := Load(f.Name(), Options{
+	loaded, err := Load(path, Options{
 		IPVersion:               4,
 		IncludeReservedNetworks: true,
 	})
@@ -2080,18 +2043,11 @@ func TestTreeInsertAndGet(t *testing.T) {
 
 					assert.Equal(t, int64(buf.Len()), numBytes, "number of bytes")
 
-					f, err := os.CreateTemp(t.TempDir(), "mmdbwriter")
-					require.NoError(t, err)
-					defer func() { require.NoError(t, os.Remove(f.Name())) }()
-
 					bufBytes := buf.Bytes()
-
-					_, err = f.Write(bufBytes)
-					require.NoError(t, err)
-					require.NoError(t, f.Close())
+					path := writeTempFile(t, bufBytes)
 
 					loadBuf := &bytes.Buffer{}
-					tree, err = Load(f.Name(),
+					tree, err = Load(path,
 						Options{
 							BuildEpoch:              epochSec,
 							DisableIPv4Aliasing:     test.disableIPv4Aliasing,
@@ -2392,13 +2348,7 @@ func writeMetadataPatchedDB(t *testing.T, key string, value byte) string {
 		"metadata value for %q is no longer a one-byte uint16", key)
 	dbBytes[i+len(key)+1] = value
 
-	f, err := os.CreateTemp(t.TempDir(), "mmdbwriter-metadata-*.mmdb")
-	require.NoError(t, err)
-	_, err = f.Write(dbBytes)
-	require.NoError(t, err)
-	require.NoError(t, f.Close())
-
-	return f.Name()
+	return writeTempFile(t, dbBytes)
 }
 
 // TestLoadRejectsUnsupportedMetadataDimensions covers the metadata validation
@@ -2693,6 +2643,30 @@ func TestInsertReportsNilNestedValueError(t *testing.T) {
 
 // newTestTree builds the tree shape most tests want. Tests that depend on a
 // particular option set it explicitly instead.
+// writeTempDB serializes the tree to a file in the test's temp directory and
+// returns its path. The directory is removed when the test ends.
+func writeTempDB(t *testing.T, tree *Tree) string {
+	t.Helper()
+	file, err := os.CreateTemp(t.TempDir(), "mmdbwriter-*.mmdb")
+	require.NoError(t, err)
+	_, err = tree.WriteTo(file)
+	require.NoError(t, err)
+	require.NoError(t, file.Close())
+	return file.Name()
+}
+
+// writeTempFile writes raw database bytes to a file in the test's temp
+// directory and returns its path.
+func writeTempFile(t *testing.T, data []byte) string {
+	t.Helper()
+	file, err := os.CreateTemp(t.TempDir(), "mmdbwriter-*.mmdb")
+	require.NoError(t, err)
+	_, err = file.Write(data)
+	require.NoError(t, err)
+	require.NoError(t, file.Close())
+	return file.Name()
+}
+
 func newTestTree(t *testing.T, databaseType string) *Tree {
 	t.Helper()
 
