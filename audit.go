@@ -19,9 +19,9 @@ func (e *RefcountAuditError) Unwrap() error { return e.err }
 
 // maybeAuditValueStore runs the ownership audit when the tree was created
 // with Options.RefcountAudit or with MMDBWRITER_REFCOUNT_AUDIT set. Callers
-// invoke it after an insert or load, once every temporary reference has been
-// released. A failure comes back as a *RefcountAuditError, so callers can
-// tell a broken tree from a rejected input.
+// invoke it after insert work reaches the store or after a successful load,
+// once every temporary reference has been released. A failure comes back as a
+// *RefcountAuditError, so callers can tell a broken tree from a rejected input.
 func (t *Tree) maybeAuditValueStore() error {
 	if !t.refcountAudit {
 		return nil
@@ -34,8 +34,8 @@ func (t *Tree) maybeAuditValueStore() error {
 
 // auditValueStore checks every ownership edge in the tree and value DAG. It
 // is intentionally expensive. Production code reaches it through
-// maybeAuditValueStore after successful inserts and loads. Tests call it
-// directly.
+// maybeAuditValueStore after inserts that reach the store and successful
+// loads. Tests call it directly.
 func (t *Tree) auditValueStore() error {
 	external := map[valueRef]uint64{}
 	seenNodes := map[nodeIndex]bool{}

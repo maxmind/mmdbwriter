@@ -60,7 +60,8 @@
   that was not being modified were safe. In v2, lookups materialize shared views
   lazily, so the caller must synchronize even concurrent `Tree.Get` calls.
 - Added `Options.RefcountAudit`, which makes the tree audit its reference counts
-  after each insert and load. An audit failure comes back as a
+  after every insert that reaches the value store, including failed inserts, and
+  after every successful load. An audit failure comes back as a
   `*RefcountAuditError`, which means the tree's internal invariants are broken
   and retrying cannot help. Setting the `MMDBWRITER_REFCOUNT_AUDIT` environment
   variable turns the audit on for every tree in the process. The audit is a

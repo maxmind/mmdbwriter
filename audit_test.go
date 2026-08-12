@@ -1,6 +1,7 @@
 package mmdbwriter
 
 import (
+	"errors"
 	"net/netip"
 	"testing"
 
@@ -78,6 +79,157 @@ func TestAuditFailureReturnsTypedError(t *testing.T) {
 	require.Error(t, err)
 	var auditErr *RefcountAuditError
 	require.ErrorAs(t, err, &auditErr)
+}
+
+// TestFailedInsertsPassTheAudit pins that the audit runs and balances after
+// error-path inserts, which is where ownership mistakes hide.
+func TestFailedInsertsPassTheAudit(t *testing.T) {
+	tests := []struct {
+		name   string
+		insert func(t *testing.T, tree *Tree) error
+	}{
+		{
+			name: "reserved network",
+			insert: func(_ *testing.T, tree *Tree) error {
+				return tree.Insert(
+					netip.MustParsePrefix("10.0.0.0/8"), mmdbtype.String("nope"))
+			},
+		},
+		{
+			name: "inserter error mid-walk",
+			insert: func(t *testing.T, tree *Tree) error {
+				require.NoError(t, tree.Insert(
+					netip.MustParsePrefix("1.0.0.0/25"), mmdbtype.String("left")))
+				require.NoError(t, tree.Insert(
+					netip.MustParsePrefix("1.0.0.128/25"), mmdbtype.String("right")))
+				calls := 0
+				return tree.InsertPureFunc(
+					netip.MustParsePrefix("1.0.0.0/24"),
+					mmdbtype.String("new"),
+					func(_, newValue mmdbtype.DataType) (mmdbtype.DataType, error) {
+						calls++
+						if calls == 2 {
+							return nil, errors.New("inserter failure")
+						}
+						return newValue, nil
+					},
+				)
+			},
+		},
+		{
+			name: "invalid nested value from an inserter",
+			insert: func(t *testing.T, tree *Tree) error {
+				require.NoError(t, tree.Insert(
+					netip.MustParsePrefix("1.0.0.0/24"), mmdbtype.String("old")))
+				return tree.InsertFunc(
+					netip.MustParsePrefix("1.0.0.0/24"),
+					mmdbtype.String("new"),
+					func(_, _ mmdbtype.DataType) (mmdbtype.DataType, error) {
+						return mmdbtype.Map{"p": mmdbtype.Pointer(7)}, nil
+					},
+				)
+			},
+		},
+		{
+			name: "invalid nested value from a direct insert",
+			insert: func(_ *testing.T, tree *Tree) error {
+				return tree.Insert(
+					netip.MustParsePrefix("1.0.0.0/24"),
+					mmdbtype.Map{
+						"a-valid":   mmdbtype.String("value"),
+						"z-invalid": mmdbtype.Pointer(7),
+					},
+				)
+			},
+		},
+		{
+			name: "invalid nested value from a direct range insert",
+			insert: func(_ *testing.T, tree *Tree) error {
+				return tree.InsertRange(
+					netip.MustParseAddr("1.0.0.0"),
+					netip.MustParseAddr("1.0.0.255"),
+					mmdbtype.Map{
+						"a-valid":   mmdbtype.String("value"),
+						"z-invalid": mmdbtype.Pointer(7),
+					},
+				)
+			},
+		},
+		{
+			name: "partial range into a reserved subnet",
+			insert: func(_ *testing.T, tree *Tree) error {
+				return tree.InsertRange(
+					netip.MustParseAddr("9.255.255.0"),
+					netip.MustParseAddr("10.0.0.255"),
+					mmdbtype.String("partial"),
+				)
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			tree, err := New(Options{IPVersion: 4, RefcountAudit: true})
+			require.NoError(t, err)
+			err = test.insert(t, tree)
+			require.Error(t, err)
+			var auditErr *RefcountAuditError
+			require.NotErrorAs(t, err, &auditErr,
+				"the failed insert left the store unbalanced")
+			require.NoError(t, tree.auditValueStore(),
+				"the failed insert left the store unbalanced")
+		})
+	}
+}
+
+// TestDirectValueFailureRunsAudit pins that validation failures after direct
+// value interning begins still surface an existing audit failure.
+func TestDirectValueFailureRunsAudit(t *testing.T) {
+	tests := []struct {
+		name   string
+		insert func(tree *Tree, value mmdbtype.DataType) error
+	}{
+		{
+			name: "insert",
+			insert: func(tree *Tree, value mmdbtype.DataType) error {
+				return tree.Insert(netip.MustParsePrefix("2.0.0.0/24"), value)
+			},
+		},
+		{
+			name: "range insert",
+			insert: func(tree *Tree, value mmdbtype.DataType) error {
+				return tree.InsertRange(
+					netip.MustParseAddr("2.0.0.0"),
+					netip.MustParseAddr("2.0.0.255"),
+					value,
+				)
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			tree, err := New(Options{
+				IPVersion:               4,
+				IncludeReservedNetworks: true,
+				RefcountAudit:           true,
+			})
+			require.NoError(t, err)
+			require.NoError(t, tree.Insert(
+				netip.MustParsePrefix("1.2.0.0/16"), mmdbtype.String("existing")))
+			ref := requireDataRef(t, tree)
+			tree.valueStore.nodes[ref].refCount++
+
+			err = test.insert(tree, mmdbtype.Map{
+				"a-valid":   mmdbtype.String("value"),
+				"z-invalid": mmdbtype.Pointer(7),
+			})
+			require.ErrorContains(t, err, "unsupported MMDB data type mmdbtype.Pointer")
+			var auditErr *RefcountAuditError
+			require.ErrorAs(t, err, &auditErr,
+				"the direct-value failure skipped the audit")
+		})
+	}
 }
 
 // TestValueStoreAuditRejectsCorruptStores corrupts each store structure the

@@ -78,7 +78,8 @@ type Options struct {
 	DisableMetadataPointers bool
 
 	// RefcountAudit makes this tree audit its value-store reference counts
-	// after every successful insert and load. The audit is a debugging tool.
+	// after every insert that reaches the value store, including failed
+	// inserts, and after every successful load. The audit is a debugging tool.
 	// It slows each insert to a full walk of the tree and the store. Setting
 	// the MMDBWRITER_REFCOUNT_AUDIT environment variable turns the audit on
 	// for every tree in the process.
@@ -129,9 +130,9 @@ type Tree struct {
 
 	nodeCount int
 	inserter  inserter.Func
-	// refcountAudit runs the full ownership audit after every successful
-	// insert and load. New sets it from Options.RefcountAudit or the
-	// MMDBWRITER_REFCOUNT_AUDIT environment variable.
+	// refcountAudit runs the full ownership audit after every insert that
+	// reaches the value store and after every successful load. New sets it from
+	// Options.RefcountAudit or the MMDBWRITER_REFCOUNT_AUDIT environment variable.
 	refcountAudit bool
 }
 
@@ -422,7 +423,7 @@ func (t *Tree) insert(
 	}
 	iRec, err := t.newInsertRecord(recordType, insertFunc, inserterPure, node, value)
 	if err != nil {
-		return err
+		return t.finishInsertAudit(err)
 	}
 	// finishInsert releases the record's references before the audit runs.
 	// The defer is the panic-safety net: a caller-supplied inserter can
@@ -522,16 +523,25 @@ func (t *Tree) newInsertRecordRef(
 // once the tree references the value: a registration that survived a failed
 // insert would serve stale data if the caller mutated and retried the same
 // object. The audit only balances once the memo and value references are
-// gone, so the release runs explicitly before it.
+// gone, so the release runs explicitly before it. The audit also runs after
+// a failed insert, since the error paths are exactly where ownership
+// mistakes hide; an audit failure joins any insert error.
 func (t *Tree) finishInsert(iRec *insertRecord, err error) error {
 	if err == nil {
 		t.valueStore.rememberCallerIdentity(iRec.callerValue, iRec.value)
 	}
 	iRec.releaseResolved()
-	if err != nil {
-		return err
+	return t.finishInsertAudit(err)
+}
+
+// finishInsertAudit runs after temporary store references have been released.
+// It preserves an insertion error while adding a typed audit failure when the
+// insertion's store work left the tree unbalanced.
+func (t *Tree) finishInsertAudit(err error) error {
+	if auditErr := t.maybeAuditValueStore(); auditErr != nil {
+		return errors.Join(err, auditErr)
 	}
-	return t.maybeAuditValueStore()
+	return err
 }
 
 func (t *Tree) normalizeInsertPrefix(prefix netip.Prefix) (netip.Prefix, error) {
@@ -709,7 +719,7 @@ func (t *Tree) insertRange(
 	}
 	iRec, err := t.newInsertRecord(recordType, insertFunc, inserterPure, node, value)
 	if err != nil {
-		return err
+		return t.finishInsertAudit(err)
 	}
 	// The defer is the panic-safety net, as in insert.
 	defer iRec.releaseResolved()
