@@ -77,6 +77,13 @@ type Options struct {
 	// use should primarily be limited to existing database types.
 	DisableMetadataPointers bool
 
+	// RefcountAudit makes this tree audit its value-store reference counts
+	// after every successful insert and load. The audit is a debugging tool.
+	// It slows each insert to a full walk of the tree and the store. Setting
+	// the MMDBWRITER_REFCOUNT_AUDIT environment variable turns the audit on
+	// for every tree in the process.
+	RefcountAudit bool
+
 	// Inserter is the function used when calling `Insert`. Leaving it nil
 	// is equivalent to `inserter.Replace`, which replaces any conflicting old
 	// value entirely with the new, and allows Insert to use the default
@@ -123,7 +130,8 @@ type Tree struct {
 	nodeCount int
 	inserter  inserter.Func
 	// refcountAudit runs the full ownership audit after every successful
-	// insert and load. It is read from MMDBWRITER_REFCOUNT_AUDIT in New.
+	// insert and load. New sets it from Options.RefcountAudit or the
+	// MMDBWRITER_REFCOUNT_AUDIT environment variable.
 	refcountAudit bool
 }
 
@@ -139,7 +147,8 @@ func New(opts Options) (*Tree, error) {
 		nodeBlocks:              [][]node{make([]node, nodeBlockSize)},
 		nodeCountAllocated:      1,
 		root:                    rootNodeIndex,
-		refcountAudit:           os.Getenv("MMDBWRITER_REFCOUNT_AUDIT") != "",
+		refcountAudit: opts.RefcountAudit ||
+			os.Getenv("MMDBWRITER_REFCOUNT_AUDIT") != "",
 	}
 
 	if opts.BuildEpoch != 0 {

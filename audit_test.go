@@ -33,8 +33,11 @@ func TestValueStoreRefcountAudit(t *testing.T) {
 }
 
 func TestRefcountAuditMode(t *testing.T) {
-	t.Setenv("MMDBWRITER_REFCOUNT_AUDIT", "1")
-	tree, err := New(Options{IPVersion: 4, IncludeReservedNetworks: true})
+	tree, err := New(Options{
+		IPVersion:               4,
+		IncludeReservedNetworks: true,
+		RefcountAudit:           true,
+	})
 	require.NoError(t, err)
 	assert.True(t, tree.refcountAudit)
 
@@ -47,6 +50,14 @@ func TestRefcountAuditMode(t *testing.T) {
 	assert.Equal(t, netip.MustParsePrefix("1.2.3.0/24"), prefix,
 		"the half networks did not merge")
 	assert.Equal(t, value, got)
+}
+
+func TestRefcountAuditEnvironmentOverride(t *testing.T) {
+	t.Setenv("MMDBWRITER_REFCOUNT_AUDIT", "1")
+	tree, err := New(Options{IPVersion: 4, IncludeReservedNetworks: true})
+	require.NoError(t, err)
+	assert.True(t, tree.refcountAudit,
+		"the environment variable did not enable the audit")
 }
 
 // TestValueStoreAuditRejectsCorruptStores corrupts each store structure the

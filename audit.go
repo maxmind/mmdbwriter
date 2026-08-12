@@ -6,8 +6,9 @@ import (
 )
 
 // maybeAuditValueStore runs the ownership audit when the tree was created
-// with MMDBWRITER_REFCOUNT_AUDIT set. Callers invoke it after a successful
-// insert or load, once they release every temporary reference.
+// with Options.RefcountAudit or with MMDBWRITER_REFCOUNT_AUDIT set. Callers
+// invoke it after a successful insert or load, once they release every
+// temporary reference.
 func (t *Tree) maybeAuditValueStore() error {
 	if !t.refcountAudit {
 		return nil
