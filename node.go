@@ -313,6 +313,10 @@ func (iRec *insertRecord) insertRecord(
 		return iRec.insertNode(r.nodeIndex, newDepth)
 	case recordTypePath:
 		path := iRec.tree.paths[r.nodeIndex]
+		// materializePath moves the path record's value ownership into the
+		// expanded nodes. Zero the dead slot, so an accidental later read
+		// fails loudly instead of double-counting the moved reference.
+		iRec.tree.paths[r.nodeIndex].record = record{}
 		*r = iRec.tree.materializePath(newDepth, path)
 		return iRec.insertRecord(r, newDepth)
 	case recordTypeEmpty, recordTypeData:
@@ -465,6 +469,8 @@ func (t *Tree) expandPaths(index nodeIndex, currentDepth int) {
 		switch child.recordType {
 		case recordTypePath:
 			path := t.paths[child.nodeIndex]
+			// Zero the dead slot, as in insertRecord's path case.
+			t.paths[child.nodeIndex].record = record{}
 			*child = t.materializePath(recordDepth, path)
 			if child.recordType == recordTypeNode {
 				t.expandPaths(child.nodeIndex, recordDepth)
