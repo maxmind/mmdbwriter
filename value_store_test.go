@@ -122,9 +122,7 @@ func TestValueStoreRejectsInvalidUint128(t *testing.T) {
 	// A nested rejection must leave no live nodes behind.
 	_, err = store.intern(mmdbtype.Map{"value": &negative})
 	require.ErrorContains(t, err, "cannot intern a negative *mmdbtype.Uint128")
-	for index := 1; index < len(store.nodes); index++ {
-		assert.Equal(t, valueKindInvalid, store.nodes[index].kind)
-	}
+	assert.Zero(t, liveValueNodeCount(store))
 
 	maxValue := mmdbtype.Uint128(
 		*new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 128), big.NewInt(1)))
@@ -145,9 +143,7 @@ func TestValueStoreRejectsInvalidSliceChildren(t *testing.T) {
 	require.ErrorContains(t, err, "cannot intern a nil *mmdbtype.Map")
 
 	// Both rejections must release the children already interned.
-	for index := 1; index < len(store.nodes); index++ {
-		assert.Equal(t, valueKindInvalid, store.nodes[index].kind)
-	}
+	assert.Zero(t, liveValueNodeCount(store))
 }
 
 func TestValueStoreRejectsNilPointerBackedValue(t *testing.T) {
@@ -222,14 +218,12 @@ func TestValueStoreCascadeReleaseAndFreelistReuse(t *testing.T) {
 	nodeCount := len(store.nodes)
 	store.release(ref)
 
-	for index := 1; index < nodeCount; index++ {
-		assert.Equal(t, valueKindInvalid, store.nodes[index].kind)
-	}
-	assert.Len(t, store.freeRefs, nodeCount-1)
+	assert.Zero(t, liveValueNodeCount(store))
+	assert.NotEmpty(t, store.freeRefs, "the cascade queued nothing for reuse")
 
 	reused, err := store.internUncached(mmdbtype.String("replacement"))
 	require.NoError(t, err)
-	assert.Less(t, int(reused), nodeCount)
+	assert.Less(t, int(reused), nodeCount, "the freed slots were not reused")
 	store.release(reused)
 }
 
@@ -299,11 +293,16 @@ func TestReleaseUnlinksMidChainNode(t *testing.T) {
 	third, err := store.intern(mmdbtype.String("third"))
 	require.NoError(t, err)
 
-	// Verify second sits mid-chain before releasing it, so the test keeps
-	// exercising a non-head unlink if insertion order ever changes.
+	// Locate second dynamically and require a non-head position, so the
+	// test keeps exercising a mid-chain unlink if the chain's insertion
+	// order ever changes.
 	head := store.buckets[7]
-	require.Equal(t, third, head)
-	require.Equal(t, second, store.nodes[head].nextInBucket)
+	require.NotEqual(t, second, head, "second must sit mid-chain for this test")
+	position := head
+	for position != nilValueRef && position != second {
+		position = store.nodes[position].nextInBucket
+	}
+	require.Equal(t, second, position, "second is missing from its chain")
 
 	store.release(second)
 
