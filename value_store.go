@@ -437,14 +437,13 @@ func (s *valueStore) intern(value mmdbtype.DataType) (valueRef, error) {
 			s.retain(ref)
 			return ref, nil
 		}
+		// Stored entries always carry a non-nil value and ref;
+		// rememberCallerIdentity refuses anything else.
 		if index, ok := s.callerByIdentity[identity]; ok {
+			s.touchCallerIdentity(index)
 			entry := &s.callerIdentity[index]
-			if entry.value != nil && entry.ref != nilValueRef {
-				s.touchCallerIdentity(index)
-				s.retain(entry.ref)
-				return entry.ref, nil
-			}
-			delete(s.callerByIdentity, identity)
+			s.retain(entry.ref)
+			return entry.ref, nil
 		}
 	}
 
