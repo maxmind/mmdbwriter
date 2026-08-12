@@ -22,8 +22,7 @@ func BenchmarkEnterpriseKeyPipeline(b *testing.B) {
 	}
 	b.ReportMetric(float64(networkCount*(1+len(overlays))), "insertions/op")
 	b.ReportAllocs()
-	b.ResetTimer()
-	for range b.N {
+	for b.Loop() {
 		tree, err := New(Options{IPVersion: 4, IncludeReservedNetworks: true})
 		if err != nil {
 			b.Fatal(err)
@@ -57,9 +56,9 @@ func BenchmarkValueStoreEnterpriseValue(b *testing.B) {
 		}
 		store.rememberCallerIdentity(value, canonical)
 		b.Cleanup(func() { store.release(canonical) })
-		// Warm the caller-identity cache with every copy, so the measurement
-		// covers cache hits at every b.N instead of a b.N-dependent mix of
-		// insertions and hits.
+		// Warm the caller-identity cache with every copy, so every timed
+		// iteration measures a cache hit instead of a mix of insertions and
+		// hits.
 		for _, warm := range values {
 			ref, err := store.intern(warm)
 			if err != nil {
@@ -69,8 +68,8 @@ func BenchmarkValueStoreEnterpriseValue(b *testing.B) {
 			store.release(ref)
 		}
 		b.ReportAllocs()
-		b.ResetTimer()
-		for i := range b.N {
+		i := 0
+		for b.Loop() {
 			value := values[i%len(values)]
 			ref, err := store.intern(value)
 			if err != nil {
@@ -78,6 +77,7 @@ func BenchmarkValueStoreEnterpriseValue(b *testing.B) {
 			}
 			store.rememberCallerIdentity(value, ref)
 			store.release(ref)
+			i++
 		}
 	})
 
@@ -96,8 +96,8 @@ func BenchmarkValueStoreEnterpriseValue(b *testing.B) {
 		store.rememberCallerIdentity(value, canonical)
 		b.Cleanup(func() { store.release(canonical) })
 		b.ReportAllocs()
-		b.ResetTimer()
-		for i := range b.N {
+		i := 0
+		for b.Loop() {
 			value := values[i%len(values)]
 			ref, err := store.intern(value)
 			if err != nil {
@@ -105,6 +105,7 @@ func BenchmarkValueStoreEnterpriseValue(b *testing.B) {
 			}
 			store.rememberCallerIdentity(value, ref)
 			store.release(ref)
+			i++
 		}
 	})
 
@@ -113,8 +114,8 @@ func BenchmarkValueStoreEnterpriseValue(b *testing.B) {
 		store := newValueStore()
 		store.callerIdentityLimit = 0
 		b.ReportAllocs()
-		b.ResetTimer()
-		for i := range b.N {
+		i := 0
+		for b.Loop() {
 			value := values[i%len(values)]
 			ref, err := store.intern(value)
 			if err != nil {
@@ -122,6 +123,7 @@ func BenchmarkValueStoreEnterpriseValue(b *testing.B) {
 			}
 			store.rememberCallerIdentity(value, ref)
 			store.release(ref)
+			i++
 		}
 	})
 }
@@ -133,8 +135,7 @@ func BenchmarkTreeInsertEnterpriseDedupRates(b *testing.B) {
 			values := benchmarkEnterpriseValuesAtHitRate(networkCount, hitRate)
 			b.ReportMetric(networkCount, "insertions/op")
 			b.ReportAllocs()
-			b.ResetTimer()
-			for range b.N {
+			for b.Loop() {
 				tree, err := New(Options{IPVersion: 4, IncludeReservedNetworks: true})
 				if err != nil {
 					b.Fatal(err)
@@ -171,8 +172,7 @@ func BenchmarkTreeWriteEnterpriseDedupRates(b *testing.B) {
 			tree.finalize()
 			b.ReportMetric(networkCount, "records/tree")
 			b.ReportAllocs()
-			b.ResetTimer()
-			for range b.N {
+			for b.Loop() {
 				_, err := tree.WriteTo(io.Discard)
 				requireNoBenchmarkError(b, err)
 			}
