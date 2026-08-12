@@ -1275,6 +1275,31 @@ func TestStoreDecoderReleasesChildrenOnContainerErrors(t *testing.T) {
 	}
 }
 
+// TestEmptyContainersRoundTrip pins empty values through serialization and
+// load, the one case where node kind is the only discriminator between
+// identical empty payloads.
+func TestEmptyContainersRoundTrip(t *testing.T) {
+	tree := newTestTree(t, "mmdbwriter-empty-containers")
+	value := mmdbtype.Map{
+		"emptyBytes": mmdbtype.Bytes{},
+		"emptyMap":   mmdbtype.Map{},
+		"emptySlice": mmdbtype.Slice{},
+		"emptyStr":   mmdbtype.String(""),
+	}
+	require.NoError(t, tree.Insert(netip.MustParsePrefix("1.2.3.0/24"), value))
+
+	file, err := os.CreateTemp(t.TempDir(), "mmdbwriter-empty-*.mmdb")
+	require.NoError(t, err)
+	_, err = tree.WriteTo(file)
+	require.NoError(t, err)
+	require.NoError(t, file.Close())
+
+	loaded, err := Load(file.Name(), Options{IncludeReservedNetworks: true})
+	require.NoError(t, err)
+	_, got := loaded.Get(netip.MustParseAddr("1.2.3.4"))
+	assert.Equal(t, value, got)
+}
+
 // TestLoadSharesRefsForSharedOffsets pins the decoder's offset cache: source
 // networks that point at the same data record must intern to one shared
 // reference rather than decoding the record once per network.

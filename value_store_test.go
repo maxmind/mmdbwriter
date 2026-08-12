@@ -426,8 +426,6 @@ func TestEmptyContainerIdentitiesAreCanonical(t *testing.T) {
 	assert.Equal(t, nilSliceIdentity, emptySliceIdentity)
 }
 
-// TestPutPairScratchClearsEntries pins that pooled map scratch does not pin
-// caller-owned keys and values between uses.
 // TestStoreCrashGuards pins that ownership mistakes crash loudly with the
 // offending ref named, rather than corrupting the free list or a count.
 func TestStoreCrashGuards(t *testing.T) {
@@ -473,6 +471,120 @@ func TestStoreCrashGuards(t *testing.T) {
 	})
 }
 
+// TestCallerIdentityCacheUnlinksMidChainEntries pins the hand-rolled LRU
+// list's middle unlink, which production hits constantly but the small-limit
+// tests never reached. A broken middle unlink corrupts eviction order, which
+// releases a reference the cache still maps.
+func TestCallerIdentityCacheUnlinksMidChainEntries(t *testing.T) {
+	store := newValueStore()
+	store.callerIdentityLimit = 3
+
+	remember := func(value mmdbtype.DataType) {
+		ref, err := store.intern(value)
+		require.NoError(t, err)
+		store.rememberCallerIdentity(value, ref)
+		store.release(ref)
+	}
+	oldest := mmdbtype.Map{"name": mmdbtype.String("oldest")}
+	middle := mmdbtype.Map{"name": mmdbtype.String("middle")}
+	newest := mmdbtype.Map{"name": mmdbtype.String("newest")}
+	remember(oldest)
+	remember(middle)
+	remember(newest)
+
+	// A cache hit on the middle entry unlinks it from the middle of the
+	// chain and relinks it at the head.
+	ref, err := store.intern(middle)
+	require.NoError(t, err)
+	store.release(ref)
+	require.NoError(t, store.auditCallerIdentity(),
+		"the middle unlink corrupted the LRU chain")
+
+	// The next eviction must drop the untouched oldest entry.
+	remember(mmdbtype.Map{"name": mmdbtype.String("evictor")})
+	identityOf := func(value mmdbtype.DataType) dataIdentityKey {
+		identity, ok := dataIdentity(value)
+		require.True(t, ok)
+		return identity
+	}
+	assert.NotContains(t, store.callerByIdentity, identityOf(oldest),
+		"the eviction kept the oldest entry")
+	assert.Contains(t, store.callerByIdentity, identityOf(middle),
+		"the eviction dropped the touched entry")
+	assert.Contains(t, store.callerByIdentity, identityOf(newest))
+	require.NoError(t, store.audit(map[valueRef]uint64{}))
+}
+
+// TestEmptyContainersInternToDistinctRefs pins that kind alone separates two
+// nodes with identical empty payload and empty children, even under a forced
+// hash collision.
+func TestEmptyContainersInternToDistinctRefs(t *testing.T) {
+	store := newValueStoreWithHash(func([]byte) uint64 { return 42 })
+	emptyMap, err := store.intern(mmdbtype.Map{})
+	require.NoError(t, err)
+	emptySlice, err := store.intern(mmdbtype.Slice{})
+	require.NoError(t, err)
+	emptyBytes, err := store.intern(mmdbtype.Bytes{})
+	require.NoError(t, err)
+
+	assert.NotEqual(t, emptyMap, emptySlice)
+	assert.NotEqual(t, emptyMap, emptyBytes)
+	assert.NotEqual(t, emptySlice, emptyBytes)
+	assert.Equal(t, mmdbtype.Map{}, store.materialize(emptyMap))
+	assert.Equal(t, mmdbtype.Slice{}, store.materialize(emptySlice))
+}
+
+// TestStoresHashWithDistinctSeeds pins that every store draws a fresh hash
+// seed, so precomputed collisions cannot degrade the bucket chains.
+func TestStoresHashWithDistinctSeeds(t *testing.T) {
+	first := newValueStore()
+	second := newValueStore()
+	refFirst, err := first.intern(mmdbtype.String("seeded"))
+	require.NoError(t, err)
+	refSecond, err := second.intern(mmdbtype.String("seeded"))
+	require.NoError(t, err)
+	assert.NotEqual(t,
+		first.nodes[refFirst].hash, second.nodes[refSecond].hash,
+		"two stores hashed the same value identically")
+}
+
+// TestArenaReuseLeavesLiveNeighborsIntact pins that reusing a freed extent
+// does not rewrite a live node's payload or child list, the silent failure
+// mode the refcount audit cannot see.
+func TestArenaReuseLeavesLiveNeighborsIntact(t *testing.T) {
+	t.Run("payload arena", func(t *testing.T) {
+		store := newValueStore()
+		released, err := store.intern(mmdbtype.String("aaaa"))
+		require.NoError(t, err)
+		survivor, err := store.intern(mmdbtype.String("bbbb"))
+		require.NoError(t, err)
+		store.release(released)
+
+		replacement, err := store.intern(mmdbtype.String("cccc"))
+		require.NoError(t, err)
+		assert.Equal(t, mmdbtype.String("bbbb"), store.materialize(survivor),
+			"the arena reuse rewrote a live payload")
+		assert.Equal(t, mmdbtype.String("cccc"), store.materialize(replacement))
+	})
+
+	t.Run("child arena", func(t *testing.T) {
+		store := newValueStore()
+		released, err := store.intern(mmdbtype.Slice{mmdbtype.String("a")})
+		require.NoError(t, err)
+		survivor, err := store.intern(mmdbtype.Slice{mmdbtype.String("b")})
+		require.NoError(t, err)
+		store.release(released)
+
+		replacement, err := store.intern(mmdbtype.Slice{mmdbtype.String("c")})
+		require.NoError(t, err)
+		assert.Equal(t, mmdbtype.Slice{mmdbtype.String("b")},
+			store.materialize(survivor),
+			"the arena reuse rewrote a live child list")
+		assert.Equal(t, mmdbtype.Slice{mmdbtype.String("c")},
+			store.materialize(replacement))
+	})
+}
+
 // TestReleasePanicsWhenNodeMissingFromItsBucket pins that release refuses to
 // recycle a slot its hash chain no longer reaches, instead of spreading the
 // corruption silently.
@@ -485,6 +597,28 @@ func TestReleasePanicsWhenNodeMissingFromItsBucket(t *testing.T) {
 	require.PanicsWithValue(t,
 		fmt.Sprintf("mmdbwriter: released ref %d is missing from its hash bucket", ref),
 		func() { store.release(ref) })
+}
+
+// TestReleaseResolvedPreservesReleasePanic pins that the explicit cleanup in
+// finishInsert cannot make its deferred cleanup mask the original store panic.
+func TestReleaseResolvedPreservesReleasePanic(t *testing.T) {
+	store := newValueStore()
+	ref, err := store.internUncached(mmdbtype.String("orphan"))
+	require.NoError(t, err)
+	iRec := &insertRecord{store: store, value: ref}
+	clear(store.buckets)
+
+	var recovered any
+	func() {
+		defer func() { recovered = recover() }()
+		defer iRec.releaseResolved()
+		iRec.releaseResolved()
+	}()
+
+	assert.Equal(t,
+		fmt.Sprintf("mmdbwriter: released ref %d is missing from its hash bucket", ref),
+		recovered,
+	)
 }
 
 // TestPutPairScratchClearsEntries pins that pooled map scratch does not pin
