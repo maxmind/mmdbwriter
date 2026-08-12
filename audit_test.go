@@ -460,6 +460,17 @@ func TestValueStoreAuditRejectsCorruptStores(t *testing.T) {
 			want: "unclaimed payload arena offset",
 		},
 		{
+			name: "non-data record holding a value ref",
+			corrupt: func(t *testing.T, tree *Tree) {
+				t.Helper()
+				record := &tree.nodeAt(tree.root).children[1]
+				require.NotEqual(t, recordTypeData, record.recordType,
+					"the fixture must leave the root's right child without data")
+				record.value = requireDataRef(t, tree)
+			},
+			want: "record holding value ref",
+		},
+		{
 			name: "caller identity index mismatch",
 			corrupt: func(t *testing.T, tree *Tree) {
 				t.Helper()

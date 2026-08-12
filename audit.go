@@ -43,6 +43,11 @@ func (t *Tree) auditValueStore() error {
 	var walkRecord func(record) error
 	var walkNode func(nodeIndex) error
 	walkRecord = func(record record) error {
+		if record.recordType != recordTypeData && record.value != nilValueRef {
+			return fmt.Errorf(
+				"refcount audit found a type %d record holding value ref %d",
+				record.recordType, record.value)
+		}
 		switch record.recordType {
 		case recordTypeData:
 			external[record.value]++
