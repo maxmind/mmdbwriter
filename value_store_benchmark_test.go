@@ -20,7 +20,6 @@ func BenchmarkEnterpriseKeyPipeline(b *testing.B) {
 		mmdbtype.Map{"traits": mmdbtype.Map{"isp": mmdbtype.String("Example ISP")}},
 		mmdbtype.Map{"traits": mmdbtype.Map{"domain": mmdbtype.String("overlay.test")}},
 	}
-	b.ReportMetric(float64(networkCount*(1+len(overlays))), "insertions/op")
 	b.ReportAllocs()
 	for b.Loop() {
 		tree, err := New(Options{IPVersion: 4, IncludeReservedNetworks: true})
@@ -40,6 +39,8 @@ func BenchmarkEnterpriseKeyPipeline(b *testing.B) {
 			}
 		}
 	}
+
+	b.ReportMetric(float64(networkCount*(1+len(overlays))), "insertions/op")
 }
 
 func BenchmarkValueStoreEnterpriseValue(b *testing.B) {
@@ -133,7 +134,6 @@ func BenchmarkTreeInsertEnterpriseDedupRates(b *testing.B) {
 	for _, hitRate := range []int{0, 50, 90, 99} {
 		b.Run(strconv.Itoa(hitRate)+"%-hits", func(b *testing.B) {
 			values := benchmarkEnterpriseValuesAtHitRate(networkCount, hitRate)
-			b.ReportMetric(networkCount, "insertions/op")
 			b.ReportAllocs()
 			for b.Loop() {
 				tree, err := New(Options{IPVersion: 4, IncludeReservedNetworks: true})
@@ -149,6 +149,8 @@ func BenchmarkTreeInsertEnterpriseDedupRates(b *testing.B) {
 					}
 				}
 			}
+
+			b.ReportMetric(networkCount, "insertions/op")
 		})
 	}
 }
@@ -170,12 +172,13 @@ func BenchmarkTreeWriteEnterpriseDedupRates(b *testing.B) {
 				)
 			}
 			tree.finalize()
-			b.ReportMetric(networkCount, "records/tree")
 			b.ReportAllocs()
 			for b.Loop() {
 				_, err := tree.WriteTo(io.Discard)
 				requireNoBenchmarkError(b, err)
 			}
+
+			b.ReportMetric(networkCount, "records/tree")
 		})
 	}
 }
