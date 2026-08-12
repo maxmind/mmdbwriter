@@ -289,11 +289,12 @@ func Load(path string, opts Options) (*Tree, error) {
 	for res := range db.Networks(networkOpts...) {
 		prefix := res.Prefix()
 		if err := res.Err(); err != nil {
-			return nil, fmt.Errorf("loading network %s: %w", prefix, err)
+			return nil, fmt.Errorf("loading network %s from %s: %w", prefix, path, err)
 		}
 
 		if err := res.Decode(decoder); err != nil {
-			return nil, fmt.Errorf("unmarshaling record for network %s: %w", prefix, err)
+			return nil, fmt.Errorf(
+				"unmarshaling record for network %s from %s: %w", prefix, path, err)
 		}
 		value := decoder.takeResult()
 
@@ -312,7 +313,7 @@ func Load(path string, opts Options) (*Tree, error) {
 		)
 		tree.valueStore.release(value)
 		if err != nil {
-			return nil, fmt.Errorf("loading network %s: %w", prefix, err)
+			return nil, fmt.Errorf("loading network %s from %s: %w", prefix, path, err)
 		}
 	}
 	// The audit only balances once the decoder's offset cache has released

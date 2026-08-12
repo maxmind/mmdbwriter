@@ -164,10 +164,11 @@ func (d *storeDecoder) decodeRef(decoder *mmdbdata.Decoder) (valueRef, error) {
 			ref, err = d.store.internUncached(mmdbtype.Float32(value))
 		}
 	default:
-		return nilValueRef, fmt.Errorf("unsupported data type: %v", kind)
+		return nilValueRef, fmt.Errorf(
+			"unsupported data type %v at offset %d", kind, offset)
 	}
 	if err != nil {
-		return nilValueRef, err
+		return nilValueRef, fmt.Errorf("decoding %v at offset %d: %w", kind, offset, err)
 	}
 
 	// The returned ref and the cache each own one reference.
@@ -192,18 +193,19 @@ func (d *storeDecoder) decodeMap(decoder *mmdbdata.Decoder) (valueRef, error) {
 	for key, iteratorErr := range iterator {
 		if iteratorErr != nil {
 			release()
-			return nilValueRef, iteratorErr
+			return nilValueRef, fmt.Errorf("reading map entry: %w", iteratorErr)
 		}
 		keyRef, keyErr := d.store.internString(mmdbtype.String(key))
 		if keyErr != nil {
 			release()
-			return nilValueRef, keyErr
+			return nilValueRef, fmt.Errorf("interning map key %q: %w", key, keyErr)
 		}
 		childRef, valueErr := d.decodeRef(decoder)
 		if valueErr != nil {
 			d.store.release(keyRef)
 			release()
-			return nilValueRef, valueErr
+			return nilValueRef, fmt.Errorf(
+				"decoding value for map key %q: %w", key, valueErr)
 		}
 		pairs = append(pairs, decodedPair{key: string(key), keyRef: keyRef, valueRef: childRef})
 	}
@@ -241,14 +243,15 @@ func (d *storeDecoder) decodeSlice(decoder *mmdbdata.Decoder) (valueRef, error) 
 			for _, child := range children {
 				d.store.release(child)
 			}
-			return nilValueRef, iteratorErr
+			return nilValueRef, fmt.Errorf("reading slice element: %w", iteratorErr)
 		}
 		ref, valueErr := d.decodeRef(decoder)
 		if valueErr != nil {
 			for _, child := range children {
 				d.store.release(child)
 			}
-			return nilValueRef, valueErr
+			return nilValueRef, fmt.Errorf(
+				"decoding slice index %d: %w", len(children), valueErr)
 		}
 		children = append(children, ref)
 	}
