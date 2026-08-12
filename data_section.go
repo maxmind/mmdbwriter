@@ -90,16 +90,20 @@ func (dw *dataWriter) writeValue(ref valueRef) (int64, error) {
 	return int64(dw.Len() - start), nil
 }
 
-func (dw *dataWriter) rememberOffset(ref valueRef, offset int, size int64) {
+func (dw *dataWriter) rememberOffset(ref valueRef, offset int, size int64) error {
 	dw.ensureOffset(ref)
-	if dw.offsets[ref].written || int64(offset) > int64(math.MaxUint32) {
-		return
+	if dw.offsets[ref].written {
+		return nil
+	}
+	if int64(offset) > int64(math.MaxUint32) {
+		return fmt.Errorf("offset of %d exceeds maximum when writing data", offset)
 	}
 	dw.offsets[ref] = writtenType{
 		pointer: mmdbtype.Pointer(offset), //nolint:gosec // checked above
 		size:    size,
 		written: true,
 	}
+	return nil
 }
 
 func (dw *dataWriter) writeOrWritePointer(ref valueRef) (int64, error) {
@@ -116,7 +120,9 @@ func (dw *dataWriter) writeOrWritePointer(ref valueRef) (int64, error) {
 		return size, err
 	}
 	if !written.written {
-		dw.rememberOffset(ref, start, size)
+		if err := dw.rememberOffset(ref, start, size); err != nil {
+			return size, err
+		}
 	}
 	return size, nil
 }
