@@ -1275,6 +1275,97 @@ func TestStoreDecoderReleasesChildrenOnContainerErrors(t *testing.T) {
 	}
 }
 
+// TestInsertRejectsUnsupportedValues pins the documented Tree-level contract:
+// direct inserts validate the value and a failed insert leaves no live nodes
+// behind.
+func TestInsertRejectsUnsupportedValues(t *testing.T) {
+	negative := mmdbtype.Uint128(*big.NewInt(-1))
+	wide := mmdbtype.Uint128(*new(big.Int).Lsh(big.NewInt(1), 129))
+	tests := []struct {
+		name  string
+		value mmdbtype.DataType
+		want  string
+	}{
+		{
+			name:  "raw pointer",
+			value: mmdbtype.Pointer(7),
+			want:  "unsupported MMDB data type mmdbtype.Pointer",
+		},
+		{
+			name:  "nested pointer",
+			value: mmdbtype.Map{"p": mmdbtype.Pointer(7)},
+			want:  `interning value for map key "p"`,
+		},
+		{
+			name:  "negative Uint128",
+			value: &negative,
+			want:  "cannot intern a negative *mmdbtype.Uint128",
+		},
+		{
+			name:  "oversized Uint128",
+			value: &wide,
+			want:  "cannot intern a *mmdbtype.Uint128 wider than 128 bits",
+		},
+		{
+			name:  "nil Uint128",
+			value: (*mmdbtype.Uint128)(nil),
+			want:  "cannot intern a nil *mmdbtype.Uint128",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			tree := newTestTree(t, "mmdbwriter-insert-rejects")
+			err := tree.Insert(netip.MustParsePrefix("1.2.3.0/24"), test.value)
+			require.ErrorContains(t, err, test.want)
+			assert.Zero(t, liveValueNodeCount(tree.valueStore),
+				"the rejected insert left live nodes behind")
+		})
+	}
+}
+
+// TestInserterResultWithPointerIsRejected pins that validation covers an
+// inserter's result, not only direct inserts.
+func TestInserterResultWithPointerIsRejected(t *testing.T) {
+	tree := newTestTree(t, "mmdbwriter-inserter-pointer")
+	require.NoError(t, tree.Insert(
+		netip.MustParsePrefix("1.2.3.0/24"), mmdbtype.String("old")))
+	err := tree.InsertFunc(
+		netip.MustParsePrefix("1.2.3.0/24"),
+		mmdbtype.String("new"),
+		func(_, _ mmdbtype.DataType) (mmdbtype.DataType, error) {
+			return mmdbtype.Map{"p": mmdbtype.Pointer(7)}, nil
+		},
+	)
+	require.ErrorContains(t, err, "unsupported MMDB data type mmdbtype.Pointer")
+}
+
+// TestReinsertingGetViewsPassesTheAudit pins the store-owned identity branch:
+// re-inserting a view obtained from Get, top-level or nested, is the obvious
+// real-world pattern and must keep the store balanced.
+func TestReinsertingGetViewsPassesTheAudit(t *testing.T) {
+	tree, err := New(Options{
+		IPVersion:               4,
+		IncludeReservedNetworks: true,
+		RefcountAudit:           true,
+	})
+	require.NoError(t, err)
+	require.NoError(t, tree.Insert(netip.MustParsePrefix("1.2.3.0/24"), mmdbtype.Map{
+		"names": mmdbtype.Map{"en": mmdbtype.String("shared")},
+	}))
+
+	_, topLevel := tree.Get(netip.MustParseAddr("1.2.3.4"))
+	require.NoError(t, tree.Insert(netip.MustParsePrefix("2.2.2.0/24"), topLevel),
+		"re-inserting a top-level Get view failed")
+
+	nested := topLevel.(mmdbtype.Map)["names"]
+	require.NoError(t, tree.Insert(netip.MustParsePrefix("3.3.3.0/24"), nested),
+		"re-inserting a nested Get view failed")
+
+	_, got := tree.Get(netip.MustParseAddr("3.3.3.4"))
+	assert.Equal(t, mmdbtype.Map{"en": mmdbtype.String("shared")}, got)
+}
+
 // TestEmptyContainersRoundTrip pins empty values through serialization and
 // load, the one case where node kind is the only discriminator between
 // identical empty payloads.
