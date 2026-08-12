@@ -428,6 +428,51 @@ func TestEmptyContainerIdentitiesAreCanonical(t *testing.T) {
 
 // TestPutPairScratchClearsEntries pins that pooled map scratch does not pin
 // caller-owned keys and values between uses.
+// TestStoreCrashGuards pins that ownership mistakes crash loudly with the
+// offending ref named, rather than corrupting the free list or a count.
+func TestStoreCrashGuards(t *testing.T) {
+	t.Run("double release", func(t *testing.T) {
+		store := newValueStore()
+		ref, err := store.internUncached(mmdbtype.String("gone"))
+		require.NoError(t, err)
+		store.release(ref)
+		require.PanicsWithValue(t,
+			fmt.Sprintf("mmdbwriter: invalid value reference %d", ref),
+			func() { store.release(ref) })
+	})
+
+	t.Run("retain overflow", func(t *testing.T) {
+		store := newValueStore()
+		ref, err := store.internUncached(mmdbtype.String("pinned"))
+		require.NoError(t, err)
+		store.nodes[ref].refCount = math.MaxUint32
+		require.PanicsWithValue(t,
+			fmt.Sprintf(
+				"mmdbwriter: reference count overflow for ref %d (kind %d)",
+				ref, valueKindString),
+			func() { store.retain(ref) })
+	})
+
+	t.Run("release underflow", func(t *testing.T) {
+		store := newValueStore()
+		ref, err := store.internUncached(mmdbtype.String("empty"))
+		require.NoError(t, err)
+		store.nodes[ref].refCount = 0
+		require.PanicsWithValue(t,
+			fmt.Sprintf(
+				"mmdbwriter: reference count underflow for ref %d (kind %d)",
+				ref, valueKindString),
+			func() { store.release(ref) })
+	})
+
+	t.Run("invalid reference", func(t *testing.T) {
+		store := newValueStore()
+		require.PanicsWithValue(t,
+			"mmdbwriter: invalid value reference 42",
+			func() { store.node(valueRef(42)) })
+	})
+}
+
 // TestReleasePanicsWhenNodeMissingFromItsBucket pins that release refuses to
 // recycle a slot its hash chain no longer reaches, instead of spreading the
 // corruption silently.

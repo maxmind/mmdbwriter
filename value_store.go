@@ -328,8 +328,9 @@ func dataIdentity(value mmdbtype.DataType) (dataIdentityKey, bool) {
 }
 
 func (s *valueStore) node(ref valueRef) *valueNode {
-	if ref == 0 || int(ref) >= len(s.nodes) || s.nodes[ref].kind == valueKindInvalid {
-		panic(fmt.Sprintf("invalid value reference %d", ref))
+	if ref == 0 || uint64(ref) >= uint64(len(s.nodes)) ||
+		s.nodes[ref].kind == valueKindInvalid {
+		panic(fmt.Sprintf("mmdbwriter: invalid value reference %d", ref))
 	}
 	return &s.nodes[ref]
 }
@@ -348,7 +349,8 @@ func (s *valueStore) retain(ref valueRef) {
 	}
 	node := s.node(ref)
 	if node.refCount == math.MaxUint32 {
-		panic("value reference count overflow")
+		panic(fmt.Sprintf(
+			"mmdbwriter: reference count overflow for ref %d (kind %d)", ref, node.kind))
 	}
 	node.refCount++
 }
@@ -364,7 +366,9 @@ func (s *valueStore) release(ref valueRef) {
 		worklist = worklist[:len(worklist)-1]
 		node := s.node(current)
 		if node.refCount == 0 {
-			panic("value reference count underflow")
+			panic(fmt.Sprintf(
+				"mmdbwriter: reference count underflow for ref %d (kind %d)",
+				current, node.kind))
 		}
 		node.refCount--
 		if node.refCount != 0 {
