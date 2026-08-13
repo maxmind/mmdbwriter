@@ -53,8 +53,10 @@ type DataType interface {
 	// is equality of the wire encoding, not of the Go value: an implementation
 	// must report false for values that differ in any encoded bit even when Go
 	// considers them equal, and true only when the two encode identically. The
-	// writer deduplicates records on this, so an implementation that is looser
-	// than the encoding will collapse records that should stay distinct.
+	// writer deduplicates records on their encodings directly. The built-in
+	// inserters use Equal to detect a merge that changes nothing, so an
+	// implementation that is looser than the encoding can drop a change that
+	// must replace a record.
 	Equal(DataType) bool
 
 	size() int
@@ -435,8 +437,11 @@ func (t Map) WriteTo(w writer) (int64, error) {
 }
 
 // Pointer is the MaxMind DB pointer type for internal use in the writer. You
-// should not use this type in data structures that you pass to methods on
-// mmdbwriter.Tree. Doing so may result in a corrupt database.
+// cannot use this type in data structures that you pass to methods on
+// mmdbwriter.Tree. Inserting a value that contains a Pointer returns an
+// error. A custom inserter can still receive a Pointer in its input value
+// and must replace or discard it, since only direct inserts and inserter
+// results are validated.
 type Pointer uint32
 
 var _ DataType = (*Pointer)(nil)
@@ -839,7 +844,11 @@ func (t Uint64) WriteTo(w writer) (int64, error) {
 	return numBytes + int64(size), nil
 }
 
-// Uint128 is the MaxMind DB unsigned 128-bit integer type.
+// Uint128 is the MaxMind DB unsigned 128-bit integer type. A value stored in
+// a Tree must be in the range [0, 2^128-1]. Inserting a value outside the
+// range, or a nil *Uint128, returns an error. A custom inserter can still receive such a value
+// in its input, since only direct inserts and inserter results are
+// validated.
 type Uint128 big.Int
 
 var _ DataType = (*Uint128)(nil)

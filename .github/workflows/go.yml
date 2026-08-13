@@ -40,3 +40,14 @@ jobs:
 
       - name: Test
         run: go test -race -v ./...
+
+      - name: Test with the reference-count audit
+        run: go test ./...
+        env:
+          MMDBWRITER_REFCOUNT_AUDIT: "1"
+
+      # -race is unsupported on 386, so this step runs without it.
+      - name: Test on 386
+        run: go test ./...
+        env:
+          GOARCH: "386"

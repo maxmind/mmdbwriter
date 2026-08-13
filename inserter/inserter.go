@@ -21,9 +21,16 @@ import (
 // Tree.InsertRangeFunc. Tree.InsertPureFunc and Tree.InsertRangePureFunc may
 // memoize repeated argument pairs and share a non-nil result across records.
 //
-// A Func must not modify either argument, as values may be shared with other
-// records. Any non-nil returned value becomes tree-owned and must not be
-// modified after the function returns.
+// A Func must not modify either argument. The existing value is a shared,
+// read-only view of tree storage; the new value is the value passed to the
+// insert call, or a shared view of the decoded record during a load. Call
+// Copy on a value to get a private copy you can modify. Any non-nil returned
+// value becomes tree-owned and must not be modified after the function
+// returns.
+//
+// Only direct inserts and a Func's result are validated, so a Func can
+// receive an unsupported input value, such as a raw mmdbtype.Pointer or an
+// out-of-range mmdbtype.Uint128, and must replace or discard it.
 type Func func(existingValue, newValue mmdbtype.DataType) (mmdbtype.DataType, error)
 
 // Remove removes any records for the network being inserted.

@@ -31,25 +31,21 @@ type benchmarkValueSets struct {
 
 func BenchmarkTreeInsertOverlappingPasses(b *testing.B) {
 	specs := overlappingBenchmarkInsertSpecs()
-	reportOverlappingBenchmarkShape(b, specs, nil)
-
 	b.ReportAllocs()
-	b.ResetTimer()
-
-	for range b.N {
+	for b.Loop() {
 		tree := newBenchmarkTree(b)
 		insertBenchmarkSpecs(b, tree, specs)
 	}
+
+	// Loop's first call resets the timer, which deletes user-reported
+	// metrics, so every custom metric is reported after the loop.
+	reportOverlappingBenchmarkShape(b, specs, nil)
 }
 
 func BenchmarkTreeInsertTopLevelMergeOverlappingPasses(b *testing.B) {
 	specs := overlappingBenchmarkTopLevelMergeSpecs()
-	reportOverlappingBenchmarkShape(b, specs, inserter.TopLevelMerge)
-
 	b.ReportAllocs()
-	b.ResetTimer()
-
-	for range b.N {
+	for b.Loop() {
 		tree := newBenchmarkTree(b)
 		for _, spec := range specs {
 			err := tree.InsertPureFunc(spec.network, spec.value, inserter.TopLevelMerge)
@@ -58,16 +54,14 @@ func BenchmarkTreeInsertTopLevelMergeOverlappingPasses(b *testing.B) {
 			}
 		}
 	}
+
+	reportOverlappingBenchmarkShape(b, specs, inserter.TopLevelMerge)
 }
 
 func BenchmarkTreeInsertDeepMergeOverlappingPasses(b *testing.B) {
 	specs := overlappingBenchmarkDeepMergeSpecs()
-	reportOverlappingBenchmarkShape(b, specs, inserter.DeepMerge)
-
 	b.ReportAllocs()
-	b.ResetTimer()
-
-	for range b.N {
+	for b.Loop() {
 		tree := newBenchmarkTree(b)
 		for _, spec := range specs {
 			err := tree.InsertPureFunc(spec.network, spec.value, inserter.DeepMerge)
@@ -76,6 +70,8 @@ func BenchmarkTreeInsertDeepMergeOverlappingPasses(b *testing.B) {
 			}
 		}
 	}
+
+	reportOverlappingBenchmarkShape(b, specs, inserter.DeepMerge)
 }
 
 func BenchmarkTreeInsertDeepMergeFragmentedNetwork(b *testing.B) {
@@ -84,11 +80,8 @@ func BenchmarkTreeInsertDeepMergeFragmentedNetwork(b *testing.B) {
 	overlay := mmdbtype.Map{
 		"traits": mmdbtype.Map{"new_field": mmdbtype.String("overlay")},
 	}
-	b.ReportMetric(networkCount, "records/op")
 	b.ReportAllocs()
-	b.ResetTimer()
-
-	for range b.N {
+	for b.Loop() {
 		b.StopTimer()
 		tree := newBenchmarkTree(b)
 		for index := range networkCount {
@@ -111,37 +104,35 @@ func BenchmarkTreeInsertDeepMergeFragmentedNetwork(b *testing.B) {
 			b.Fatal(err)
 		}
 	}
+
+	b.ReportMetric(networkCount, "records/op")
 }
 
 func BenchmarkTreeInsertRangeFragmentedPasses(b *testing.B) {
 	specs := fragmentedRangeBenchmarkSpecs()
-	b.ReportMetric(float64(len(specs)), "ranges/op")
-
 	tree := newBenchmarkTree(b)
 	insertRangeBenchmarkSpecs(b, tree, specs)
 	tree.finalize()
-	b.ReportMetric(float64(tree.nodeCount), "nodes/op")
 
 	b.ReportAllocs()
-	b.ResetTimer()
-
-	for range b.N {
+	for b.Loop() {
 		benchmarkTree := newBenchmarkTree(b)
 		insertRangeBenchmarkSpecs(b, benchmarkTree, specs)
 	}
+
+	b.ReportMetric(float64(len(specs)), "ranges/op")
+	b.ReportMetric(float64(tree.nodeCount), "nodes/op")
 }
 
 func BenchmarkTreeInsertChurnRepeatedPasses(b *testing.B) {
 	const cycles = 8
-	reportChurnBenchmarkShape(b, cycles)
-
 	b.ReportAllocs()
-	b.ResetTimer()
-
-	for range b.N {
+	for b.Loop() {
 		tree := newBenchmarkTree(b)
 		insertChurnBenchmarkSpecs(b, tree, cycles)
 	}
+
+	reportChurnBenchmarkShape(b, cycles)
 }
 
 func BenchmarkTreeWriteToOverlappingPasses(b *testing.B) {
@@ -150,17 +141,16 @@ func BenchmarkTreeWriteToOverlappingPasses(b *testing.B) {
 	insertBenchmarkSpecs(b, tree, specs)
 	tree.finalize()
 
-	b.ReportMetric(float64(len(specs)), "insertions/tree")
-	b.ReportMetric(float64(tree.nodeCount), "nodes/tree")
 	b.ReportAllocs()
-	b.ResetTimer()
-
-	for range b.N {
+	for b.Loop() {
 		_, err := tree.WriteTo(io.Discard)
 		if err != nil {
 			b.Fatal(err)
 		}
 	}
+
+	b.ReportMetric(float64(len(specs)), "insertions/tree")
+	b.ReportMetric(float64(tree.nodeCount), "nodes/tree")
 }
 
 func BenchmarkTreeLoadOverlappingPasses(b *testing.B) {
@@ -181,11 +171,8 @@ func BenchmarkTreeLoadOverlappingPasses(b *testing.B) {
 		b.Fatal(err)
 	}
 
-	b.ReportMetric(float64(len(specs)), "insertions/source")
 	b.ReportAllocs()
-	b.ResetTimer()
-
-	for range b.N {
+	for b.Loop() {
 		loadedTree, err := Load(
 			file.Name(),
 			Options{
@@ -199,6 +186,94 @@ func BenchmarkTreeLoadOverlappingPasses(b *testing.B) {
 			b.Fatal("loaded tree has no nodes")
 		}
 	}
+
+	b.ReportMetric(float64(len(specs)), "insertions/source")
+}
+
+// BenchmarkEnterpriseLoadThenOverlay models the production Enterprise build:
+// load a City-scale source database and rewrite every record through several
+// merge overlay passes. Overlay values are copied per insert because the
+// production passes decode a fresh value for every source network; presenting
+// one long-lived value per layer would overstate identity-cache hits. The
+// network count must stay large enough to exercise the caches at realistic
+// occupancy.
+func BenchmarkEnterpriseLoadThenOverlay(b *testing.B) {
+	base, overlays := enterpriseBenchmarkLayers(8_192)
+	source := newBenchmarkTree(b)
+	for _, spec := range base {
+		if err := source.Insert(spec.network, spec.value); err != nil {
+			b.Fatal(err)
+		}
+	}
+	file, err := os.CreateTemp(b.TempDir(), "mmdbwriter-enterprise-*.mmdb")
+	if err != nil {
+		b.Fatal(err)
+	}
+	if _, err := source.WriteTo(file); err != nil {
+		b.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		b.Fatal(err)
+	}
+
+	b.ReportAllocs()
+	for b.Loop() {
+		tree, err := Load(file.Name(), Options{IncludeReservedNetworks: true})
+		if err != nil {
+			b.Fatal(err)
+		}
+		for _, layer := range overlays {
+			for _, spec := range layer {
+				if err := tree.InsertFunc(
+					spec.network,
+					spec.value.Copy(),
+					inserter.DeepMerge,
+				); err != nil {
+					b.Fatal(err)
+				}
+			}
+		}
+	}
+
+	b.ReportMetric(float64(len(base)), "networks/op")
+	b.ReportMetric(float64(len(overlays)), "overlays/op")
+}
+
+func enterpriseBenchmarkLayers(
+	networkCount int,
+) ([]benchmarkInsertSpec, [][]benchmarkInsertSpec) {
+	base := make([]benchmarkInsertSpec, networkCount)
+	overlays := make([][]benchmarkInsertSpec, 4)
+	for index := range overlays {
+		overlays[index] = make([]benchmarkInsertSpec, networkCount)
+	}
+	for index := range networkCount {
+		address := netip.AddrFrom4([4]byte{1, byte(index >> 16), byte(index >> 8), byte(index)})
+		prefix := netip.PrefixFrom(address, 32)
+		base[index] = benchmarkInsertSpec{
+			network: prefix,
+			value: benchmarkDeepMergeValue(
+				[]string{"GB", "US", "DE", "JP"}[index%4],
+				"city",
+				uint16(index%100),
+			),
+		}
+		overlays[0][index] = benchmarkInsertSpec{network: prefix, value: mmdbtype.Map{
+			"traits": mmdbtype.Map{
+				"confidence": mmdbtype.Uint16(index % 100),
+			},
+		}}
+		overlays[1][index] = benchmarkInsertSpec{network: prefix, value: mmdbtype.Map{
+			"traits": mmdbtype.Map{"user_type": mmdbtype.String("business")},
+		}}
+		overlays[2][index] = benchmarkInsertSpec{network: prefix, value: mmdbtype.Map{
+			"traits": mmdbtype.Map{"isp": mmdbtype.String("Example ISP")},
+		}}
+		overlays[3][index] = benchmarkInsertSpec{network: prefix, value: mmdbtype.Map{
+			"traits": mmdbtype.Map{"domain": mmdbtype.String("example.test")},
+		}}
+	}
+	return base, overlays
 }
 
 func reportOverlappingBenchmarkShape(

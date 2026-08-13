@@ -10,8 +10,11 @@ import (
 )
 
 func TestNewNodeIndexRejectsSentinel(t *testing.T) {
+	// On 32-bit platforms the sentinel wraps to a negative int, which the
+	// negative-index guard rejects instead of the sentinel comparison.
+	sentinel := uint64(noNodeIndex)
 	require.Panics(t, func() {
-		newNodeIndex(int(noNodeIndex))
+		newNodeIndex(int(sentinel)) //nolint:gosec // intentional boundary conversion
 	})
 }
 
@@ -35,9 +38,9 @@ func TestFinalizeNodeRejectsCompressedPath(t *testing.T) {
 	})
 }
 
-// TestMaybeMergeChildren covers the pointer-identity merge test. Sibling data
-// records merge only when they hold the same value; colliding but distinct
-// values must be left alone.
+// TestMaybeMergeChildren covers the reference-equality merge check. Sibling
+// data records merge only when they hold the same canonical reference;
+// colliding but distinct values must be left alone.
 func TestMaybeMergeChildren(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -62,13 +65,16 @@ func TestMaybeMergeChildren(t *testing.T) {
 
 			// Both values share a bucket, so only the exact comparison can
 			// tell them apart.
-			first := tree.dataMap.storeByHash(mmdbtype.String("first"), 1)
+			tree.valueStore = newValueStoreWithHash(func([]byte) uint64 { return 1 })
+			first, err := tree.valueStore.intern(mmdbtype.String("first"))
+			require.NoError(t, err)
 			second := first
 			if test.sameValue {
-				tree.dataMap.addRef(first)
+				tree.valueStore.retain(first)
 			} else {
-				second = tree.dataMap.storeByHash(mmdbtype.String("second"), 1)
-				require.NotSame(t, first, second)
+				second, err = tree.valueStore.intern(mmdbtype.String("second"))
+				require.NoError(t, err)
+				require.NotEqual(t, first, second)
 			}
 
 			parent := record{
@@ -79,12 +85,12 @@ func TestMaybeMergeChildren(t *testing.T) {
 				recordType: recordTypeNode,
 			}
 
-			iRec := insertRecord{dataMap: tree.dataMap, tree: tree}
+			iRec := insertRecord{store: tree.valueStore, tree: tree}
 			require.NoError(t, iRec.maybeMergeChildren(&parent))
 
 			assert.Equal(t, test.want, parent.recordType)
 			if test.want == recordTypeData {
-				assert.Same(t, first, parent.value)
+				assert.Equal(t, first, parent.value)
 			}
 		})
 	}

@@ -11,35 +11,6 @@ import (
 	"github.com/maxmind/mmdbwriter/v2/mmdbtype"
 )
 
-func BenchmarkDataHasherEnterpriseValue(b *testing.B) {
-	value := benchmarkEnterpriseValue()
-	hasher := newDataHasher()
-	b.ReportAllocs()
-	b.ResetTimer()
-	for range b.N {
-		if _, err := hasher.Hash(value); err != nil {
-			b.Fatal(err)
-		}
-	}
-}
-
-func BenchmarkDataHasherEnterpriseDeepCopies(b *testing.B) {
-	const valueCount = 512
-	value := benchmarkEnterpriseValue()
-	values := make([]mmdbtype.DataType, valueCount)
-	for index := range values {
-		values[index] = value.Copy()
-	}
-	hasher := newDataHasher()
-	b.ReportAllocs()
-	b.ResetTimer()
-	for index := range b.N {
-		if _, err := hasher.Hash(values[index%len(values)]); err != nil {
-			b.Fatal(err)
-		}
-	}
-}
-
 func BenchmarkEnterpriseKeyPipeline(b *testing.B) {
 	const networkCount = 2_048
 	base := benchmarkUniqueValues(benchmarkEnterpriseValue(), networkCount)
@@ -49,10 +20,8 @@ func BenchmarkEnterpriseKeyPipeline(b *testing.B) {
 		mmdbtype.Map{"traits": mmdbtype.Map{"isp": mmdbtype.String("Example ISP")}},
 		mmdbtype.Map{"traits": mmdbtype.Map{"domain": mmdbtype.String("overlay.test")}},
 	}
-	b.ReportMetric(float64(networkCount*(1+len(overlays))), "insertions/op")
 	b.ReportAllocs()
-	b.ResetTimer()
-	for range b.N {
+	for b.Loop() {
 		tree, err := New(Options{IPVersion: 4, IncludeReservedNetworks: true})
 		if err != nil {
 			b.Fatal(err)
@@ -70,27 +39,46 @@ func BenchmarkEnterpriseKeyPipeline(b *testing.B) {
 			}
 		}
 	}
+
+	b.ReportMetric(float64(networkCount*(1+len(overlays))), "insertions/op")
 }
 
-func BenchmarkDataMapEnterpriseValue(b *testing.B) {
+func BenchmarkValueStoreEnterpriseValue(b *testing.B) {
 	value := benchmarkEnterpriseValue()
 
+	// The caller-identity cache serves the repeated shallow copies; the other
+	// cases disable it to measure the content-dedup and full-intern paths.
 	b.Run("equal-shared-nested", func(b *testing.B) {
 		values := benchmarkShallowCopies(value, 8_192)
-		dataMap := newDataMap()
-		canonical, err := dataMap.storeWithIdentity(value)
+		store := newValueStore()
+		canonical, err := store.intern(value)
 		if err != nil {
 			b.Fatal(err)
 		}
-		b.Cleanup(func() { dataMap.remove(canonical) })
-		b.ReportAllocs()
-		b.ResetTimer()
-		for i := range b.N {
-			stored, err := dataMap.storeWithIdentity(values[i%len(values)])
+		store.rememberCallerIdentity(value, canonical)
+		b.Cleanup(func() { store.release(canonical) })
+		// Warm the caller-identity cache with every copy, so every timed
+		// iteration measures a cache hit instead of a mix of insertions and
+		// hits.
+		for _, warm := range values {
+			ref, err := store.intern(warm)
 			if err != nil {
 				b.Fatal(err)
 			}
-			dataMap.remove(stored)
+			store.rememberCallerIdentity(warm, ref)
+			store.release(ref)
+		}
+		b.ReportAllocs()
+		i := 0
+		for b.Loop() {
+			value := values[i%len(values)]
+			ref, err := store.intern(value)
+			if err != nil {
+				b.Fatal(err)
+			}
+			store.rememberCallerIdentity(value, ref)
+			store.release(ref)
+			i++
 		}
 	})
 
@@ -100,56 +88,43 @@ func BenchmarkDataMapEnterpriseValue(b *testing.B) {
 		for index := range values {
 			values[index] = value.Copy()
 		}
-		dataMap := newDataMap()
-		canonical, err := dataMap.storeWithIdentity(value)
+		store := newValueStore()
+		store.callerIdentityLimit = 0
+		canonical, err := store.intern(value)
 		if err != nil {
 			b.Fatal(err)
 		}
-		b.Cleanup(func() { dataMap.remove(canonical) })
+		store.rememberCallerIdentity(value, canonical)
+		b.Cleanup(func() { store.release(canonical) })
 		b.ReportAllocs()
-		b.ResetTimer()
-		for i := range b.N {
-			stored, err := dataMap.storeWithIdentity(values[i%len(values)])
+		i := 0
+		for b.Loop() {
+			value := values[i%len(values)]
+			ref, err := store.intern(value)
 			if err != nil {
 				b.Fatal(err)
 			}
-			dataMap.remove(stored)
+			store.rememberCallerIdentity(value, ref)
+			store.release(ref)
+			i++
 		}
 	})
 
 	b.Run("unique-miss", func(b *testing.B) {
 		values := benchmarkUniqueValues(value, 8_192)
-		dataMap := newDataMap()
+		store := newValueStore()
+		store.callerIdentityLimit = 0
 		b.ReportAllocs()
-		b.ResetTimer()
-		for i := range b.N {
-			stored, err := dataMap.storeWithIdentity(values[i%len(values)])
+		i := 0
+		for b.Loop() {
+			value := values[i%len(values)]
+			ref, err := store.intern(value)
 			if err != nil {
 				b.Fatal(err)
 			}
-			dataMap.remove(stored)
-		}
-	})
-}
-
-func BenchmarkWireDataEqualEnterpriseValue(b *testing.B) {
-	value := benchmarkEnterpriseValue()
-	b.Run("shared-nested", func(b *testing.B) {
-		clone := benchmarkShallowCopies(value, 1)[0]
-		b.ReportAllocs()
-		for range b.N {
-			if !wireDataEqual(value, clone) {
-				b.Fatal("values do not compare equal")
-			}
-		}
-	})
-	b.Run("deep-copy", func(b *testing.B) {
-		clone := value.Copy()
-		b.ReportAllocs()
-		for range b.N {
-			if !wireDataEqual(value, clone) {
-				b.Fatal("values do not compare equal")
-			}
+			store.rememberCallerIdentity(value, ref)
+			store.release(ref)
+			i++
 		}
 	})
 }
@@ -159,10 +134,8 @@ func BenchmarkTreeInsertEnterpriseDedupRates(b *testing.B) {
 	for _, hitRate := range []int{0, 50, 90, 99} {
 		b.Run(strconv.Itoa(hitRate)+"%-hits", func(b *testing.B) {
 			values := benchmarkEnterpriseValuesAtHitRate(networkCount, hitRate)
-			b.ReportMetric(networkCount, "insertions/op")
 			b.ReportAllocs()
-			b.ResetTimer()
-			for range b.N {
+			for b.Loop() {
 				tree, err := New(Options{IPVersion: 4, IncludeReservedNetworks: true})
 				if err != nil {
 					b.Fatal(err)
@@ -176,6 +149,8 @@ func BenchmarkTreeInsertEnterpriseDedupRates(b *testing.B) {
 					}
 				}
 			}
+
+			b.ReportMetric(networkCount, "insertions/op")
 		})
 	}
 }
@@ -197,13 +172,13 @@ func BenchmarkTreeWriteEnterpriseDedupRates(b *testing.B) {
 				)
 			}
 			tree.finalize()
-			b.ReportMetric(networkCount, "records/tree")
 			b.ReportAllocs()
-			b.ResetTimer()
-			for range b.N {
+			for b.Loop() {
 				_, err := tree.WriteTo(io.Discard)
 				requireNoBenchmarkError(b, err)
 			}
+
+			b.ReportMetric(networkCount, "records/tree")
 		})
 	}
 }

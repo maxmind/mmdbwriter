@@ -9,6 +9,7 @@ import (
 	"io"
 	"math"
 	"net/netip"
+	"os"
 	"time"
 
 	"github.com/oschwald/maxminddb-golang/v2"
@@ -76,25 +77,45 @@ type Options struct {
 	// use should primarily be limited to existing database types.
 	DisableMetadataPointers bool
 
+	// RefcountAudit makes this tree audit its value-store reference counts
+	// after every insert that reaches the value store, including failed
+	// inserts, and after every successful load. The audit is a debugging tool.
+	// It slows each insert to a full walk of the tree and the store and disables
+	// recycling of released value-node slots, so mutation-heavy trees retain
+	// those slots until the tree is discarded. Setting the
+	// MMDBWRITER_REFCOUNT_AUDIT environment variable turns the audit on for every
+	// tree in the process.
+	RefcountAudit bool
+
 	// Inserter is the function used when calling `Insert`. Leaving it nil
 	// is equivalent to `inserter.Replace`, which replaces any conflicting old
 	// value entirely with the new, and allows Insert to use the default
 	// direct-value fast path. Passing `inserter.Replace` explicitly has the same
 	// behavior but skips that optimization.
 	//
-	// An Inserter must not modify either argument. Values may be shared with
-	// other records, and Load reuses decoded values for source networks that
-	// reference the same data offset. Copy a value before modifying it. The
-	// function is evaluated separately for every covered record. Any non-nil
-	// returned value becomes tree-owned and must not be modified after return.
+	// An Inserter must not modify either argument. The existing value is a
+	// shared, read-only view. It is equal to, but not necessarily the same
+	// object as, the value originally inserted. The new value is the value
+	// passed to the insert call, or a shared view of the decoded record
+	// during Load. Nested containers can be shared across records, so copy a
+	// value before you modify it. The tree calls the function separately for
+	// every covered record. Any non-nil returned value becomes tree-owned and
+	// must not be modified after return.
+	//
+	// Only direct inserts and inserter results are validated, so the function
+	// can receive an unsupported input value, such as a raw mmdbtype.Pointer,
+	// and must replace or discard it. If the function fails partway through
+	// the covered records, the records already visited keep their new values.
 	Inserter inserter.Func
 }
 
-// Tree represents an MaxMind DB search tree.
+// Tree represents a MaxMind DB search tree. A Tree is not safe for
+// concurrent use. Lookups materialize shared views lazily, so the caller must
+// synchronize even concurrent Get calls.
 type Tree struct {
 	buildEpoch              int64
 	databaseType            string
-	dataMap                 *dataMap
+	valueStore              *valueStore
 	description             map[string]string
 	disableMetadataPointers bool
 	ipVersion               int
@@ -116,6 +137,10 @@ type Tree struct {
 
 	nodeCount int
 	inserter  inserter.Func
+	// refcountAudit runs the full ownership audit after every insert that
+	// reaches the value store and after every successful load. New sets it from
+	// Options.RefcountAudit or the MMDBWRITER_REFCOUNT_AUDIT environment variable.
+	refcountAudit bool
 }
 
 // New creates a new Tree.
@@ -130,6 +155,8 @@ func New(opts Options) (*Tree, error) {
 		nodeBlocks:              [][]node{make([]node, nodeBlockSize)},
 		nodeCountAllocated:      1,
 		root:                    rootNodeIndex,
+		refcountAudit: opts.RefcountAudit ||
+			os.Getenv("MMDBWRITER_REFCOUNT_AUDIT") != "",
 	}
 
 	if opts.BuildEpoch != 0 {
@@ -144,7 +171,8 @@ func New(opts Options) (*Tree, error) {
 		tree.ipVersion = opts.IPVersion
 	}
 
-	tree.dataMap = newDataMap()
+	tree.valueStore = newValueStore()
+	tree.valueStore.poisonFreedRefs = tree.refcountAudit
 
 	if opts.Languages != nil {
 		tree.languages = opts.Languages
@@ -205,9 +233,15 @@ func metadataDimension(name string, value uint) (int, error) {
 	return int(value), nil
 }
 
-// Load loads an existing database into the writer. Source records that share a
-// data offset also share a decoded value. An Options.Inserter must treat its
-// arguments as immutable and copy a value before modifying it.
+// Load loads an existing database into the writer. It interns records into
+// the value store directly from the database, without building intermediate
+// map and slice graphs. Source networks that share a data offset share one
+// stored value.
+// During the load, a cache holds one reference per distinct offset in the
+// source data section. Load releases the cache before it returns. A
+// non-nil Options.Inserter also receives a materialized view of each
+// decoded record. The inserter must treat its arguments as immutable and must
+// copy a value before modifying it.
 func Load(path string, opts Options) (*Tree, error) {
 	db, err := maxminddb.Open(path)
 	if err != nil {
@@ -247,8 +281,10 @@ func Load(path string, opts Options) (*Tree, error) {
 		return nil, fmt.Errorf("creating tree for %s: %w", path, err)
 	}
 
-	unmarshaler := mmdbtype.NewUnmarshaler()
-	dataByOffset := map[uintptr]mmdbtype.DataType{}
+	// The decoder interns records straight into the value store. It caches
+	// one reference per source data offset, so shared records decode once.
+	decoder := newStoreDecoder(tree.valueStore)
+	defer decoder.close()
 
 	var networkOpts []maxminddb.NetworksOption
 	if opts.IPVersion == 6 && opts.DisableIPv4Aliasing {
@@ -258,37 +294,38 @@ func Load(path string, opts Options) (*Tree, error) {
 	for res := range db.Networks(networkOpts...) {
 		prefix := res.Prefix()
 		if err := res.Err(); err != nil {
-			return nil, fmt.Errorf("loading network %s: %w", prefix, err)
+			return nil, fmt.Errorf("loading network %s from %s: %w", prefix, path, err)
 		}
 
-		offset := res.Offset()
-		value, ok := dataByOffset[offset]
-		if !ok {
-			unmarshaler.Clear()
-			err := res.Decode(unmarshaler)
-			if err != nil {
-				return nil, fmt.Errorf("unmarshaling record for network %s: %w", prefix, err)
-			}
-			value = unmarshaler.Result()
-			dataByOffset[offset] = value
+		if err := res.Decode(decoder); err != nil {
+			return nil, fmt.Errorf(
+				"unmarshaling record for network %s from %s: %w", prefix, path, err)
 		}
+		value := decoder.takeResult()
 
 		prefix, err := tree.normalizeLoadPrefix(prefix)
 		if err != nil {
+			tree.valueStore.release(value)
 			return nil, err
 		}
 
-		err = tree.insertNormalized(
+		err = tree.insertNormalizedRef(
 			prefix,
 			recordTypeData,
 			tree.inserter,
-			false,
 			noNodeIndex,
 			value,
 		)
+		tree.valueStore.release(value)
 		if err != nil {
-			return nil, fmt.Errorf("loading network %s: %w", prefix, err)
+			return nil, fmt.Errorf("loading network %s from %s: %w", prefix, path, err)
 		}
+	}
+	// The audit only balances once the decoder's offset cache has released
+	// its references. close is idempotent, so the deferred call is a no-op.
+	decoder.close()
+	if err := tree.maybeAuditValueStore(); err != nil {
+		return nil, err
 	}
 	return tree, nil
 }
@@ -313,8 +350,11 @@ func (t *Tree) normalizeLoadPrefix(prefix netip.Prefix) (netip.Prefix, error) {
 // Insert inserts a data value into the tree using the Tree's inserter function
 // (defaults to inserter.Replace).
 //
-// You must never modify the value after insertion as values may be shared with
-// other records.
+// You must never modify the value after insertion. Values may be shared with
+// other records, and direct inserts of maps, slices, byte slices, and
+// *Uint128 values are cached by object identity: if you mutate an inserted
+// object in place, a later insert of that object can reuse the data from
+// before the mutation.
 //
 // This is not safe to call from multiple threads.
 func (t *Tree) Insert(prefix netip.Prefix, value mmdbtype.DataType) error {
@@ -336,7 +376,9 @@ func (t *Tree) Insert(prefix netip.Prefix, value mmdbtype.DataType) error {
 //
 // The function is called separately for every covered record. Any
 // non-nil value it returns becomes tree-owned and must not be modified after the
-// function returns. A nil insertFunc returns an error.
+// function returns. A nil insertFunc returns an error. If the function fails
+// partway through the covered records, the call returns the error but the
+// records already visited keep their new values.
 //
 // This is not safe to call from multiple threads.
 func (t *Tree) InsertFunc(
@@ -391,23 +433,35 @@ func (t *Tree) insert(
 			return err
 		}
 	}
-	iRec := t.newInsertRecord(recordType, insertFunc, inserterPure, node, value)
+	iRec, err := t.newInsertRecord(recordType, insertFunc, inserterPure, node, value)
+	if err != nil {
+		return t.finishInsertAudit(err)
+	}
+	// finishInsert releases the record's references before the audit runs.
+	// The defer is the panic-safety net: a caller-supplied inserter can
+	// panic mid-traversal, and releaseResolved is a no-op once it has run.
 	defer iRec.releaseResolved()
-	return t.insertPrepared(prefix, iRec)
+	err = t.insertPrepared(prefix, iRec)
+	return t.finishInsert(iRec, err)
 }
 
-func (t *Tree) insertNormalized(
+// insertNormalizedRef inserts an already interned value. It borrows the
+// caller's reference, taking one of its own for the insert.
+func (t *Tree) insertNormalizedRef(
 	prefix netip.Prefix,
 	recordType recordType,
 	insertFunc inserter.Func,
-	inserterPure bool,
 	node nodeIndex,
-	value mmdbtype.DataType,
+	value valueRef,
 ) error {
 	if t.treeDepth == 32 && !prefix.Addr().Is4() {
 		return errors.New("IPv6 prefixes cannot be inserted into an IPv4 tree")
 	}
-	iRec := t.newInsertRecord(recordType, insertFunc, inserterPure, node, value)
+	t.valueStore.retain(value)
+	iRec := t.newInsertRecordRef(recordType, insertFunc, false, node, value)
+	if insertFunc != nil {
+		iRec.valueView = t.valueStore.materialize(value)
+	}
 	defer iRec.releaseResolved()
 	return t.insertPrepared(prefix, iRec)
 }
@@ -433,6 +487,37 @@ func (t *Tree) newInsertRecord(
 	inserterPure bool,
 	node nodeIndex,
 	value mmdbtype.DataType,
+) (*insertRecord, error) {
+	// An inserter receives the caller's value as passed. Only inserter
+	// results are interned. Interning the input here would cost a full intern
+	// and a materialized view per insert. Overlay passes decode a fresh value
+	// per source network, so that cost would buy nothing there.
+	if insertFunc != nil {
+		iRec := t.newInsertRecordRef(recordType, insertFunc, inserterPure, node, nilValueRef)
+		iRec.valueView = value
+		return iRec, nil
+	}
+	var ref valueRef
+	if recordType == recordTypeData && value != nil {
+		var err error
+		ref, err = t.valueStore.intern(value)
+		if err != nil {
+			return nil, err
+		}
+	}
+	iRec := t.newInsertRecordRef(recordType, insertFunc, inserterPure, node, ref)
+	iRec.callerValue = value
+	return iRec, nil
+}
+
+// newInsertRecordRef builds an insertRecord that owns the given reference,
+// which releaseResolved releases.
+func (t *Tree) newInsertRecordRef(
+	recordType recordType,
+	insertFunc inserter.Func,
+	inserterPure bool,
+	node nodeIndex,
+	ref valueRef,
 ) *insertRecord {
 	return &insertRecord{
 		recordType:   recordType,
@@ -440,10 +525,35 @@ func (t *Tree) newInsertRecord(
 		inserterPure: inserterPure,
 		insertedNode: node,
 		tree:         t,
-		value:        value,
+		value:        ref,
 
-		dataMap: t.dataMap,
+		store: t.valueStore,
 	}
+}
+
+// finishInsert completes an insertion. It registers the caller identity only
+// once the tree references the value: a registration that survived a failed
+// insert would serve stale data if the caller mutated and retried the same
+// object. The audit only balances once the memo and value references are
+// gone, so the release runs explicitly before it. The audit also runs after
+// a failed insert, since the error paths are exactly where ownership
+// mistakes hide; an audit failure joins any insert error.
+func (t *Tree) finishInsert(iRec *insertRecord, err error) error {
+	if err == nil {
+		t.valueStore.rememberCallerIdentity(iRec.callerValue, iRec.value)
+	}
+	iRec.releaseResolved()
+	return t.finishInsertAudit(err)
+}
+
+// finishInsertAudit runs after temporary store references have been released.
+// It preserves an insertion error while adding a typed audit failure when the
+// insertion's store work left the tree unbalanced.
+func (t *Tree) finishInsertAudit(err error) error {
+	if auditErr := t.maybeAuditValueStore(); auditErr != nil {
+		return errors.Join(err, auditErr)
+	}
+	return err
 }
 
 func (t *Tree) normalizeInsertPrefix(prefix netip.Prefix) (netip.Prefix, error) {
@@ -619,17 +729,20 @@ func (t *Tree) insertRange(
 	if !r.IsValid() {
 		return errors.New("start & end IPs did not give valid range")
 	}
-	iRec := t.newInsertRecord(recordType, insertFunc, inserterPure, node, value)
+	iRec, err := t.newInsertRecord(recordType, insertFunc, inserterPure, node, value)
+	if err != nil {
+		return t.finishInsertAudit(err)
+	}
+	// The defer is the panic-safety net, as in insert.
 	defer iRec.releaseResolved()
 	subnets := r.Prefixes()
 	for _, subnet := range subnets {
-		err := t.insertPrepared(subnet, iRec)
+		err = t.insertPrepared(subnet, iRec)
 		if err != nil {
-			return err
+			break
 		}
 	}
-
-	return nil
+	return t.finishInsert(iRec, err)
 }
 
 func (t *Tree) insertStringNetwork(
@@ -693,7 +806,12 @@ func (t *Tree) insertReservedNetworks() error {
 // Get the value for the given IP address from the tree. If the nil interface
 // is returned, that means the tree does not have a value for the IP. If ip is
 // invalid or cannot be looked up in this tree's IP version, the returned prefix
-// is the zero value.
+// is the zero value. Returned values are shared, read-only views that are equal
+// to, but not necessarily the same objects as, the inserted values. Call Copy
+// before modifying one.
+//
+// Get is not safe to call concurrently with any other Tree method, including
+// other Get calls, because a lookup materializes its view lazily.
 func (t *Tree) Get(ip netip.Addr) (netip.Prefix, mmdbtype.DataType) {
 	lookupIP, ok := t.lookupIP(ip)
 	if !ok {
@@ -703,7 +821,7 @@ func (t *Tree) Get(ip netip.Addr) (netip.Prefix, mmdbtype.DataType) {
 
 	var value mmdbtype.DataType
 	if r.recordType == recordTypeData {
-		value = r.value.data
+		value = t.valueStore.materialize(r.value)
 	}
 
 	return t.getPrefixForAddr(ip, prefixLen), value
@@ -732,7 +850,7 @@ func (t *Tree) WriteTo(w io.Writer) (int64, error) {
 	recordBuf := make([]byte, 2*t.recordSize/8)
 
 	usePointers := true
-	dataWriter := newDataWriter(t.dataMap, usePointers)
+	dataWriter := newDataWriter(t.valueStore, usePointers)
 
 	nodeCount, numBytes, err := t.writeNode(buf, t.root, dataWriter, recordBuf)
 	if err != nil {
@@ -766,7 +884,9 @@ func (t *Tree) WriteTo(w io.Writer) (int64, error) {
 		return numBytes, fmt.Errorf("writing metadata start marker: %w", err)
 	}
 
-	metadataWriter := newDataWriter(dataWriter.dataMap, !t.disableMetadataPointers)
+	// The metadata gets its own store, so WriteTo does not mutate the tree's
+	// store and the metadata writer's offset table stays metadata-sized.
+	metadataWriter := newDataWriter(newValueStore(), !t.disableMetadataPointers)
 	_, err = t.writeMetadata(metadataWriter)
 	if err != nil {
 		return numBytes, fmt.Errorf("writing metadata: %w", err)
@@ -854,8 +974,8 @@ func (t *Tree) copyNode(buf []byte, n *node, dataWriter *dataWriter) error {
 		return err
 	}
 
-	maxRecord := 1 << t.recordSize
-	if left >= maxRecord || right >= maxRecord {
+	maxRecord := int64(1) << t.recordSize
+	if int64(left) >= maxRecord || int64(right) >= maxRecord {
 		return fmt.Errorf(
 			"exceeded record capacity by attempting to write (%d, %d) to node with %d bit record size; "+
 				"try increasing RecordSize or reducing the size of the database",
@@ -906,7 +1026,7 @@ func (t *Tree) writeMetadata(dw *dataWriter) (int64, error) {
 	for _, v := range t.languages {
 		languages = append(languages, mmdbtype.String(v))
 	}
-	if t.nodeCount > math.MaxUint32 {
+	if int64(t.nodeCount) > int64(math.MaxUint32) {
 		return 0, fmt.Errorf("node count of %d exceeds the maximum allowed value", t.nodeCount)
 	}
 	metadata := mmdbtype.Map{
@@ -927,5 +1047,12 @@ func (t *Tree) writeMetadata(dw *dataWriter) (int64, error) {
 		//nolint:gosec // recordSize is always 24, 28, or 32
 		"record_size": mmdbtype.Uint16(t.recordSize),
 	}
-	return metadata.WriteTo(dw)
+	ref, err := dw.store.intern(metadata)
+	if err != nil {
+		return 0, err
+	}
+	defer dw.store.release(ref)
+	start := dw.Len()
+	_, err = dw.maybeWrite(ref)
+	return int64(dw.Len() - start), err
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"hash/maphash"
 	"math"
 	"math/big"
 	"net/netip"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/oschwald/maxminddb-golang/v2"
+	"github.com/oschwald/maxminddb-golang/v2/mmdbdata"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -68,26 +70,215 @@ func TestTreeInsertSplittingDataRecordMaintainsRefCounts(t *testing.T) {
 	initialValue := mmdbtype.String("initial")
 	require.NoError(t, tree.Insert(netip.MustParsePrefix("1.1.0.0/24"), initialValue))
 
-	hash, err := tree.dataMap.hasher.Hash(initialValue)
-	require.NoError(t, err)
-	key := hash
-	initialMapValue := tree.dataMap.data[key]
-	require.NotNil(t, initialMapValue)
-	require.Equal(t, uint32(1), initialMapValue.refCount)
+	_, initialRecord := tree.getNode(tree.root, [16]byte{1, 1}, 0)
+	initialRef := initialRecord.value
+	initialRefCount := tree.valueStore.node(initialRef).refCount
 
 	require.NoError(t, tree.Insert(
 		netip.MustParsePrefix("1.1.0.128/25"),
 		mmdbtype.String("upper"),
 	))
-	assert.Equal(t, uint32(1), initialMapValue.refCount)
-	assert.Same(t, initialMapValue, tree.dataMap.data[key])
+	assert.Equal(t, initialRefCount, tree.valueStore.node(initialRef).refCount)
 
 	require.NoError(t, tree.Insert(
 		netip.MustParsePrefix("1.1.0.0/25"),
 		mmdbtype.String("lower"),
 	))
-	assert.Zero(t, initialMapValue.refCount)
-	assert.NotContains(t, tree.dataMap.data, key)
+	assert.Equal(t, valueKindInvalid, tree.valueStore.nodes[initialRef].kind)
+}
+
+// TestFailedInsertDoesNotCacheCallerIdentity pins that the caller-identity
+// cache registers a value only after its insert succeeds. A registration that
+// survived a failed insert would serve the pre-mutation data if the caller
+// mutated and retried the same object.
+func TestFailedInsertDoesNotCacheCallerIdentity(t *testing.T) {
+	tree, err := New(Options{IPVersion: 4})
+	require.NoError(t, err)
+
+	value := mmdbtype.Map{"name": mmdbtype.String("before")}
+	err = tree.Insert(netip.MustParsePrefix("10.0.0.0/8"), value)
+	require.Error(t, err, "inserting into a reserved network should fail")
+
+	value["name"] = mmdbtype.String("after")
+	require.NoError(t, tree.Insert(netip.MustParsePrefix("1.2.3.0/24"), value))
+
+	_, got := tree.Get(netip.MustParseAddr("1.2.3.4"))
+	assert.Equal(t, mmdbtype.Map{"name": mmdbtype.String("after")}, got)
+}
+
+// TestWriteToDoesNotGrowValueStore pins that serialization leaves the tree's
+// store untouched: metadata goes through a separate store.
+func TestWriteToDoesNotGrowValueStore(t *testing.T) {
+	tree := newTestTree(t, "mmdbwriter-writeto-store")
+	require.NoError(t, tree.Insert(
+		netip.MustParsePrefix("1.2.3.0/24"),
+		mmdbtype.Map{"name": mmdbtype.String("value")},
+	))
+	nodesBefore := len(tree.valueStore.nodes)
+	freeBefore := len(tree.valueStore.freeRefs)
+
+	for range 2 {
+		var buf bytes.Buffer
+		_, err := tree.WriteTo(&buf)
+		require.NoError(t, err)
+	}
+
+	assert.Len(t, tree.valueStore.nodes, nodesBefore)
+	assert.Len(t, tree.valueStore.freeRefs, freeBefore)
+}
+
+// TestSuccessfulInsertCachesCallerIdentity pins the documented cache
+// semantics: after a successful insert, an in-place mutation of the same
+// object is invisible to a later insert of that object, which reuses the
+// data from before the mutation.
+func TestSuccessfulInsertCachesCallerIdentity(t *testing.T) {
+	tree := newTestTree(t, "mmdbwriter-success-cache")
+
+	value := mmdbtype.Map{"name": mmdbtype.String("before")}
+	require.NoError(t, tree.Insert(netip.MustParsePrefix("1.2.3.0/24"), value))
+
+	// The contract forbids this mutation. The cache serves the old data.
+	value["name"] = mmdbtype.String("after")
+	require.NoError(t, tree.Insert(netip.MustParsePrefix("2.2.2.0/24"), value))
+
+	_, got := tree.Get(netip.MustParseAddr("2.2.2.4"))
+	assert.Equal(t, mmdbtype.Map{"name": mmdbtype.String("before")}, got)
+}
+
+// TestPanickingInserterReleasesItsReferences pins that a panic from a
+// caller-supplied inserter does not leak the insert record's references.
+func TestPanickingInserterReleasesItsReferences(t *testing.T) {
+	tree := newTestTree(t, "mmdbwriter-inserter-panic")
+	require.NoError(t, tree.Insert(
+		netip.MustParsePrefix("1.0.0.0/25"),
+		mmdbtype.Map{"name": mmdbtype.String("left")},
+	))
+	require.NoError(t, tree.Insert(
+		netip.MustParsePrefix("1.0.0.128/25"),
+		mmdbtype.Map{"name": mmdbtype.String("right")},
+	))
+	liveBefore := liveValueNodeCount(tree.valueStore)
+
+	calls := 0
+	require.Panics(t, func() {
+		//nolint:errcheck // the panic propagates before the return
+		tree.InsertPureFunc(
+			netip.MustParsePrefix("1.0.0.0/24"),
+			mmdbtype.Map{"name": mmdbtype.String("new")},
+			func(existing, _ mmdbtype.DataType) (mmdbtype.DataType, error) {
+				calls++
+				if calls == 2 {
+					panic("inserter failure")
+				}
+				return existing, nil
+			},
+		)
+	})
+
+	require.NoError(t, tree.auditValueStore(),
+		"the recovered panic left the store unbalanced")
+	assert.Equal(t, liveBefore, liveValueNodeCount(tree.valueStore),
+		"the panicking insert leaked references")
+}
+
+// TestPanickingRangeInserterReleasesItsReferences is the InsertRange variant
+// of TestPanickingInserterReleasesItsReferences. It pins the range entry
+// point's separate panic-safety defer.
+func TestPanickingRangeInserterReleasesItsReferences(t *testing.T) {
+	tree := newTestTree(t, "mmdbwriter-range-inserter-panic")
+	require.NoError(t, tree.Insert(
+		netip.MustParsePrefix("1.0.0.0/25"),
+		mmdbtype.Map{"name": mmdbtype.String("left")},
+	))
+	require.NoError(t, tree.Insert(
+		netip.MustParsePrefix("1.0.0.128/25"),
+		mmdbtype.Map{"name": mmdbtype.String("right")},
+	))
+	liveBefore := liveValueNodeCount(tree.valueStore)
+
+	calls := 0
+	require.Panics(t, func() {
+		//nolint:errcheck // the panic propagates before the return
+		tree.InsertRangePureFunc(
+			netip.MustParseAddr("1.0.0.0"),
+			netip.MustParseAddr("1.0.0.255"),
+			mmdbtype.Map{"name": mmdbtype.String("new")},
+			func(existing, _ mmdbtype.DataType) (mmdbtype.DataType, error) {
+				calls++
+				if calls == 2 {
+					panic("inserter failure")
+				}
+				return existing, nil
+			},
+		)
+	})
+
+	require.NoError(t, tree.auditValueStore(),
+		"the recovered range panic left the store unbalanced")
+	assert.Equal(t, liveBefore, liveValueNodeCount(tree.valueStore),
+		"the panicking range insert leaked references")
+}
+
+// TestFailedInsertRangeDoesNotCacheCallerIdentity is the InsertRange variant
+// of the failed-insert regression: a range that partially succeeds before a
+// reserved subnet fails must not leave the caller's object registered.
+func TestFailedInsertRangeDoesNotCacheCallerIdentity(t *testing.T) {
+	tree, err := New(Options{IPVersion: 4})
+	require.NoError(t, err)
+
+	value := mmdbtype.Map{"name": mmdbtype.String("before")}
+	// The first /24 succeeds; the second falls in reserved 10.0.0.0/8.
+	err = tree.InsertRange(
+		netip.MustParseAddr("9.255.255.0"),
+		netip.MustParseAddr("10.0.0.255"),
+		value,
+	)
+	require.Error(t, err, "a range into a reserved network should fail")
+
+	_, got := tree.Get(netip.MustParseAddr("9.255.255.1"))
+	require.Equal(t, mmdbtype.Map{"name": mmdbtype.String("before")}, got,
+		"the subnet inserted before the failure should keep the original value")
+
+	value["name"] = mmdbtype.String("after")
+	require.NoError(t, tree.InsertRange(
+		netip.MustParseAddr("11.0.0.0"),
+		netip.MustParseAddr("11.0.0.255"),
+		value,
+	))
+
+	_, got = tree.Get(netip.MustParseAddr("11.0.0.1"))
+	assert.Equal(t, mmdbtype.Map{"name": mmdbtype.String("after")}, got)
+	_, got = tree.Get(netip.MustParseAddr("9.255.255.1"))
+	assert.Equal(t, mmdbtype.Map{"name": mmdbtype.String("before")}, got)
+}
+
+// TestLoadWithCustomInserter covers loading through a non-nil Options.Inserter,
+// which materializes a view of each decoded record for the inserter.
+func TestLoadWithCustomInserter(t *testing.T) {
+	tree, err := New(Options{
+		DatabaseType:            "mmdbwriter-load-inserter",
+		Description:             map[string]string{"en": "Test database"},
+		IncludeReservedNetworks: true,
+		IPVersion:               4,
+		RecordSize:              24,
+	})
+	require.NoError(t, err)
+	require.NoError(t, tree.Insert(
+		netip.MustParsePrefix("1.2.3.0/24"),
+		mmdbtype.Map{"base": mmdbtype.String("value")},
+	))
+
+	path := writeTempDB(t, tree)
+
+	loaded, err := Load(path, Options{
+		IPVersion:               4,
+		IncludeReservedNetworks: true,
+		Inserter:                inserter.TopLevelMerge,
+	})
+	require.NoError(t, err)
+
+	_, got := loaded.Get(netip.MustParseAddr("1.2.3.4"))
+	assert.Equal(t, mmdbtype.Map{"base": mmdbtype.String("value")}, got)
 }
 
 func TestTreeNodeBlocksGrowAndWrite(t *testing.T) {
@@ -192,12 +383,17 @@ func TestTreeInsertPureFuncMemoizesDistinctExistingValues(t *testing.T) {
 	// Two distinct existing values promote the memo to its map form, so this
 	// also pins that releaseResolved drains every entry rather than the first.
 	// The four covered records now share one value and merge back into a single
-	// record, so exactly one reference should remain.
-	require.Len(t, tree.dataMap.data, 1, "the memo retained replaced values")
-	for _, dmv := range tree.dataMap.data {
-		assert.EqualValues(t, 1, dmv.refCount,
+	// record, so exactly one live value with one reference should remain.
+	live := 0
+	for ref := range tree.valueStore.nodes {
+		if tree.valueStore.nodes[ref].kind == valueKindInvalid {
+			continue
+		}
+		live++
+		assert.EqualValues(t, 1, tree.valueStore.nodes[ref].refCount,
 			"the memo held references after the insert finished")
 	}
+	assert.Equal(t, 1, live, "the memo retained replaced values")
 }
 
 func TestTreeInsertPureFuncReleasesMemoAfterPartialError(t *testing.T) {
@@ -226,14 +422,13 @@ func TestTreeInsertPureFuncReleasesMemoAfterPartialError(t *testing.T) {
 	)
 	require.ErrorIs(t, err, insertErr)
 
-	hash, err := tree.dataMap.hasher.Hash(result)
-	require.NoError(t, err)
-	stored := tree.dataMap.data[hash]
-	require.NotNil(t, stored)
+	_, storedRecord := tree.getNode(tree.root, [16]byte{1, 2, 3, 0}, 0)
+	require.Equal(t, recordTypeData, storedRecord.recordType)
+	require.Equal(t, result, tree.valueStore.materialize(storedRecord.value))
 	assert.Equal(
 		t,
 		uint32(1),
-		stored.refCount,
+		tree.valueStore.node(storedRecord.value).refCount,
 		"only the inserted record should hold a reference after the memo is released",
 	)
 
@@ -403,7 +598,7 @@ func TestTreeInsertFuncReturnsErrorForNilUint128Result(t *testing.T) {
 			result: func(value *mmdbtype.Uint128) mmdbtype.DataType {
 				return value
 			},
-			expectedError: "cannot hash a nil *mmdbtype.Uint128",
+			expectedError: "cannot intern a nil *mmdbtype.Uint128",
 		},
 		{
 			name: "nested",
@@ -413,7 +608,7 @@ func TestTreeInsertFuncReturnsErrorForNilUint128Result(t *testing.T) {
 			result: func(value *mmdbtype.Uint128) mmdbtype.DataType {
 				return mmdbtype.Map{"value": value}
 			},
-			expectedError: `hashing map key "value": cannot hash a nil *mmdbtype.Uint128`,
+			expectedError: `interning value for map key "value": cannot intern a nil *mmdbtype.Uint128`,
 		},
 	}
 
@@ -757,20 +952,15 @@ func TestLoadWrapsInsertErrorWithNetwork(t *testing.T) {
 		mmdbtype.String("value"),
 	))
 
-	f, err := os.CreateTemp(t.TempDir(), "mmdbwriter-load-error-*.mmdb")
-	require.NoError(t, err)
-	defer func() { require.NoError(t, os.Remove(f.Name())) }()
+	path := writeTempDB(t, tree)
 
-	_, err = tree.WriteTo(f)
-	require.NoError(t, err)
-	require.NoError(t, f.Close())
-
-	_, err = Load(f.Name(), Options{
+	_, err = Load(path, Options{
 		IPVersion:               4,
 		IncludeReservedNetworks: true,
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "loading network 2001:db8::/32")
+	assert.Contains(t, err.Error(), path)
 	assert.Contains(t, err.Error(), "IPv6 prefixes cannot be inserted into an IPv4 tree")
 }
 
@@ -801,20 +991,15 @@ func TestLoadChecksIteratorErrorBeforeOffsetCache(t *testing.T) {
 	// the right child pointer so its iterator result has Err set and Offset 0.
 	dbBytes[3], dbBytes[4], dbBytes[5] = 0xFF, 0xFF, 0xFF
 
-	f, err := os.CreateTemp(t.TempDir(), "mmdbwriter-load-corrupt-*.mmdb")
-	require.NoError(t, err)
-	defer func() { require.NoError(t, os.Remove(f.Name())) }()
+	path := writeTempFile(t, dbBytes)
 
-	_, err = f.Write(dbBytes)
-	require.NoError(t, err)
-	require.NoError(t, f.Close())
-
-	_, err = Load(f.Name(), Options{
+	_, err = Load(path, Options{
 		IPVersion:               4,
 		IncludeReservedNetworks: true,
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "loading network 128.0.0.0/1")
+	assert.Contains(t, err.Error(), path)
 	assert.Contains(t, err.Error(), "search tree is corrupt")
 }
 
@@ -841,20 +1026,376 @@ func TestLoadDecodeErrorIncludesNetwork(t *testing.T) {
 	// Extended type 16 is validly encoded but unsupported by the unmarshaler.
 	dbBytes[dataStart], dbBytes[dataStart+1] = 0, 9
 
-	f, err := os.CreateTemp(t.TempDir(), "mmdbwriter-load-corrupt-data-*.mmdb")
-	require.NoError(t, err)
-	defer func() { require.NoError(t, os.Remove(f.Name())) }()
+	path := writeTempFile(t, dbBytes)
 
-	_, err = f.Write(dbBytes)
-	require.NoError(t, err)
-	require.NoError(t, f.Close())
-
-	_, err = Load(f.Name(), Options{
+	_, err = Load(path, Options{
 		IPVersion:               4,
 		IncludeReservedNetworks: true,
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unmarshaling record for network 1.2.3.0/24")
+	assert.Contains(t, err.Error(), path)
+	assert.Contains(t, err.Error(), "unsupported data type Unknown(16) at offset 0")
+}
+
+// TestStoreDecoderCachesOffsets pins that a repeated source offset hits the
+// decoder's cache: the second decode of the same record does no hashing,
+// which re-interning the record by content could not avoid.
+func TestStoreDecoderCachesOffsets(t *testing.T) {
+	tree, err := New(Options{
+		DatabaseType:            "mmdbwriter-decoder-cache",
+		Description:             map[string]string{"en": "Test database"},
+		IncludeReservedNetworks: true,
+		IPVersion:               4,
+		RecordSize:              24,
+	})
+	require.NoError(t, err)
+	value := mmdbtype.Map{"shared": mmdbtype.String("value")}
+	require.NoError(t, tree.Insert(netip.MustParsePrefix("1.1.1.0/24"), value))
+	require.NoError(t, tree.Insert(netip.MustParsePrefix("2.2.2.0/24"), value))
+
+	var buf bytes.Buffer
+	_, writeErr := tree.WriteTo(&buf)
+	require.NoError(t, writeErr)
+
+	reader, err := maxminddb.OpenBytes(buf.Bytes())
+	require.NoError(t, err)
+	defer reader.Close()
+
+	hashCount := 0
+	seed := maphash.MakeSeed()
+	store := newValueStoreWithHash(func(b []byte) uint64 {
+		hashCount++
+		return maphash.Bytes(seed, b)
+	})
+	decoder := newStoreDecoder(store)
+	defer decoder.close()
+
+	var refs []valueRef
+	for res := range reader.Networks() {
+		require.NoError(t, res.Err())
+		require.NoError(t, res.Decode(decoder))
+		refs = append(refs, decoder.takeResult())
+	}
+	require.Len(t, refs, 2)
+	assert.Equal(t, refs[0], refs[1])
+
+	hashesAfterFirst := hashCount
+	// Decode the same record once more; the offset cache must answer it.
+	for res := range reader.Networks() {
+		require.NoError(t, res.Err())
+		require.NoError(t, res.Decode(decoder))
+		store.release(decoder.takeResult())
+		break
+	}
+	assert.Equal(t, hashesAfterFirst, hashCount,
+		"a cached offset was re-interned by content")
+
+	for _, ref := range refs {
+		store.release(ref)
+	}
+}
+
+// TestInsertFuncReceivesCallerValueUninterned pins that an inserter receives
+// the caller's value as passed, without the tree interning it first: the
+// input here is unstorable, so interning it would fail the insert.
+func TestInsertFuncReceivesCallerValueUninterned(t *testing.T) {
+	tree := newTestTree(t, "mmdbwriter-uninterned")
+
+	input := mmdbtype.Pointer(7)
+	require.NoError(t, tree.InsertFunc(
+		netip.MustParsePrefix("1.2.3.0/24"),
+		input,
+		func(_, newValue mmdbtype.DataType) (mmdbtype.DataType, error) {
+			require.Equal(t, input, newValue)
+			return mmdbtype.String("value"), nil
+		},
+	))
+
+	_, got := tree.Get(netip.MustParseAddr("1.2.3.4"))
+	assert.Equal(t, mmdbtype.String("value"), got)
+}
+
+// TestLoadRoundTripsSmallUnsignedTypes covers the decoder branches for uint16
+// and uint32, which the all-types fixture stores as uint64.
+func TestLoadRoundTripsSmallUnsignedTypes(t *testing.T) {
+	value := mmdbtype.Map{
+		"uint16": mmdbtype.Uint16(0x64),
+		"uint32": mmdbtype.Uint32(0x10000000),
+	}
+	tree, err := New(Options{
+		BuildEpoch:              123456789,
+		DatabaseType:            "mmdbwriter-load-small-uints",
+		Description:             map[string]string{"en": "Test database"},
+		IncludeReservedNetworks: true,
+		IPVersion:               4,
+		RecordSize:              24,
+	})
+	require.NoError(t, err)
+	require.NoError(t, tree.Insert(netip.MustParsePrefix("1.2.3.0/24"), value))
+
+	var buf bytes.Buffer
+	_, writeErr := tree.WriteTo(&buf)
+	require.NoError(t, writeErr)
+
+	path := writeTempFile(t, buf.Bytes())
+
+	loaded, err := Load(path, Options{
+		BuildEpoch:              123456789,
+		IPVersion:               4,
+		IncludeReservedNetworks: true,
+	})
+	require.NoError(t, err)
+
+	_, got := loaded.Get(netip.MustParseAddr("1.2.3.4"))
+	assert.Equal(t, value, got)
+
+	var rewritten bytes.Buffer
+	_, writeErr = loaded.WriteTo(&rewritten)
+	require.NoError(t, writeErr)
+	assert.Equal(t, buf.Bytes(), rewritten.Bytes())
+}
+
+// TestStoreDecoderReleasesOverwrittenResult pins that a repeated Decode
+// without takeResult does not leak the first result's reference.
+func TestStoreDecoderReleasesOverwrittenResult(t *testing.T) {
+	store := newValueStore()
+	decoder := newStoreDecoder(store)
+
+	// A map with one string entry: {"k": "a"}.
+	first := []byte{0xe1, 0x41, 'k', 0x41, 'a'}
+	require.NoError(t, decoder.UnmarshalMaxMindDB(mmdbdata.NewDecoder(first, 0)))
+	// Pad the second buffer so its value has a distinct offset. The offset
+	// cache would otherwise answer it with the first result.
+	second := []byte{0x00, 0xe1, 0x41, 'k', 0x41, 'b'}
+	require.NoError(t, decoder.UnmarshalMaxMindDB(mmdbdata.NewDecoder(second, 1)))
+
+	store.release(decoder.takeResult())
+	decoder.close()
+	assert.Zero(t, liveValueNodeCount(store),
+		"an overwritten result leaked its reference")
+}
+
+// TestStoreDecoderRejectsDuplicateMapKeys pins that a malformed map with a
+// repeated key fails instead of interning an ambiguous container.
+func TestStoreDecoderRejectsDuplicateMapKeys(t *testing.T) {
+	store := newValueStore()
+	decoder := newStoreDecoder(store)
+
+	// A map with two entries that share the key "k".
+	data := []byte{0xe2, 0x41, 'k', 0x41, 'a', 0x41, 'k', 0x41, 'b'}
+	err := decoder.UnmarshalMaxMindDB(mmdbdata.NewDecoder(data, 0))
+	require.ErrorContains(t, err, `map has duplicate key "k"`)
+
+	decoder.close()
+	assert.Zero(t, liveValueNodeCount(store),
+		"a rejected map leaked its children")
+}
+
+// TestStoreDecoderReleasesChildrenOnContainerErrors pins that the container
+// error paths release every partial child, so a truncated or corrupt source
+// database yields an error instead of a refcount panic on hostile input.
+func TestStoreDecoderReleasesChildrenOnContainerErrors(t *testing.T) {
+	tests := []struct {
+		name string
+		data []byte
+		want []string
+	}{
+		{
+			name: "truncated map value",
+			data: []byte{0xe1, 0x41, 'k', 0x4a},
+			want: []string{`decoding value for map key "k"`, "decoding String at offset 3"},
+		},
+		{
+			name: "truncated slice element",
+			data: []byte{0x02, 0x04, 0x41, 'a', 0x4a},
+			want: []string{"decoding slice index 1", "decoding String at offset 4"},
+		},
+		{
+			name: "unsupported nested type",
+			data: []byte{0xe1, 0x41, 'k', 0x00, 0x09},
+			want: []string{
+				`decoding value for map key "k"`,
+				"unsupported data type Unknown(16) at offset 3",
+			},
+		},
+		{
+			name: "truncated nested map",
+			data: []byte{0xe1, 0x41, 'k', 0xe1, 0x41, 'n', 0x4a},
+			want: []string{
+				`decoding value for map key "k"`,
+				"decoding Map at offset 3",
+				`decoding value for map key "n"`,
+				"decoding String at offset 6",
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := newValueStore()
+			decoder := newStoreDecoder(store)
+			err := decoder.UnmarshalMaxMindDB(mmdbdata.NewDecoder(test.data, 0))
+			require.Error(t, err)
+			for _, want := range test.want {
+				require.ErrorContains(t, err, want)
+			}
+			decoder.close()
+			assert.Zero(t, liveValueNodeCount(store),
+				"the failed decode leaked references")
+		})
+	}
+}
+
+// TestInsertRejectsUnsupportedValues pins the documented Tree-level contract:
+// direct inserts validate the value and a failed insert leaves no live nodes
+// behind.
+func TestInsertRejectsUnsupportedValues(t *testing.T) {
+	negative := mmdbtype.Uint128(*big.NewInt(-1))
+	wide := mmdbtype.Uint128(*new(big.Int).Lsh(big.NewInt(1), 129))
+	tests := []struct {
+		name  string
+		value mmdbtype.DataType
+		want  string
+	}{
+		{
+			name:  "raw pointer",
+			value: mmdbtype.Pointer(7),
+			want:  "unsupported MMDB data type mmdbtype.Pointer",
+		},
+		{
+			name:  "nested pointer",
+			value: mmdbtype.Map{"p": mmdbtype.Pointer(7)},
+			want:  `interning value for map key "p"`,
+		},
+		{
+			name:  "negative Uint128",
+			value: &negative,
+			want:  "cannot intern a negative *mmdbtype.Uint128",
+		},
+		{
+			name:  "oversized Uint128",
+			value: &wide,
+			want:  "cannot intern a *mmdbtype.Uint128 wider than 128 bits",
+		},
+		{
+			name:  "nil Uint128",
+			value: (*mmdbtype.Uint128)(nil),
+			want:  "cannot intern a nil *mmdbtype.Uint128",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			tree := newTestTree(t, "mmdbwriter-insert-rejects")
+			err := tree.Insert(netip.MustParsePrefix("1.2.3.0/24"), test.value)
+			require.ErrorContains(t, err, test.want)
+			assert.Zero(t, liveValueNodeCount(tree.valueStore),
+				"the rejected insert left live nodes behind")
+		})
+	}
+}
+
+// TestInserterResultWithPointerIsRejected pins that validation covers an
+// inserter's result, not only direct inserts.
+func TestInserterResultWithPointerIsRejected(t *testing.T) {
+	tree := newTestTree(t, "mmdbwriter-inserter-pointer")
+	require.NoError(t, tree.Insert(
+		netip.MustParsePrefix("1.2.3.0/24"), mmdbtype.String("old")))
+	err := tree.InsertFunc(
+		netip.MustParsePrefix("1.2.3.0/24"),
+		mmdbtype.String("new"),
+		func(_, _ mmdbtype.DataType) (mmdbtype.DataType, error) {
+			return mmdbtype.Map{"p": mmdbtype.Pointer(7)}, nil
+		},
+	)
+	require.ErrorContains(t, err, "unsupported MMDB data type mmdbtype.Pointer")
+}
+
+// TestReinsertingGetViewsPassesTheAudit pins the store-owned identity branch:
+// re-inserting a view obtained from Get, top-level or nested, is the obvious
+// real-world pattern and must keep the store balanced.
+func TestReinsertingGetViewsPassesTheAudit(t *testing.T) {
+	tree, err := New(Options{
+		IPVersion:               4,
+		IncludeReservedNetworks: true,
+		RefcountAudit:           true,
+	})
+	require.NoError(t, err)
+	require.NoError(t, tree.Insert(netip.MustParsePrefix("1.2.3.0/24"), mmdbtype.Map{
+		"names": mmdbtype.Map{"en": mmdbtype.String("shared")},
+	}))
+
+	_, topLevel := tree.Get(netip.MustParseAddr("1.2.3.4"))
+	require.NoError(t, tree.Insert(netip.MustParsePrefix("2.2.2.0/24"), topLevel),
+		"re-inserting a top-level Get view failed")
+
+	nested := topLevel.(mmdbtype.Map)["names"]
+	require.NoError(t, tree.Insert(netip.MustParsePrefix("3.3.3.0/24"), nested),
+		"re-inserting a nested Get view failed")
+
+	_, got := tree.Get(netip.MustParseAddr("3.3.3.4"))
+	assert.Equal(t, mmdbtype.Map{"en": mmdbtype.String("shared")}, got)
+}
+
+// TestEmptyContainersRoundTrip pins empty values through serialization and
+// load, the one case where node kind is the only discriminator between
+// identical empty payloads.
+func TestEmptyContainersRoundTrip(t *testing.T) {
+	tree := newTestTree(t, "mmdbwriter-empty-containers")
+	value := mmdbtype.Map{
+		"emptyBytes": mmdbtype.Bytes{},
+		"emptyMap":   mmdbtype.Map{},
+		"emptySlice": mmdbtype.Slice{},
+		"emptyStr":   mmdbtype.String(""),
+	}
+	require.NoError(t, tree.Insert(netip.MustParsePrefix("1.2.3.0/24"), value))
+
+	path := writeTempDB(t, tree)
+
+	loaded, err := Load(path, Options{IncludeReservedNetworks: true})
+	require.NoError(t, err)
+	_, got := loaded.Get(netip.MustParseAddr("1.2.3.4"))
+	assert.Equal(t, value, got)
+}
+
+// TestLoadSharesRefsForSharedOffsets pins the decoder's offset cache: source
+// networks that point at the same data record must intern to one shared
+// reference rather than decoding the record once per network.
+func TestLoadSharesRefsForSharedOffsets(t *testing.T) {
+	tree, err := New(Options{
+		DatabaseType:            "mmdbwriter-load-shared-offset",
+		Description:             map[string]string{"en": "Test database"},
+		IncludeReservedNetworks: true,
+		IPVersion:               4,
+		RecordSize:              24,
+	})
+	require.NoError(t, err)
+
+	value := mmdbtype.Map{"shared": mmdbtype.String("value")}
+	require.NoError(t, tree.Insert(netip.MustParsePrefix("1.1.1.0/24"), value))
+	require.NoError(t, tree.Insert(netip.MustParsePrefix("2.2.2.0/24"), value))
+
+	var buf bytes.Buffer
+	_, writeErr := tree.WriteTo(&buf)
+	require.NoError(t, writeErr)
+
+	path := writeTempFile(t, buf.Bytes())
+
+	loaded, err := Load(path, Options{
+		IPVersion:               4,
+		IncludeReservedNetworks: true,
+	})
+	require.NoError(t, err)
+
+	_, first := loaded.getNode(loaded.root, [16]byte{1, 1, 1}, 0)
+	_, second := loaded.getNode(loaded.root, [16]byte{2, 2, 2}, 0)
+	require.Equal(t, recordTypeData, first.recordType)
+	require.Equal(t, recordTypeData, second.recordType)
+	assert.Equal(t, first.value, second.value, "shared offsets should share one reference")
+	assert.EqualValues(t, 2, loaded.valueStore.node(first.value).refCount,
+		"only the two records should reference the shared value after loading")
+	assert.Equal(t, value, loaded.valueStore.materialize(first.value))
 }
 
 func TestTreeInsertAndGet(t *testing.T) {
@@ -1502,18 +2043,11 @@ func TestTreeInsertAndGet(t *testing.T) {
 
 					assert.Equal(t, int64(buf.Len()), numBytes, "number of bytes")
 
-					f, err := os.CreateTemp(t.TempDir(), "mmdbwriter")
-					require.NoError(t, err)
-					defer func() { require.NoError(t, os.Remove(f.Name())) }()
-
 					bufBytes := buf.Bytes()
-
-					_, err = f.Write(bufBytes)
-					require.NoError(t, err)
-					require.NoError(t, f.Close())
+					path := writeTempFile(t, bufBytes)
 
 					loadBuf := &bytes.Buffer{}
-					tree, err = Load(f.Name(),
+					tree, err = Load(path,
 						Options{
 							BuildEpoch:              epochSec,
 							DisableIPv4Aliasing:     test.disableIPv4Aliasing,
@@ -1648,11 +2182,10 @@ func s2ip(v string) *any {
 	return &i
 }
 
-// TestInsertPureFuncEqualResultKeepsReference pins the addRef inside the branch
-// where a pure inserter returns a value equal to the existing one. Without it,
-// releaseResolved drops the record's own reference and unlinks a value a record
-// still points at. It does not pin the branch itself: falling through to
-// dataMap.store instead is behaviorally equivalent.
+// TestInsertPureFuncEqualResultKeepsReference pins the reference accounting
+// when a pure inserter returns a value equal to the existing one: interning
+// the result resolves to the same canonical node and takes the one reference
+// the memo owns, and releaseResolved releases exactly that reference.
 func TestInsertPureFuncEqualResultKeepsReference(t *testing.T) {
 	tree := newTestTree(t, "mmdbwriter-pure-equal")
 
@@ -1667,16 +2200,13 @@ func TestInsertPureFuncEqualResultKeepsReference(t *testing.T) {
 		},
 	))
 
-	require.Len(t, tree.dataMap.data, 1,
+	require.Equal(t, 1, liveValueNodeCount(tree.valueStore),
 		"the retained value was unlinked while a record still referenced it")
-	for _, dmv := range tree.dataMap.data {
-		assert.NotZero(t, dmv.refCount,
-			"the retained value has no references but is still in the tree")
-	}
 
 	require.NoError(t, tree.Insert(
 		netip.MustParsePrefix("2.0.0.0/8"), mmdbtype.String("value")))
-	assert.Len(t, tree.dataMap.data, 1, "an equal value failed to deduplicate")
+	assert.Equal(t, 1, liveValueNodeCount(tree.valueStore),
+		"an equal value failed to deduplicate")
 }
 
 // TestInsertFuncReleasesRedundantStoredReference covers the other uncovered
@@ -1689,16 +2219,14 @@ func TestInsertFuncReleasesRedundantStoredReference(t *testing.T) {
 	prefix := netip.MustParsePrefix("1.0.0.0/8")
 	require.NoError(t, tree.Insert(prefix, mmdbtype.String("shared")))
 
-	require.Len(t, tree.dataMap.data, 1)
-	var stored *dataMapValue
-	for _, value := range tree.dataMap.data {
-		stored = value
-	}
-	require.EqualValues(t, 1, stored.refCount)
+	_, storedRecord := tree.getNode(tree.root, [16]byte{1}, 0)
+	require.Equal(t, recordTypeData, storedRecord.recordType)
+	storedRef := storedRecord.value
+	require.EqualValues(t, 1, tree.valueStore.node(storedRef).refCount)
 
-	// A pointer form is not Equal to the value form, so resolve stores it. The
-	// store deduplicates back onto the record's own value, leaving a reference
-	// that must be released.
+	// A pointer form normalizes to the value form, so interning the result
+	// deduplicates back onto the record's own value, leaving a reference that
+	// must be released.
 	shared := mmdbtype.String("shared")
 	require.NoError(t, tree.InsertFunc(
 		prefix,
@@ -1708,8 +2236,9 @@ func TestInsertFuncReleasesRedundantStoredReference(t *testing.T) {
 		},
 	))
 
-	assert.Len(t, tree.dataMap.data, 1)
-	assert.EqualValues(t, 1, stored.refCount, "a redundant stored reference leaked")
+	assert.Equal(t, 1, liveValueNodeCount(tree.valueStore))
+	assert.EqualValues(t, 1, tree.valueStore.node(storedRef).refCount,
+		"a redundant stored reference leaked")
 }
 
 // TestInsertPureFuncMatchesInsertFuncOutput is the differential that most
@@ -1771,7 +2300,7 @@ func TestInsertPureFuncNilResultRemovesRecords(t *testing.T) {
 		inserter.Remove,
 	))
 
-	assert.Empty(t, tree.dataMap.data, "removed values were not released")
+	assert.Zero(t, liveValueNodeCount(tree.valueStore), "removed values were not released")
 }
 
 // TestInsertPureFuncCreatesPathFromEmptySpace covers the compressed-path branch
@@ -1813,15 +2342,13 @@ func writeMetadataPatchedDB(t *testing.T, key string, value byte) string {
 	dbBytes := append([]byte(nil), buf.Bytes()...)
 	i := bytes.LastIndex(dbBytes, []byte(key))
 	require.GreaterOrEqual(t, i, 0)
+	// A uint16 with a one-byte payload has control byte 0xa1. Verify it so a
+	// metadata layout change fails here instead of patching the wrong byte.
+	require.Equal(t, byte(0xa1), dbBytes[i+len(key)],
+		"metadata value for %q is no longer a one-byte uint16", key)
 	dbBytes[i+len(key)+1] = value
 
-	f, err := os.CreateTemp(t.TempDir(), "mmdbwriter-metadata-*.mmdb")
-	require.NoError(t, err)
-	_, err = f.Write(dbBytes)
-	require.NoError(t, err)
-	require.NoError(t, f.Close())
-
-	return f.Name()
+	return writeTempFile(t, dbBytes)
 }
 
 // TestLoadRejectsUnsupportedMetadataDimensions covers the metadata validation
@@ -2028,13 +2555,13 @@ func TestInsertNilValueRemovesRecord(t *testing.T) {
 
 	prefix := netip.MustParsePrefix("1.0.0.0/8")
 	require.NoError(t, tree.Insert(prefix, mmdbtype.String("value")))
-	require.Len(t, tree.dataMap.data, 1)
+	require.Equal(t, 1, liveValueNodeCount(tree.valueStore))
 
 	require.NoError(t, tree.Insert(prefix, nil))
 
 	_, value := tree.Get(netip.MustParseAddr("1.2.3.4"))
 	assert.Nil(t, value)
-	assert.Empty(t, tree.dataMap.data, "the removed value was not released")
+	assert.Zero(t, liveValueNodeCount(tree.valueStore), "the removed value was not released")
 }
 
 // TestInserterNilResultOverEmptySpaceIsNoOp covers the guard for an inserter
@@ -2086,7 +2613,7 @@ func TestInserterNilResultOverEmptySpaceIsNoOp(t *testing.T) {
 
 			_, value := tree.Get(netip.MustParseAddr("9.9.9.1"))
 			assert.Nil(t, value)
-			assert.Empty(t, tree.dataMap.data)
+			assert.Zero(t, liveValueNodeCount(tree.valueStore))
 
 			var buf bytes.Buffer
 			_, writeErr := tree.WriteTo(&buf)
@@ -2095,9 +2622,9 @@ func TestInserterNilResultOverEmptySpaceIsNoOp(t *testing.T) {
 	}
 }
 
-// TestInsertReportsHashErrorFromIdentityPath covers the hash failure returned
-// through storeWithIdentity, which is the path a plain Insert takes.
-func TestInsertReportsHashErrorFromIdentityPath(t *testing.T) {
+// TestInsertReportsNilNestedValueError covers the intern failure for a nil
+// nested value, which is the path a plain Insert takes.
+func TestInsertReportsNilNestedValueError(t *testing.T) {
 	tree := newTestTree(t, "mmdbwriter-identity-error")
 
 	err := tree.Insert(
@@ -2106,16 +2633,40 @@ func TestInsertReportsHashErrorFromIdentityPath(t *testing.T) {
 	)
 
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), `hashing map key "u"`)
-	assert.Contains(t, err.Error(), "cannot hash a nil *mmdbtype.Uint128")
+	assert.Contains(t, err.Error(), `interning value for map key "u"`)
+	assert.Contains(t, err.Error(), "cannot intern a nil *mmdbtype.Uint128")
 	// A Map has an identity key, so the failure happens after the identity
-	// lookup and must not leave anything cached.
-	assert.Empty(t, tree.dataMap.valueByDataIdentity)
-	assert.Empty(t, tree.dataMap.data)
+	// lookup and must not leave anything cached or retained.
+	assert.Empty(t, tree.valueStore.callerByIdentity)
+	assert.Zero(t, liveValueNodeCount(tree.valueStore))
 }
 
 // newTestTree builds the tree shape most tests want. Tests that depend on a
 // particular option set it explicitly instead.
+// writeTempDB serializes the tree to a file in the test's temp directory and
+// returns its path. The directory is removed when the test ends.
+func writeTempDB(t *testing.T, tree *Tree) string {
+	t.Helper()
+	file, err := os.CreateTemp(t.TempDir(), "mmdbwriter-*.mmdb")
+	require.NoError(t, err)
+	_, err = tree.WriteTo(file)
+	require.NoError(t, err)
+	require.NoError(t, file.Close())
+	return file.Name()
+}
+
+// writeTempFile writes raw database bytes to a file in the test's temp
+// directory and returns its path.
+func writeTempFile(t *testing.T, data []byte) string {
+	t.Helper()
+	file, err := os.CreateTemp(t.TempDir(), "mmdbwriter-*.mmdb")
+	require.NoError(t, err)
+	_, err = file.Write(data)
+	require.NoError(t, err)
+	require.NoError(t, file.Close())
+	return file.Name()
+}
+
 func newTestTree(t *testing.T, databaseType string) *Tree {
 	t.Helper()
 
