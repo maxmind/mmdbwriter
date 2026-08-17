@@ -1,6 +1,7 @@
 package mmdbwriter
 
 import (
+	"errors"
 	"fmt"
 	"net/netip"
 
@@ -345,10 +346,7 @@ func (iRec *insertRecord) insertRecord(
 	switch r.recordType {
 	case recordTypeNode:
 		err := iRec.insertNode(r.nodeIndex, newDepth, splitDepth)
-		if err != nil {
-			return err
-		}
-		return iRec.maybeMergeChildren(r)
+		return iRec.mergeChildrenAfterInsert(r, err)
 	case recordTypeFixedNode:
 		return iRec.insertNode(r.nodeIndex, newDepth, splitDepth)
 	case recordTypePath:
@@ -416,10 +414,7 @@ func (iRec *insertRecord) insertRecord(
 		r.value = nilValueRef
 		r.recordType = recordTypeNode
 		err := iRec.insertNode(r.nodeIndex, newDepth, splitDepth)
-		if err != nil {
-			return err
-		}
-		return iRec.maybeMergeChildren(r)
+		return iRec.mergeChildrenAfterInsert(r, err)
 	case recordTypeReserved:
 		if iRec.prefixLen >= newDepth {
 			return newReservedNetworkError(iRec.ip, newDepth, iRec.prefixLen, iRec.tree.treeDepth)
@@ -438,6 +433,17 @@ func (iRec *insertRecord) insertRecord(
 	default:
 		return fmt.Errorf("inserting into record type %d is not implemented", r.recordType)
 	}
+}
+
+func (iRec *insertRecord) mergeChildrenAfterInsert(r *record, insertErr error) error {
+	mergeErr := iRec.maybeMergeChildren(r)
+	if insertErr == nil {
+		return mergeErr
+	}
+	if mergeErr == nil {
+		return insertErr
+	}
+	return errors.Join(insertErr, mergeErr)
 }
 
 func (iRec *insertRecord) maybeMergeChildren(r *record) error {
