@@ -93,7 +93,7 @@ type Options struct {
 	// direct-value fast path. Passing `inserter.Replace` explicitly has the same
 	// behavior but skips that optimization.
 	//
-	// An Inserter must not modify either argument. The existing value is a
+	// An Inserter must not modify either value argument. The existing value is a
 	// shared, read-only view. It is equal to, but not necessarily the same
 	// object as, the value originally inserted. The new value is the value
 	// passed to the insert call, or a shared view of the decoded record
@@ -102,10 +102,20 @@ type Options struct {
 	// every covered record. Any non-nil returned value becomes tree-owned and
 	// must not be modified after return.
 	//
+	// The function also receives metadata for the insertion and for the record
+	// containing the existing value as it stood before the current insertion
+	// began mutating it. During Load, InsertedNetwork is the normalized network
+	// of the source record. During a range insert, it is each individual prefix
+	// into which the range decomposes.
+	//
 	// Only direct inserts and inserter results are validated, so the function
 	// can receive an unsupported input value, such as a raw mmdbtype.Pointer,
-	// and must replace or discard it. If the function fails partway through
-	// the covered records, the records already visited keep their new values.
+	// and must replace or discard it. If the function returns an error partway
+	// through the covered records, the records already visited keep their new
+	// values. A failure before any result is installed leaves values, record
+	// extents, and lookups logically unchanged, although internal representation
+	// and arena allocation are not restored. After a partial success, installed
+	// equal values may coalesce, so a retry can observe merged extents.
 	Inserter inserter.Func
 }
 
@@ -239,8 +249,9 @@ func metadataDimension(name string, value uint) (int, error) {
 // stored value.
 // During the load, a cache holds one reference per distinct offset in the
 // source data section. Load releases the cache before it returns. A
-// non-nil Options.Inserter also receives a materialized view of each
-// decoded record. The inserter must treat its arguments as immutable and must
+// non-nil Options.Inserter also receives a materialized view of each decoded
+// record and metadata whose InsertedNetwork is the normalized source-record
+// network. The inserter must treat its value arguments as immutable and must
 // copy a value before modifying it.
 func Load(path string, opts Options) (*Tree, error) {
 	db, err := maxminddb.Open(path)
@@ -362,23 +373,27 @@ func (t *Tree) Insert(prefix netip.Prefix, value mmdbtype.DataType) error {
 }
 
 // InsertFunc will insert the output of the function passed to it. The arguments
-// passed to the function are the existing value in the record and the new value
-// passed to InsertFunc. The inserter function should return the
-// mmdbtype.DataType to be inserted. In all cases, a nil value means an empty
-// record.
+// passed to the function are the existing value in the record, the new value
+// passed to InsertFunc, and metadata for the insertion and existing record. The
+// inserter function should return the mmdbtype.DataType to be inserted. In all
+// cases, a nil value means an empty record.
 //
-// You must never modify arguments passed to the function as values may be
-// shared with other records. If you want a copy of the mmdbtype.DataType to
-// modify, call the Copy method on it, which will make a deep copy. This isn't
-// done automatically before calling the function as not all functions will
-// require the record to be copied and there is a non-trivial performance
-// impact.
+// You must never modify either value argument passed to the function, as
+// values may be shared with other records. If you want a copy of the
+// mmdbtype.DataType to modify, call the Copy method on it, which will make a
+// deep copy. This isn't done automatically before calling the function, as not
+// all functions require the record to be copied and there is a non-trivial
+// performance impact.
 //
 // The function is called separately for every covered record. Any
 // non-nil value it returns becomes tree-owned and must not be modified after the
-// function returns. A nil insertFunc returns an error. If the function fails
-// partway through the covered records, the call returns the error but the
-// records already visited keep their new values.
+// function returns. A nil insertFunc returns an error. If the function
+// returns an error partway through the covered records, the call returns the
+// error but the records already visited keep their new values. A failure
+// before any result is installed leaves values, record boundaries, and lookups
+// logically unchanged. Internal representation and arena allocation are not
+// restored. After a partial success, installed equal values may coalesce, so a
+// retry can observe merged records.
 //
 // This is not safe to call from multiple threads.
 func (t *Tree) InsertFunc(
@@ -396,7 +411,9 @@ func (t *Tree) InsertFunc(
 // depend only on its arguments. It must not depend on invocation count, order,
 // or external mutable state. Repeated argument pairs may be memoized during the
 // insert, and a non-nil result may be shared by multiple records. A nil
-// insertFunc returns an error.
+// insertFunc returns an error. It supplies the zero inserter.Metadata because
+// the memo is keyed by the existing value alone; varying metadata would make
+// that memo unsound.
 //
 // This is not safe to call from multiple threads.
 func (t *Tree) InsertPureFunc(
@@ -675,8 +692,11 @@ func (t *Tree) InsertRange(
 }
 
 // InsertRangeFunc is the same as InsertFunc, except it will insert all subnets
-// within the range of IPs specified by `[start,end]`. A nil insertFunc returns
-// an error.
+// within the range of IPs specified by `[start,end]`. The metadata's
+// InsertedNetwork is the individual subnet being inserted, not the whole
+// range. Subnets are inserted sequentially, so metadata for a later subnet
+// reflects changes made by earlier subnets in the same call. A nil insertFunc
+// returns an error.
 func (t *Tree) InsertRangeFunc(
 	start netip.Addr,
 	end netip.Addr,
@@ -692,7 +712,7 @@ func (t *Tree) InsertRangeFunc(
 // InsertRangePureFunc is like InsertPureFunc, except it inserts all subnets
 // within the range of IPs specified by `[start,end]`. Repeated argument pairs
 // may be memoized across the entire range, not just within one of its subnets.
-// A nil insertFunc returns an error.
+// It supplies the zero inserter.Metadata. A nil insertFunc returns an error.
 func (t *Tree) InsertRangePureFunc(
 	start netip.Addr,
 	end netip.Addr,

@@ -22,6 +22,18 @@ import (
 // not identify the network that established an existing value. A policy that
 // needs that provenance must store it in the value.
 //
+// For a range insert, each decomposed prefix is a separate insertion. Metadata
+// for a later prefix therefore reflects changes made by earlier prefixes in the
+// same range call.
+//
+// Record boundaries follow the tree's history. A wire-equal insertion can split
+// a record and immediately remerge it, so a later insertion sees the merged
+// record. An overlapping earlier insertion can leave fragments, and Metadata
+// reports the fragment it reaches. Empty records work the same way. An
+// insertion into a fresh tree can reach a wide empty record, and a neighboring
+// earlier insertion can split the same address space into narrower empty
+// records.
+//
 // Fields may be added in later releases. Construct Metadata values with keyed
 // literals.
 type Metadata struct {
@@ -113,12 +125,21 @@ func (m Metadata) ExistingNetwork() netip.Prefix {
 // Tree.InsertRangeFunc. Tree.InsertPureFunc and Tree.InsertRangePureFunc may
 // memoize repeated argument pairs and share a non-nil result across records.
 //
-// A Func must not modify either argument. The existing value is a shared,
+// metadata describes the insertion and the current tree record represented by
+// existingValue. For a range, InsertedNetwork is the individual decomposed
+// prefix. During Load, it is the normalized source-record network. The pure
+// insertion methods pass the zero Metadata because their memo is keyed only by
+// the existing value.
+//
+// A Func must not modify either value argument. The existing value is a shared,
 // read-only view of tree storage; the new value is the value passed to the
 // insert call, or a shared view of the decoded record during a load. Call
 // Copy on a value to get a private copy you can modify. Any non-nil returned
 // value becomes tree-owned and must not be modified after the function
 // returns.
+//
+// A panic propagates. The insertion methods' guarantees for callbacks that
+// return errors do not apply to a panic.
 //
 // Only direct inserts and a Func's result are validated, so a Func can
 // receive an unsupported input value, such as a raw mmdbtype.Pointer or an
