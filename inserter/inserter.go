@@ -10,9 +10,101 @@ package inserter
 import (
 	"fmt"
 	"maps"
+	"net/netip"
 
+	"github.com/maxmind/mmdbwriter/v2/internal/treeaddr"
 	"github.com/maxmind/mmdbwriter/v2/mmdbtype"
 )
+
+// Metadata describes the insertion an inserter is resolving, and the record
+// that insertion is about to change. That record is the one a Tree.Get for an
+// address in it would have returned just before this insertion. Metadata does
+// not identify the network that established an existing value. A policy that
+// needs that provenance must store it in the value.
+//
+// Fields may be added in later releases. Construct Metadata values with keyed
+// literals.
+type Metadata struct {
+	// Force keyed literals and keep Metadata non-comparable, reserving the
+	// right to add fields of any type.
+	_ [0]func()
+
+	// InsertedNetwork is the network being inserted. For a range insert, it is
+	// the individual prefix into which the range decomposed. During Load, it is
+	// the normalized network of the source record. It is the zero Prefix for
+	// Tree.InsertPureFunc and Tree.InsertRangePureFunc.
+	InsertedNetwork netip.Prefix
+
+	// ExistingDepth is the extent of the record holding the existing value, in
+	// tree bits from the root, as that record stood immediately before this
+	// insertion began mutating it. It reflects earlier splits and merges but no
+	// preparatory split made by the current insertion. Its range is
+	// [0, TreeDepth]. An IPv4 network in an IPv6 tree is 96 bits deeper than its
+	// address-family prefix length, so compare ExistingDepth with
+	// InsertedDepth(), not InsertedNetwork.Bits(). It is 0 for the pure methods.
+	ExistingDepth int
+
+	// ExistingAddr is the tree-space address of the existing record, zeroed at
+	// and below ExistingDepth. A 32-bit tree uses bytes 0-3. A 128-bit tree uses
+	// all 16 bytes, with IPv4 addresses in bytes 12-15. It is a copy and remains
+	// valid after insertion returns. Most callers should use ExistingNetwork.
+	ExistingAddr [16]byte
+
+	// TreeDepth is 32 for an IPv4 tree and 128 for an IPv6 tree. It is needed
+	// to interpret ExistingAddr's layout.
+	TreeDepth int
+}
+
+// InsertedDepth returns InsertedNetwork's extent in tree bits from the root.
+// It adds 96 for an IPv4 network in an IPv6 tree. It returns 0 for the pure
+// methods and for an invalid InsertedNetwork, an unsupported TreeDepth, or a
+// non-IPv4 insertion in a 32-bit tree. It does not read ExistingDepth, so an
+// out-of-range ExistingDepth does not affect the result.
+func (m Metadata) InsertedDepth() int {
+	if !m.InsertedNetwork.IsValid() ||
+		(m.TreeDepth != 32 && m.TreeDepth != 128) ||
+		(m.TreeDepth == 32 && !m.InsertedNetwork.Addr().Is4()) {
+		return 0
+	}
+
+	depth := m.InsertedNetwork.Bits()
+	if m.TreeDepth == 128 && m.InsertedNetwork.Addr().Is4() {
+		depth += 96
+	}
+	return depth
+}
+
+// ExistingNetwork returns the network of the record that held the existing
+// value, as that record stood just before this insertion. The result follows
+// the inserted network's address family, as Tree.Get follows its query. For an
+// IPv4 insert into an IPv6 tree, records shallower than the IPv4 subtree are
+// returned in IPv6 form.
+//
+// ExistingNetwork returns the zero Prefix for the pure methods, an invalid
+// InsertedNetwork, an unsupported TreeDepth, a non-IPv4 insertion in a 32-bit
+// tree, or an ExistingDepth outside [0, TreeDepth]. Other inconsistent
+// hand-built combinations are unspecified.
+func (m Metadata) ExistingNetwork() netip.Prefix {
+	if !m.InsertedNetwork.IsValid() ||
+		(m.TreeDepth != 32 && m.TreeDepth != 128) ||
+		(m.TreeDepth == 32 && !m.InsertedNetwork.Addr().Is4()) ||
+		m.ExistingDepth < 0 || m.ExistingDepth > m.TreeDepth {
+		return netip.Prefix{}
+	}
+
+	as4 := m.TreeDepth == 32 ||
+		(m.InsertedNetwork.Addr().Is4() && m.ExistingDepth >= 96)
+	prefix, err := treeaddr.PrefixFromInsertIP(
+		m.ExistingAddr,
+		m.ExistingDepth,
+		m.TreeDepth,
+		as4,
+	)
+	if err != nil {
+		return netip.Prefix{}
+	}
+	return prefix
+}
 
 // Func resolves an insertion into a tree record. existingValue is nil for an
 // empty record, and newValue is the value passed to the insert method. Returning
