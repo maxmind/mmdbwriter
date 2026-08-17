@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+
+	"github.com/maxmind/mmdbwriter/v2/internal/treeaddr"
 )
 
 // errNilInserterFunc is returned by the insertion methods that take an inserter
@@ -103,42 +105,10 @@ func newReservedNetworkError(
 }
 
 func prefixFromInsertIP(ip [16]byte, prefixLen, treeDepth int) (netip.Prefix, error) {
-	// Reverse Tree.addrInsertIP's byte layout so error prefixes are reported in
-	// the same address family callers inserted.
-	if treeDepth == 32 {
-		addr := netip.AddrFrom4([4]byte{ip[0], ip[1], ip[2], ip[3]})
-		return prefixFromAddr(addr, prefixLen)
-	}
-
-	if isIPv4SubtreeIP(ip) && prefixLen >= 96 {
-		addr := netip.AddrFrom4([4]byte{ip[12], ip[13], ip[14], ip[15]})
-		return prefixFromAddr(addr, prefixLen-96)
-	}
-
-	addr := netip.AddrFrom16(ip)
-	return prefixFromAddr(addr, prefixLen)
-}
-
-func prefixFromAddr(addr netip.Addr, prefixLen int) (netip.Prefix, error) {
-	prefix, err := addr.Prefix(prefixLen)
-	if err != nil {
-		return netip.Prefix{}, fmt.Errorf(
-			"creating prefix from addr %s and prefix length %d: %w",
-			addr,
-			prefixLen,
-			err,
-		)
-	}
-	return prefix, nil
-}
-
-func isIPv4SubtreeIP(ip [16]byte) bool {
-	for _, b := range ip[:12] {
-		if b != 0 {
-			return false
-		}
-	}
-	return true
+	// Keep the error path's existing family inference. Tree addresses do not
+	// encode an address family, so other callers supply their own decision.
+	as4 := treeDepth == 32 || (treeaddr.IsIPv4SubtreeIP(ip) && prefixLen >= 96)
+	return treeaddr.PrefixFromInsertIP(ip, prefixLen, treeDepth, as4)
 }
 
 func (r *ReservedNetworkError) Error() string {
