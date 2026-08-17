@@ -478,7 +478,8 @@ func (t *Tree) insertPrepared(
 	ip, prefixLen := t.prefixInsertIP(prefix)
 	iRec.ip = ip
 	iRec.prefixLen = prefixLen
-	return iRec.insertNode(t.root, 0)
+	iRec.network = prefix
+	return iRec.insertNode(t.root, 0, 0)
 }
 
 func (t *Tree) newInsertRecord(

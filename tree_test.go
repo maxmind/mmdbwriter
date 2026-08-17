@@ -165,7 +165,7 @@ func TestPanickingInserterReleasesItsReferences(t *testing.T) {
 		tree.InsertPureFunc(
 			netip.MustParsePrefix("1.0.0.0/24"),
 			mmdbtype.Map{"name": mmdbtype.String("new")},
-			func(existing, _ mmdbtype.DataType) (mmdbtype.DataType, error) {
+			func(existing, _ mmdbtype.DataType, _ inserter.Metadata) (mmdbtype.DataType, error) {
 				calls++
 				if calls == 2 {
 					panic("inserter failure")
@@ -203,7 +203,7 @@ func TestPanickingRangeInserterReleasesItsReferences(t *testing.T) {
 			netip.MustParseAddr("1.0.0.0"),
 			netip.MustParseAddr("1.0.0.255"),
 			mmdbtype.Map{"name": mmdbtype.String("new")},
-			func(existing, _ mmdbtype.DataType) (mmdbtype.DataType, error) {
+			func(existing, _ mmdbtype.DataType, _ inserter.Metadata) (mmdbtype.DataType, error) {
 				calls++
 				if calls == 2 {
 					panic("inserter failure")
@@ -367,7 +367,7 @@ func TestTreeInsertPureFuncMemoizesDistinctExistingValues(t *testing.T) {
 	err = tree.InsertPureFunc(
 		netip.MustParsePrefix("1.2.3.0/24"),
 		mmdbtype.String("new"),
-		func(existing, newValue mmdbtype.DataType) (mmdbtype.DataType, error) {
+		func(existing, newValue mmdbtype.DataType, _ inserter.Metadata) (mmdbtype.DataType, error) {
 			calls[existing.(mmdbtype.String)]++
 			return newValue, nil
 		},
@@ -413,7 +413,7 @@ func TestTreeInsertPureFuncReleasesMemoAfterPartialError(t *testing.T) {
 	err = tree.InsertPureFunc(
 		netip.MustParsePrefix("1.2.3.0/24"),
 		mmdbtype.String("new"),
-		func(existing, _ mmdbtype.DataType) (mmdbtype.DataType, error) {
+		func(existing, _ mmdbtype.DataType, _ inserter.Metadata) (mmdbtype.DataType, error) {
 			if existing == mmdbtype.String("second") {
 				return nil, insertErr
 			}
@@ -451,7 +451,7 @@ func TestTreeInsertFuncEvaluatesOrdinaryFuncForEveryRecord(t *testing.T) {
 	err = tree.InsertFunc(
 		netip.MustParsePrefix("1.2.3.0/24"),
 		mmdbtype.String("new"),
-		inserter.Func(func(_, _ mmdbtype.DataType) (mmdbtype.DataType, error) {
+		inserter.Func(func(_, _ mmdbtype.DataType, _ inserter.Metadata) (mmdbtype.DataType, error) {
 			calls++
 			//nolint:gosec // calls is bounded by the four covered records
 			return mmdbtype.Uint32(calls), nil
@@ -541,7 +541,7 @@ func TestTreeInsertFuncErrorDoesNotMutateEmptySiblingRecord(t *testing.T) {
 	err = tree.InsertFunc(
 		netip.MustParsePrefix("1.2.2.0/24"),
 		mmdbtype.String("value"),
-		inserter.Func(func(_, _ mmdbtype.DataType) (mmdbtype.DataType, error) {
+		inserter.Func(func(_, _ mmdbtype.DataType, _ inserter.Metadata) (mmdbtype.DataType, error) {
 			return nil, insertErr
 		}),
 	)
@@ -572,7 +572,7 @@ func TestTreeInsertFuncErrorLeavesExistingRecordUnchanged(t *testing.T) {
 	err = tree.InsertFunc(
 		prefix,
 		mmdbtype.Map{"extra": mmdbtype.String("value")},
-		inserter.Func(func(_, _ mmdbtype.DataType) (mmdbtype.DataType, error) {
+		inserter.Func(func(_, _ mmdbtype.DataType, _ inserter.Metadata) (mmdbtype.DataType, error) {
 			return nil, insertErr
 		}),
 	)
@@ -626,9 +626,11 @@ func TestTreeInsertFuncReturnsErrorForNilUint128Result(t *testing.T) {
 			err = tree.InsertFunc(
 				prefix,
 				nil,
-				inserter.Func(func(_, _ mmdbtype.DataType) (mmdbtype.DataType, error) {
-					return test.result(nilUint128), nil
-				}),
+				inserter.Func(
+					func(_, _ mmdbtype.DataType, _ inserter.Metadata) (mmdbtype.DataType, error) {
+						return test.result(nilUint128), nil
+					},
+				),
 			)
 			require.EqualError(t, err, test.expectedError)
 
@@ -873,7 +875,7 @@ func TestTreeInsertRangePureFuncMemoizesAcrossSubnets(t *testing.T) {
 		netip.MustParseAddr("1.2.3.1"),
 		netip.MustParseAddr("1.2.3.254"),
 		newValue,
-		func(existing, replacement mmdbtype.DataType) (mmdbtype.DataType, error) {
+		func(existing, replacement mmdbtype.DataType, _ inserter.Metadata) (mmdbtype.DataType, error) {
 			calls++
 			assert.Equal(t, oldValue, existing)
 			return replacement, nil
@@ -1106,7 +1108,7 @@ func TestInsertFuncReceivesCallerValueUninterned(t *testing.T) {
 	require.NoError(t, tree.InsertFunc(
 		netip.MustParsePrefix("1.2.3.0/24"),
 		input,
-		func(_, newValue mmdbtype.DataType) (mmdbtype.DataType, error) {
+		func(_, newValue mmdbtype.DataType, _ inserter.Metadata) (mmdbtype.DataType, error) {
 			require.Equal(t, input, newValue)
 			return mmdbtype.String("value"), nil
 		},
@@ -1305,7 +1307,7 @@ func TestInserterResultWithPointerIsRejected(t *testing.T) {
 	err := tree.InsertFunc(
 		netip.MustParsePrefix("1.2.3.0/24"),
 		mmdbtype.String("new"),
-		func(_, _ mmdbtype.DataType) (mmdbtype.DataType, error) {
+		func(_, _ mmdbtype.DataType, _ inserter.Metadata) (mmdbtype.DataType, error) {
 			return mmdbtype.Map{"p": mmdbtype.Pointer(7)}, nil
 		},
 	)
@@ -2146,7 +2148,7 @@ func TestInsertFunc_RemovalAndLaterInsert(t *testing.T) {
 	err = tree.InsertFunc(
 		removedNetwork,
 		nil,
-		inserter.Func(func(v, _ mmdbtype.DataType) (mmdbtype.DataType, error) {
+		inserter.Func(func(v, _ mmdbtype.DataType, _ inserter.Metadata) (mmdbtype.DataType, error) {
 			return v, nil
 		}),
 	)
@@ -2195,7 +2197,7 @@ func TestInsertPureFuncEqualResultKeepsReference(t *testing.T) {
 	require.NoError(t, tree.InsertPureFunc(
 		prefix,
 		mmdbtype.String("value"),
-		func(existingValue, _ mmdbtype.DataType) (mmdbtype.DataType, error) {
+		func(existingValue, _ mmdbtype.DataType, _ inserter.Metadata) (mmdbtype.DataType, error) {
 			return existingValue, nil
 		},
 	))
@@ -2231,7 +2233,7 @@ func TestInsertFuncReleasesRedundantStoredReference(t *testing.T) {
 	require.NoError(t, tree.InsertFunc(
 		prefix,
 		mmdbtype.String("ignored"),
-		func(_, _ mmdbtype.DataType) (mmdbtype.DataType, error) {
+		func(_, _ mmdbtype.DataType, _ inserter.Metadata) (mmdbtype.DataType, error) {
 			return &shared, nil
 		},
 	))

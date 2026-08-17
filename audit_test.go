@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/maxmind/mmdbwriter/v2/inserter"
 	"github.com/maxmind/mmdbwriter/v2/mmdbtype"
 )
 
@@ -131,7 +132,7 @@ func TestFailedInsertsPassTheAudit(t *testing.T) {
 				return tree.InsertPureFunc(
 					netip.MustParsePrefix("1.0.0.0/24"),
 					mmdbtype.String("new"),
-					func(_, newValue mmdbtype.DataType) (mmdbtype.DataType, error) {
+					func(_, newValue mmdbtype.DataType, _ inserter.Metadata) (mmdbtype.DataType, error) {
 						calls++
 						if calls == 2 {
 							return nil, errors.New("inserter failure")
@@ -149,7 +150,7 @@ func TestFailedInsertsPassTheAudit(t *testing.T) {
 				return tree.InsertFunc(
 					netip.MustParsePrefix("1.0.0.0/24"),
 					mmdbtype.String("new"),
-					func(_, _ mmdbtype.DataType) (mmdbtype.DataType, error) {
+					func(_, _ mmdbtype.DataType, _ inserter.Metadata) (mmdbtype.DataType, error) {
 						return mmdbtype.Map{"p": mmdbtype.Pointer(7)}, nil
 					},
 				)

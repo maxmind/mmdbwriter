@@ -123,15 +123,19 @@ func (m Metadata) ExistingNetwork() netip.Prefix {
 // Only direct inserts and a Func's result are validated, so a Func can
 // receive an unsupported input value, such as a raw mmdbtype.Pointer or an
 // out-of-range mmdbtype.Uint128, and must replace or discard it.
-type Func func(existingValue, newValue mmdbtype.DataType) (mmdbtype.DataType, error)
+type Func func(
+	existingValue,
+	newValue mmdbtype.DataType,
+	metadata Metadata,
+) (mmdbtype.DataType, error)
 
 // Remove removes any records for the network being inserted.
-func Remove(_, _ mmdbtype.DataType) (mmdbtype.DataType, error) {
+func Remove(_, _ mmdbtype.DataType, _ Metadata) (mmdbtype.DataType, error) {
 	return nil, nil
 }
 
 // Replace replaces the existing value with the new value.
-func Replace(_, newValue mmdbtype.DataType) (mmdbtype.DataType, error) {
+func Replace(_, newValue mmdbtype.DataType, _ Metadata) (mmdbtype.DataType, error) {
 	return newValue, nil
 }
 
@@ -141,7 +145,11 @@ func Replace(_, newValue mmdbtype.DataType) (mmdbtype.DataType, error) {
 //
 // Both the new and existing value must be a Map. An error will be returned
 // otherwise.
-func TopLevelMerge(existingValue, newValue mmdbtype.DataType) (mmdbtype.DataType, error) {
+func TopLevelMerge(
+	existingValue,
+	newValue mmdbtype.DataType,
+	_ Metadata,
+) (mmdbtype.DataType, error) {
 	newMap, ok := newValue.(mmdbtype.Map)
 	if !ok {
 		return nil, fmt.Errorf(
@@ -174,7 +182,11 @@ func TopLevelMerge(existingValue, newValue mmdbtype.DataType) (mmdbtype.DataType
 // merged recursively. Other values will be replaced by the new value. The
 // returned value may be the existing container or retain unchanged nested
 // containers from it. The result must therefore be treated as immutable.
-func DeepMerge(existingValue, newValue mmdbtype.DataType) (mmdbtype.DataType, error) {
+func DeepMerge(
+	existingValue,
+	newValue mmdbtype.DataType,
+	_ Metadata,
+) (mmdbtype.DataType, error) {
 	value, _, err := deepMerge(existingValue, newValue)
 	return value, err
 }

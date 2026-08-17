@@ -2,7 +2,9 @@ package mmdbwriter
 
 import (
 	"fmt"
+	"net/netip"
 
+	"github.com/maxmind/mmdbwriter/v2/inserter"
 	"github.com/maxmind/mmdbwriter/v2/mmdbtype"
 )
 
@@ -47,9 +49,9 @@ const (
 )
 
 // insertRecord carries the state for one insert call. Every field except ip,
-// prefixLen, and the memo fields is fixed for the life of the value;
-// insertPrepared re-targets ip and prefixLen for each subnet of a range, and
-// resolve updates the memo as it goes.
+// prefixLen, network, and the memo fields is fixed for the life of the value;
+// insertPrepared re-targets ip, prefixLen, and network for each subnet of a
+// range, and resolve updates the memo as it goes.
 //
 // The memo is only used for pure inserters. It is keyed on the existing value
 // alone, which is sound only because inserter and value are fixed: reusing an
@@ -62,7 +64,7 @@ const (
 // memoFirst and memoResult hold the single entry until a second distinct key
 // promotes both into memo, which clears them.
 type insertRecord struct {
-	inserter func(existingValue, newValue mmdbtype.DataType) (mmdbtype.DataType, error)
+	inserter inserter.Func
 
 	store        *valueStore
 	tree         *Tree
@@ -70,6 +72,7 @@ type insertRecord struct {
 
 	ip        [16]byte
 	prefixLen int
+	network   netip.Prefix
 
 	recordType recordType
 	value      valueRef
@@ -93,9 +96,12 @@ type insertRecord struct {
 // it. With no inserter the reference interned when the insert began is reused
 // directly; the store canonicalizes by content, so an equal existing value is
 // the same reference and replaceDataRecord makes the assignment a no-op.
-func (iRec *insertRecord) resolveValue(existing valueRef) (valueRef, bool, error) {
+func (iRec *insertRecord) resolveValue(
+	existing valueRef,
+	existingDepth int,
+) (valueRef, bool, error) {
 	if iRec.inserter != nil {
-		return iRec.resolve(existing)
+		return iRec.resolve(existing, existingDepth)
 	}
 	return iRec.value, false, nil
 }
@@ -104,7 +110,10 @@ func (iRec *insertRecord) resolveValue(existing valueRef) (valueRef, bool, error
 // inserter's memo owns one reference to each non-nil result until insertion
 // finishes. An ordinary Func is not memoized, so a newly interned reference is
 // transferred directly to the target record.
-func (iRec *insertRecord) resolve(existing valueRef) (valueRef, bool, error) {
+func (iRec *insertRecord) resolve(
+	existing valueRef,
+	existingDepth int,
+) (valueRef, bool, error) {
 	if iRec.inserterPure {
 		if iRec.memo != nil {
 			if value, ok := iRec.memo[existing]; ok {
@@ -114,7 +123,20 @@ func (iRec *insertRecord) resolve(existing valueRef) (valueRef, bool, error) {
 			return iRec.memoResult, false, nil
 		}
 	}
-	result, err := iRec.inserter(iRec.store.materialize(existing), iRec.valueView)
+	metadata := inserter.Metadata{}
+	if !iRec.inserterPure {
+		metadata = inserter.Metadata{
+			InsertedNetwork: iRec.network,
+			ExistingDepth:   existingDepth,
+			ExistingAddr:    maskedTreeAddr(iRec.ip, existingDepth),
+			TreeDepth:       iRec.tree.treeDepth,
+		}
+	}
+	result, err := iRec.inserter(
+		iRec.store.materialize(existing),
+		iRec.valueView,
+		metadata,
+	)
 	if err != nil {
 		return nilValueRef, false, err
 	}
@@ -285,38 +307,50 @@ func (t *Tree) materializePath(startDepth int, path compressedPath) record {
 	return child
 }
 
-func (iRec *insertRecord) insertNode(index nodeIndex, currentDepth int) error {
+func (iRec *insertRecord) insertNode(
+	index nodeIndex,
+	currentDepth,
+	splitDepth int,
+) error {
+	// A split chain descends through one child from splitDepth to prefixLen:
+	// splitting only happens above prefixLen, so the next insertNode takes the
+	// single-child path. Below prefixLen, records resolve at their own depths
+	// and are never split. The two depths are therefore never both live, and
+	// splitDepth alone preserves the pre-insert record extent.
 	newDepth := currentDepth + 1
 	node := iRec.tree.nodeAt(index)
 	// Check if we are inside the network already
 	if newDepth > iRec.prefixLen {
 		// Data already exists for the network so insert into all the children.
 		// Identical child records are merged as recursion unwinds.
-		err := iRec.insertRecord(&node.children[0], newDepth)
+		clearBit(&iRec.ip, currentDepth)
+		err := iRec.insertRecord(&node.children[0], newDepth, splitDepth)
 		if err != nil {
 			return err
 		}
-		return iRec.insertRecord(&node.children[1], newDepth)
+		setBit(&iRec.ip, currentDepth)
+		return iRec.insertRecord(&node.children[1], newDepth, splitDepth)
 	}
 
 	// We haven't reached the network yet.
 	pos := bitAt(iRec.ip, currentDepth)
-	return iRec.insertRecord(&node.children[pos], newDepth)
+	return iRec.insertRecord(&node.children[pos], newDepth, splitDepth)
 }
 
 func (iRec *insertRecord) insertRecord(
 	r *record,
-	newDepth int,
+	newDepth,
+	splitDepth int,
 ) error {
 	switch r.recordType {
 	case recordTypeNode:
-		err := iRec.insertNode(r.nodeIndex, newDepth)
+		err := iRec.insertNode(r.nodeIndex, newDepth, splitDepth)
 		if err != nil {
 			return err
 		}
 		return iRec.maybeMergeChildren(r)
 	case recordTypeFixedNode:
-		return iRec.insertNode(r.nodeIndex, newDepth)
+		return iRec.insertNode(r.nodeIndex, newDepth, splitDepth)
 	case recordTypePath:
 		path := iRec.tree.paths[r.nodeIndex]
 		// materializePath moves the path record's value ownership into the
@@ -324,11 +358,15 @@ func (iRec *insertRecord) insertRecord(
 		// fails loudly instead of double-counting the moved reference.
 		iRec.tree.paths[r.nodeIndex].record = record{}
 		*r = iRec.tree.materializePath(newDepth, path)
-		return iRec.insertRecord(r, newDepth)
+		return iRec.insertRecord(r, newDepth, splitDepth)
 	case recordTypeEmpty, recordTypeData:
 		if newDepth >= iRec.prefixLen {
 			if iRec.recordType == recordTypeData {
-				value, owned, err := iRec.resolveValue(r.value)
+				existingDepth := newDepth
+				if splitDepth != 0 {
+					existingDepth = splitDepth
+				}
+				value, owned, err := iRec.resolveValue(r.value, existingDepth)
 				if err != nil {
 					return err
 				}
@@ -348,7 +386,7 @@ func (iRec *insertRecord) insertRecord(
 		}
 
 		if r.recordType == recordTypeEmpty && iRec.recordType == recordTypeData {
-			value, owned, err := iRec.resolveValue(nilValueRef)
+			value, owned, err := iRec.resolveValue(nilValueRef, newDepth)
 			if err != nil {
 				return err
 			}
@@ -368,13 +406,16 @@ func (iRec *insertRecord) insertRecord(
 
 		// We are splitting this record so we create two duplicate child
 		// records.
+		if splitDepth == 0 {
+			splitDepth = newDepth
+		}
 		if r.recordType == recordTypeData {
 			iRec.store.retain(r.value)
 		}
 		r.nodeIndex = iRec.tree.newNode([2]record{*r, *r})
 		r.value = nilValueRef
 		r.recordType = recordTypeNode
-		err := iRec.insertNode(r.nodeIndex, newDepth)
+		err := iRec.insertNode(r.nodeIndex, newDepth, splitDepth)
 		if err != nil {
 			return err
 		}
@@ -515,4 +556,22 @@ func (t *Tree) finalizeNode(index nodeIndex, currentNum int) int {
 
 func bitAt(ip [16]byte, depth int) byte {
 	return (ip[depth/8] >> (7 - (depth % 8))) & 1
+}
+
+func clearBit(ip *[16]byte, depth int) {
+	ip[depth/8] &^= 1 << (7 - (depth % 8))
+}
+
+func setBit(ip *[16]byte, depth int) {
+	ip[depth/8] |= 1 << (7 - (depth % 8))
+}
+
+func maskedTreeAddr(ip [16]byte, depth int) [16]byte {
+	byteIndex := depth / 8
+	if remainingBits := depth % 8; remainingBits != 0 {
+		ip[byteIndex] &= byte(0xff << (8 - remainingBits))
+		byteIndex++
+	}
+	clear(ip[byteIndex:])
+	return ip
 }
