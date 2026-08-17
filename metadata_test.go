@@ -61,22 +61,13 @@ func TestInserterMetadataRecordShapes(t *testing.T) {
 		))
 
 		require.Len(t, calls, 3)
-		for index, expected := range []struct {
-			network string
-			depth   int
-		}{
-			{network: "1.2.3.0/26", depth: 26},
-			{network: "1.2.3.64/26", depth: 26},
-			{network: "1.2.3.128/25", depth: 25},
-		} {
-			assertMetadata(
-				t,
-				calls[index].metadata,
-				"1.2.3.0/24",
-				expected.network,
-				expected.depth,
-				32,
-			)
+		for index, expectedDepth := range []int{26, 26, 25} {
+			metadata := calls[index].metadata
+			assert.Equal(t, netip.MustParsePrefix("1.2.3.0/24"), metadata.InsertedNetwork)
+			assert.Equal(t, expectedDepth, metadata.ExistingDepth)
+			assert.Equal(t, 32, metadata.TreeDepth)
+			assert.Equal(t, netip.Prefix{}, metadata.ExistingNetwork())
+			assert.Equal(t, [16]byte{}, metadata.ExistingAddr)
 		}
 	})
 
@@ -240,9 +231,14 @@ func TestInserterMetadataRangeSubnets(t *testing.T) {
 		metadata := calls[index].metadata
 		assert.Equal(t, prefix, metadata.InsertedNetwork)
 		assert.Equal(t, prefix.Bits(), metadata.InsertedDepth())
-		assert.Equal(t, expectedExisting[index], metadata.ExistingNetwork())
 		assert.Equal(t, expectedExisting[index].Bits(), metadata.ExistingDepth)
-		assert.Equal(t, treeAddr(expectedExisting[index], 32), metadata.ExistingAddr)
+		if expectedExisting[index].Bits() > prefix.Bits() {
+			assert.Equal(t, netip.Prefix{}, metadata.ExistingNetwork())
+			assert.Equal(t, [16]byte{}, metadata.ExistingAddr)
+		} else {
+			assert.Equal(t, expectedExisting[index], metadata.ExistingNetwork())
+			assert.Equal(t, treeAddr(expectedExisting[index], 32), metadata.ExistingAddr)
+		}
 		assert.Equal(t, 32, metadata.TreeDepth)
 	}
 }
@@ -291,7 +287,7 @@ func TestInserterMetadataUnaliasedIPv6ShallowRecord(t *testing.T) {
 	assert.Equal(t, 120, calls[0].metadata.InsertedDepth())
 }
 
-func TestInserterMetadataAddressCopyAndSiblingTracking(t *testing.T) {
+func TestInserterMetadataNarrowerRecordNetworkFallback(t *testing.T) {
 	tree := newMetadataTree(t, Options{IPVersion: 4})
 	expectedNetworks := []netip.Prefix{
 		netip.MustParsePrefix("1.2.3.0/26"),
@@ -314,9 +310,10 @@ func TestInserterMetadataAddressCopyAndSiblingTracking(t *testing.T) {
 	))
 
 	require.Len(t, calls, len(expectedNetworks))
-	for index, expected := range expectedNetworks {
-		assert.Equal(t, expected, calls[index].metadata.ExistingNetwork())
-		assert.Equal(t, expected.Addr().As4(), [4]byte(calls[index].metadata.ExistingAddr[:4]))
+	for index := range expectedNetworks {
+		assert.Equal(t, 26, calls[index].metadata.ExistingDepth)
+		assert.Equal(t, netip.Prefix{}, calls[index].metadata.ExistingNetwork())
+		assert.Equal(t, [16]byte{}, calls[index].metadata.ExistingAddr)
 	}
 }
 
@@ -365,7 +362,8 @@ func TestInserterMetadataFamilyFollowsInsert(t *testing.T) {
 	})
 	require.NotEqual(t, -1, index)
 	assert.Equal(t, 100, allCalls[index].metadata.ExistingDepth)
-	assert.Equal(t, netip.MustParsePrefix("::/100"), allCalls[index].metadata.ExistingNetwork())
+	assert.Equal(t, netip.Prefix{}, allCalls[index].metadata.ExistingNetwork())
+	assert.Equal(t, [16]byte{}, allCalls[index].metadata.ExistingAddr)
 }
 
 func TestInserterMetadataRootInsert(t *testing.T) {
@@ -380,8 +378,11 @@ func TestInserterMetadataRootInsert(t *testing.T) {
 		captureMetadata(&calls),
 	))
 	require.Len(t, calls, 2)
-	assert.Equal(t, netip.MustParsePrefix("::/1"), calls[0].metadata.ExistingNetwork())
-	assert.Equal(t, netip.MustParsePrefix("8000::/1"), calls[1].metadata.ExistingNetwork())
+	for _, call := range calls {
+		assert.Equal(t, 1, call.metadata.ExistingDepth)
+		assert.Equal(t, netip.Prefix{}, call.metadata.ExistingNetwork())
+		assert.Equal(t, [16]byte{}, call.metadata.ExistingAddr)
+	}
 }
 
 func TestInserterMetadataNormalizesInsertedNetwork(t *testing.T) {
@@ -923,10 +924,12 @@ func metadataOracleRecords(
 			metadata: inserter.Metadata{
 				InsertedNetwork: insertedNetwork,
 				ExistingDepth:   existingNetwork.Bits(),
-				ExistingAddr:    treeAddr(existingNetwork, 32),
 				TreeDepth:       32,
 			},
 		})
+		if existingNetwork.Bits() <= insertedNetwork.Bits() {
+			records[len(records)-1].metadata.ExistingAddr = treeAddr(existingNetwork, 32)
+		}
 	}
 	return records
 }

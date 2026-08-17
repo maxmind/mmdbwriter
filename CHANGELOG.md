@@ -33,14 +33,17 @@
   reports each normalized source network. Metadata reflects the record as shaped
   by prior splits and merges, not the network that established its value;
   provenance-dependent policies must keep that state in their values.
-  `Metadata.ExistingNetwork()` follows the inserted network's address family,
-  and the pure methods supply zero metadata to preserve their value-keyed memo.
-  Non-nil results become tree-owned and must not be modified after the function
-  returns. As in v1, a function that fails partway through the covered records
-  leaves the records already visited holding their new values; installed equal
-  values may coalesce during error unwinding, while a failure before any result
-  leaves the tree logically unchanged. Interning now validates values per
-  record, so more error kinds can fire mid-walk.
+  `Metadata.ExistingNetwork()` follows the inserted network's address family.
+  For an IPv4 insert into an IPv6 tree, a record above the IPv4 subtree remains
+  in IPv6 form. The method returns the zero prefix when the existing record is
+  more specific than the inserted network. The pure methods supply zero metadata
+  to preserve their value-keyed memo. Non-nil results become tree-owned and must
+  not be modified after the function returns. As in v1, a function that returns
+  an error partway through the covered records leaves the records already
+  visited holding their new values. Installed equal values may coalesce during
+  error unwinding, while an error before any result leaves the tree logically
+  unchanged. Interning now validates values per record, so more error kinds can
+  fire mid-walk.
 - Reduced allocations on the tree insert and serialization hot paths, lowering
   memory pressure and GC overhead during large builds.
 - Reworked value storage to intern every value node once in a content-addressed

@@ -79,6 +79,16 @@ func TestMetadataDerivedMethods(t *testing.T) {
 			expectedExistingNetwork: netip.MustParsePrefix("1.2.3.0/24"),
 		},
 		{
+			name: "more specific existing record",
+			metadata: Metadata{
+				InsertedNetwork: netip.MustParsePrefix("1.2.3.0/24"),
+				ExistingDepth:   25,
+				ExistingAddr:    v4Addr,
+				TreeDepth:       32,
+			},
+			expectedInsertedDepth: 24,
+		},
+		{
 			name: "IPv4 insertion in IPv6 tree",
 			metadata: Metadata{
 				InsertedNetwork: netip.MustParsePrefix("1.0.0.0/16"),

@@ -34,6 +34,11 @@ import (
 // earlier insertion can split the same address space into narrower empty
 // records.
 //
+// For non-pure insertions, ExistingDepth is available for every record. To
+// avoid tracking branch paths on every insertion, ExistingAddr is zero and
+// ExistingNetwork returns the zero Prefix when the existing record is more
+// specific than InsertedNetwork.
+//
 // Fields may be added in later releases. Construct Metadata values with keyed
 // literals.
 type Metadata struct {
@@ -59,7 +64,8 @@ type Metadata struct {
 	// ExistingAddr is the tree-space address of the existing record, zeroed at
 	// and below ExistingDepth. A 32-bit tree uses bytes 0-3. A 128-bit tree uses
 	// all 16 bytes, with IPv4 addresses in bytes 12-15. It is a copy and remains
-	// valid after insertion returns. Most callers should use ExistingNetwork.
+	// valid after insertion returns. It is all zero when ExistingDepth is greater
+	// than InsertedDepth(). Most callers should use ExistingNetwork.
 	ExistingAddr [16]byte
 
 	// TreeDepth is 32 for an IPv4 tree and 128 for an IPv6 tree. It is needed
@@ -94,13 +100,17 @@ func (m Metadata) InsertedDepth() int {
 //
 // ExistingNetwork returns the zero Prefix for the pure methods, an invalid
 // InsertedNetwork, an unsupported TreeDepth, a non-IPv4 insertion in a 32-bit
-// tree, or an ExistingDepth outside [0, TreeDepth]. Other inconsistent
-// hand-built combinations are unspecified.
+// tree, an ExistingDepth outside [0, TreeDepth], or an existing record more
+// specific than InsertedNetwork. Other inconsistent hand-built combinations
+// are unspecified.
 func (m Metadata) ExistingNetwork() netip.Prefix {
 	if !m.InsertedNetwork.IsValid() ||
 		(m.TreeDepth != 32 && m.TreeDepth != 128) ||
 		(m.TreeDepth == 32 && !m.InsertedNetwork.Addr().Is4()) ||
 		m.ExistingDepth < 0 || m.ExistingDepth > m.TreeDepth {
+		return netip.Prefix{}
+	}
+	if m.ExistingDepth > m.InsertedDepth() {
 		return netip.Prefix{}
 	}
 
