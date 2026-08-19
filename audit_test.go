@@ -132,7 +132,7 @@ func TestFailedInsertsPassTheAudit(t *testing.T) {
 				return tree.InsertPureFunc(
 					netip.MustParsePrefix("1.0.0.0/24"),
 					mmdbtype.String("new"),
-					func(_, newValue mmdbtype.DataType, _ inserter.Metadata) (mmdbtype.DataType, error) {
+					func(_, newValue mmdbtype.DataType) (mmdbtype.DataType, error) {
 						calls++
 						if calls == 2 {
 							return nil, errors.New("inserter failure")

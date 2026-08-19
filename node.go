@@ -59,7 +59,7 @@ const (
 //   - the memo fields, which resolve updates as it goes.
 //
 // The memo is only used for pure inserters. It is keyed on the existing value
-// alone, which is sound only because inserter and value are fixed: reusing an
+// alone, which is sound only because the resolver and value are fixed: reusing an
 // insertRecord across inserts with a different value would return results
 // computed from the previous one.
 //
@@ -68,18 +68,15 @@ const (
 // memo references and the reference interned for the inserted value itself.
 // memoFirst and memoResult hold the single entry until a second distinct key
 // promotes both into memo, which clears them.
+//
+// Fields are ordered widest first. The struct is one allocation per insert
+// call, and this layout keeps it inside the 128-byte size class.
 type insertRecord struct {
-	inserter inserter.Func
+	resolver insertResolver
 
-	store        *valueStore
-	tree         *Tree
-	insertedNode nodeIndex
+	store *valueStore
+	tree  *Tree
 
-	ip        [16]byte
-	prefixLen int
-
-	recordType recordType
-	value      valueRef
 	// valueView is the value handed to the inserter as its new-value argument:
 	// the caller's value as passed for the insert entry points, or a
 	// store-materialized view when the insert began from an interned
@@ -89,29 +86,53 @@ type insertRecord struct {
 	// registered only after the insert succeeds, so a failed insert cannot
 	// serve stale data if the caller mutates and retries the object.
 	callerValue mmdbtype.DataType
+	memo        map[valueRef]valueRef
+
+	prefixLen int
+	ip        [16]byte
+
+	insertedNode nodeIndex
+	value        valueRef
+	memoFirst    valueRef
+	memoResult   valueRef
+
+	recordType recordType
 	// insertedAs4 records the address family that the tree-space ip cannot
-	// encode. It fits in existing struct padding, unlike retaining a
-	// netip.Prefix on every insertRecord.
-	insertedAs4  bool
-	inserterPure bool
+	// encode. A netip.Prefix field would carry it directly, but at 32 bytes
+	// it pushes the struct into the next size class, while a pointer to a
+	// prepared Metadata escapes to the heap once per insertRange call. The
+	// flag fits in padding, and rebuilding the prefix per record measures at
+	// about 4ns.
+	insertedAs4 bool
 	// splitDepth is the first pre-insert record depth in a split chain. Tree
 	// depths are at most 128, and zero is the sentinel for no active split.
 	splitDepth uint8
-	memo       map[valueRef]valueRef
-	memoFirst  valueRef
-	memoResult valueRef
 	memoSet    bool
+}
+
+// resolveValue returns the reference for a record and whether the caller owns
+// it. With no inserter the reference interned when the insert began is reused
+// directly: the store canonicalizes by content, so an equal existing value is
+// the same reference and replaceDataRecord makes the assignment a no-op.
+func (iRec *insertRecord) resolveValue(
+	existing valueRef,
+	existingDepth int,
+) (valueRef, bool, error) {
+	if !iRec.resolver.hasFunc() {
+		return iRec.value, false, nil
+	}
+	return iRec.resolve(existing, existingDepth)
 }
 
 // resolve returns a reference and whether the caller owns it. A pure
 // inserter's memo owns one reference to each non-nil result until insertion
-// finishes. An ordinary Func is not memoized, so a newly interned reference is
-// transferred directly to the target record.
+// finishes. A metadata-aware Func is not memoized, so a newly interned
+// reference is transferred directly to the target record.
 func (iRec *insertRecord) resolve(
 	existing valueRef,
 	existingDepth int,
 ) (valueRef, bool, error) {
-	if iRec.inserterPure {
+	if iRec.resolver.pure != nil {
 		if iRec.memo != nil {
 			if value, ok := iRec.memo[existing]; ok {
 				return value, false, nil
@@ -120,38 +141,49 @@ func (iRec *insertRecord) resolve(
 			return iRec.memoResult, false, nil
 		}
 	}
-	metadata := inserter.Metadata{}
-	if !iRec.inserterPure {
-		insertedNetwork, err := treeaddr.PrefixFromInsertIP(
+	var result mmdbtype.DataType
+	var err error
+	if iRec.resolver.pure != nil {
+		result, err = iRec.resolver.pure(
+			iRec.store.materialize(existing),
+			iRec.valueView,
+		)
+	} else {
+		insertedNetwork, metadataErr := treeaddr.PrefixFromInsertIP(
 			iRec.ip,
 			iRec.prefixLen,
 			iRec.tree.treeDepth,
 			iRec.insertedAs4,
 		)
-		if err != nil {
-			return nilValueRef, false, fmt.Errorf("creating inserted network metadata: %w", err)
+		if metadataErr != nil {
+			return nilValueRef, false, fmt.Errorf(
+				"creating inserted network metadata: %w",
+				metadataErr,
+			)
 		}
-		var existingAddr [16]byte
-		if existingDepth <= iRec.prefixLen {
-			existingAddr = maskedTreeAddr(iRec.ip, existingDepth)
-		}
-		metadata = inserter.Metadata{
+		metadata := inserter.Metadata{
 			InsertedNetwork: insertedNetwork,
 			ExistingDepth:   existingDepth,
-			ExistingAddr:    existingAddr,
 			TreeDepth:       iRec.tree.treeDepth,
 		}
+		switch {
+		case existingDepth == iRec.prefixLen:
+			// ip is already masked at prefixLen, so no masking is needed.
+			metadata.ExistingAddr = iRec.ip
+		case existingDepth < iRec.prefixLen:
+			metadata.ExistingAddr = maskedTreeAddr(iRec.ip, existingDepth)
+		}
+		result, err = iRec.resolver.withMetadata(
+			iRec.store.materialize(existing),
+			iRec.valueView,
+			metadata,
+		)
 	}
-	result, err := iRec.inserter(
-		iRec.store.materialize(existing),
-		iRec.valueView,
-		metadata,
-	)
 	if err != nil {
 		return nilValueRef, false, err
 	}
 	if result == nil {
-		if iRec.inserterPure {
+		if iRec.resolver.pure != nil {
 			iRec.rememberResolved(existing, nilValueRef)
 		}
 		return nilValueRef, false, nil
@@ -166,7 +198,7 @@ func (iRec *insertRecord) resolve(
 	if err != nil {
 		return nilValueRef, false, err
 	}
-	if iRec.inserterPure {
+	if iRec.resolver.pure != nil {
 		iRec.rememberResolved(existing, value)
 		return value, false, nil
 	}
@@ -373,12 +405,7 @@ func (iRec *insertRecord) insertRecord(
 				if iRec.splitDepth != 0 {
 					existingDepth = int(iRec.splitDepth)
 				}
-				value := iRec.value
-				owned := false
-				var err error
-				if iRec.inserter != nil {
-					value, owned, err = iRec.resolve(r.value, existingDepth)
-				}
+				value, owned, err := iRec.resolveValue(r.value, existingDepth)
 				if err != nil {
 					return err
 				}
@@ -398,12 +425,7 @@ func (iRec *insertRecord) insertRecord(
 		}
 
 		if r.recordType == recordTypeEmpty && iRec.recordType == recordTypeData {
-			value := iRec.value
-			owned := false
-			var err error
-			if iRec.inserter != nil {
-				value, owned, err = iRec.resolve(nilValueRef, newDepth)
-			}
+			value, owned, err := iRec.resolveValue(nilValueRef, newDepth)
 			if err != nil {
 				return err
 			}

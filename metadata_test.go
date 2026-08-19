@@ -93,7 +93,9 @@ func TestInserterMetadataCurrentTreeShape(t *testing.T) {
 		require.NoError(t, tree.InsertFunc(
 			netip.MustParsePrefix("1.2.3.0/25"),
 			base.Copy(),
-			inserter.Replace,
+			func(_, newValue mmdbtype.DataType, _ inserter.Metadata) (mmdbtype.DataType, error) {
+				return newValue, nil
+			},
 		))
 
 		var calls []metadataCall
@@ -303,10 +305,7 @@ func TestInserterMetadataNarrowerRecordNetworkFallback(t *testing.T) {
 	require.NoError(t, tree.InsertFunc(
 		netip.MustParsePrefix("1.2.3.0/24"),
 		mmdbtype.String("overlay"),
-		func(existingValue, _ mmdbtype.DataType, metadata inserter.Metadata) (mmdbtype.DataType, error) {
-			calls = append(calls, metadataCall{existing: existingValue, metadata: metadata})
-			return existingValue, nil
-		},
+		captureExisting(&calls),
 	))
 
 	require.Len(t, calls, len(expectedNetworks))
@@ -326,10 +325,7 @@ func TestInserterMetadataFamilyFollowsInsert(t *testing.T) {
 	require.NoError(t, tree.InsertFunc(
 		sharedRecord,
 		mmdbtype.String("v6"),
-		func(existingValue, _ mmdbtype.DataType, metadata inserter.Metadata) (mmdbtype.DataType, error) {
-			v6Calls = append(v6Calls, metadataCall{existing: existingValue, metadata: metadata})
-			return existingValue, nil
-		},
+		captureExisting(&v6Calls),
 	))
 	require.Len(t, v6Calls, 1)
 	assert.Equal(t, sharedRecord, v6Calls[0].metadata.ExistingNetwork())
@@ -338,10 +334,7 @@ func TestInserterMetadataFamilyFollowsInsert(t *testing.T) {
 	require.NoError(t, tree.InsertFunc(
 		netip.MustParsePrefix("1.2.3.4/32"),
 		mmdbtype.String("v4"),
-		func(existingValue, _ mmdbtype.DataType, metadata inserter.Metadata) (mmdbtype.DataType, error) {
-			v4Calls = append(v4Calls, metadataCall{existing: existingValue, metadata: metadata})
-			return existingValue, nil
-		},
+		captureExisting(&v4Calls),
 	))
 	require.Len(t, v4Calls, 1)
 	assert.Equal(t, netip.MustParsePrefix("1.2.3.4/32"), v4Calls[0].metadata.ExistingNetwork())
@@ -352,10 +345,7 @@ func TestInserterMetadataFamilyFollowsInsert(t *testing.T) {
 	require.NoError(t, tree.InsertFunc(
 		netip.MustParsePrefix("::/0"),
 		mmdbtype.String("overlay"),
-		func(existingValue, _ mmdbtype.DataType, metadata inserter.Metadata) (mmdbtype.DataType, error) {
-			allCalls = append(allCalls, metadataCall{existing: existingValue, metadata: metadata})
-			return existingValue, nil
-		},
+		captureExisting(&allCalls),
 	))
 	index := slices.IndexFunc(allCalls, func(call metadataCall) bool {
 		return call.existing == mmdbtype.String("v4-subtree")
@@ -419,120 +409,51 @@ func TestInserterMetadataNormalizesInsertedNetwork(t *testing.T) {
 	}
 }
 
-func TestPureInserterMetadataIsZero(t *testing.T) {
-	assertZero := func(t *testing.T, metadata inserter.Metadata) {
-		t.Helper()
-		assert.Equal(t, netip.Prefix{}, metadata.InsertedNetwork)
-		assert.Zero(t, metadata.ExistingDepth)
-		assert.Equal(t, [16]byte{}, metadata.ExistingAddr)
-		assert.Zero(t, metadata.TreeDepth)
-		assert.Equal(t, netip.Prefix{}, metadata.ExistingNetwork())
-		assert.Zero(t, metadata.InsertedDepth())
+func TestOptionsInserterMemoizesRepeatedValues(t *testing.T) {
+	calls := map[mmdbtype.String]int{}
+	tree := newMetadataTree(t, Options{
+		IPVersion: 4,
+		Inserter: func(existingValue, newValue mmdbtype.DataType) (mmdbtype.DataType, error) {
+			if existingValue != nil {
+				calls[existingValue.(mmdbtype.String)]++
+			}
+			return newValue, nil
+		},
+	})
+	for index, value := range []mmdbtype.String{"a", "b", "a", "b"} {
+		//nolint:gosec // index is bounded by the four-element literal
+		prefix := netip.PrefixFrom(netip.AddrFrom4([4]byte{1, 2, 3, byte(index * 64)}), 26)
+		require.NoError(t, tree.Insert(prefix, value))
 	}
+	clear(calls)
 
-	t.Run("prefix", func(t *testing.T) {
-		tree := newMetadataTree(t, Options{IPVersion: 4})
-		calls := 0
-		require.NoError(t, tree.InsertPureFunc(
-			netip.MustParsePrefix("1.2.3.0/24"),
-			mmdbtype.String("value"),
-			func(_, newValue mmdbtype.DataType, metadata inserter.Metadata) (mmdbtype.DataType, error) {
-				calls++
-				assertZero(t, metadata)
-				return newValue, nil
-			},
-		))
-		assert.Equal(t, 1, calls)
-	})
-
-	t.Run("range memo", func(t *testing.T) {
-		tree := newMetadataTree(t, Options{IPVersion: 4})
-		require.NoError(t, tree.Insert(
-			netip.MustParsePrefix("1.2.3.0/24"),
-			mmdbtype.String("existing"),
-		))
-		calls := 0
-		require.NoError(t, tree.InsertRangePureFunc(
-			netip.MustParseAddr("1.2.3.1"),
-			netip.MustParseAddr("1.2.3.6"),
-			mmdbtype.String("new"),
-			func(_, newValue mmdbtype.DataType, metadata inserter.Metadata) (mmdbtype.DataType, error) {
-				calls++
-				assertZero(t, metadata)
-				return newValue, nil
-			},
-		))
-		assert.Equal(t, 1, calls, "the pure result was not shared across range subnets")
-	})
+	require.NoError(t, tree.Insert(
+		netip.MustParsePrefix("1.2.3.0/24"),
+		mmdbtype.String("new"),
+	))
+	assert.Equal(t, map[mmdbtype.String]int{"a": 1, "b": 1}, calls)
 }
 
-func TestOptionsInserterReceivesMetadata(t *testing.T) {
-	var calls []metadataCall
+func TestOptionsInserterMemoizesAcrossRangeSubnets(t *testing.T) {
+	calls := 0
 	tree := newMetadataTree(t, Options{
 		IPVersion: 4,
-		Inserter:  captureMetadata(&calls),
+		Inserter: func(_, newValue mmdbtype.DataType) (mmdbtype.DataType, error) {
+			calls++
+			return newValue, nil
+		},
 	})
-	prefix := netip.MustParsePrefix("1.2.3.0/24")
-	require.NoError(t, tree.Insert(prefix, mmdbtype.String("value")))
-	require.Len(t, calls, 1)
-	assertMetadata(t, calls[0].metadata, prefix.String(), "0.0.0.0/1", 1, 32)
-}
-
-func TestLoadInserterReceivesMetadata(t *testing.T) {
-	source := newMetadataTree(t, Options{IPVersion: 4})
-	prefix := netip.MustParsePrefix("1.2.3.0/24")
-	require.NoError(t, source.Insert(prefix, mmdbtype.String("value")))
-	path := writeTempDB(t, source)
-
-	var calls []metadataCall
-	loaded, err := Load(path, Options{
-		BuildEpoch:              1,
-		IPVersion:               4,
-		IncludeReservedNetworks: true,
-		Inserter:                captureMetadata(&calls),
-	})
-	require.NoError(t, err)
-	require.Len(t, calls, 1)
-	assertMetadata(t, calls[0].metadata, prefix.String(), "0.0.0.0/1", 1, 32)
-	assert.Equal(
-		t,
-		treeAddr(netip.MustParsePrefix("0.0.0.0/1"), 32),
-		calls[0].metadata.ExistingAddr,
-	)
-	gotPrefix, gotValue := loaded.Get(netip.MustParseAddr("1.2.3.4"))
-	assert.Equal(t, prefix, gotPrefix)
-	assert.Equal(t, mmdbtype.String("value"), gotValue)
-}
-
-func TestOptionsInserterReceivesRangeSubnetMetadata(t *testing.T) {
-	var calls []metadataCall
-	tree := newMetadataTree(t, Options{
-		IPVersion: 4,
-		Inserter:  captureMetadata(&calls),
-	})
+	require.NoError(t, tree.Insert(
+		netip.MustParsePrefix("1.2.3.0/24"),
+		mmdbtype.String("existing"),
+	))
+	calls = 0
 	require.NoError(t, tree.InsertRange(
 		netip.MustParseAddr("1.2.3.1"),
-		netip.MustParseAddr("1.2.3.6"),
-		mmdbtype.String("value"),
+		netip.MustParseAddr("1.2.3.254"),
+		mmdbtype.String("new"),
 	))
-
-	expected := []netip.Prefix{
-		netip.MustParsePrefix("1.2.3.1/32"),
-		netip.MustParsePrefix("1.2.3.2/31"),
-		netip.MustParsePrefix("1.2.3.4/31"),
-		netip.MustParsePrefix("1.2.3.6/32"),
-	}
-	require.Len(t, calls, len(expected))
-	for index, prefix := range expected {
-		metadata := calls[index].metadata
-		assert.Equal(t, prefix, metadata.InsertedNetwork)
-		assert.Equal(t, prefix.Bits(), metadata.InsertedDepth())
-		existingNetwork := metadata.ExistingNetwork()
-		assert.NotEqual(t, netip.Prefix{}, existingNetwork)
-		assert.Equal(t, existingNetwork.Bits(), metadata.ExistingDepth)
-		assert.Equal(t, treeAddr(existingNetwork, 32), metadata.ExistingAddr)
-		assert.Equal(t, 32, metadata.TreeDepth)
-	}
+	assert.Equal(t, 1, calls, "the configured pure result was not shared across range subnets")
 }
 
 func TestFailedInserterRetryMetadata(t *testing.T) {
@@ -582,16 +503,7 @@ func TestFailedInserterRetryMetadata(t *testing.T) {
 			require.ErrorIs(t, err, insertErr)
 
 			var retryCalls []metadataCall
-			require.NoError(t, method.insert(tree, func(
-				existingValue, _ mmdbtype.DataType,
-				metadata inserter.Metadata,
-			) (mmdbtype.DataType, error) {
-				retryCalls = append(
-					retryCalls,
-					metadataCall{existing: existingValue, metadata: metadata},
-				)
-				return existingValue, nil
-			}))
+			require.NoError(t, method.insert(tree, captureExisting(&retryCalls)))
 			require.Len(t, retryCalls, 1)
 			assert.Equal(t, failedMetadata.ExistingDepth, retryCalls[0].metadata.ExistingDepth)
 			assert.Equal(t, failedMetadata.ExistingAddr, retryCalls[0].metadata.ExistingAddr)
@@ -630,16 +542,7 @@ func TestFailedInserterRetryMetadata(t *testing.T) {
 			assert.Equal(t, 2, calls)
 
 			var retryCalls []metadataCall
-			require.NoError(t, method.insert(tree, func(
-				existingValue, _ mmdbtype.DataType,
-				metadata inserter.Metadata,
-			) (mmdbtype.DataType, error) {
-				retryCalls = append(
-					retryCalls,
-					metadataCall{existing: existingValue, metadata: metadata},
-				)
-				return existingValue, nil
-			}))
+			require.NoError(t, method.insert(tree, captureExisting(&retryCalls)))
 			require.Len(t, retryCalls, 1)
 			assert.Equal(t, 24, retryCalls[0].metadata.ExistingDepth)
 			assert.Equal(t, mmdbtype.String("right"), retryCalls[0].existing)
@@ -647,7 +550,7 @@ func TestFailedInserterRetryMetadata(t *testing.T) {
 	}
 }
 
-func TestLoadMetadataDuringCoalescing(t *testing.T) {
+func TestLoadUsesPureOptionsInserter(t *testing.T) {
 	prefixes := []netip.Prefix{
 		netip.MustParsePrefix("1.2.3.0/25"),
 		netip.MustParsePrefix("1.2.3.128/25"),
@@ -655,30 +558,18 @@ func TestLoadMetadataDuringCoalescing(t *testing.T) {
 	value := provenanceValue("equal", 25)
 	sourcePath := writeAdjacentEqualSource(t, prefixes[0], value)
 
-	shadow := newMetadataTree(t, Options{IPVersion: 4})
-	expectedExisting := make([]netip.Prefix, 0, len(prefixes))
-	for _, prefix := range prefixes {
-		existingNetwork, _ := shadow.Get(prefix.Addr())
-		expectedExisting = append(expectedExisting, existingNetwork)
-		require.NoError(t, shadow.Insert(prefix, value))
-	}
-
-	var calls []metadataCall
+	calls := 0
 	loaded, err := Load(sourcePath, Options{
 		BuildEpoch:              1,
 		IPVersion:               4,
 		IncludeReservedNetworks: true,
-		Inserter:                captureMetadata(&calls),
+		Inserter: func(_, newValue mmdbtype.DataType) (mmdbtype.DataType, error) {
+			calls++
+			return newValue, nil
+		},
 	})
 	require.NoError(t, err)
-	require.Len(t, calls, len(prefixes))
-	for index, prefix := range prefixes {
-		metadata := calls[index].metadata
-		assert.Equal(t, prefix, metadata.InsertedNetwork)
-		assert.Equal(t, expectedExisting[index], metadata.ExistingNetwork())
-		assert.Equal(t, expectedExisting[index].Bits(), metadata.ExistingDepth)
-		assert.Equal(t, treeAddr(expectedExisting[index], 32), metadata.ExistingAddr)
-	}
+	assert.Equal(t, len(prefixes), calls)
 
 	physicalPrefix, got := loaded.Get(netip.MustParseAddr("1.2.3.4"))
 	assert.Equal(t, netip.MustParsePrefix("1.2.3.0/24"), physicalPrefix)
@@ -908,12 +799,9 @@ func metadataOracleRecords(
 	require.True(t, insertedNetwork.Addr().Is4())
 	require.GreaterOrEqual(t, insertedNetwork.Bits(), 24)
 	require.LessOrEqual(t, insertedNetwork.Bits(), 32)
-	start := ipv4Uint32(insertedNetwork.Addr())
-	addressCount := uint32(1) << (32 - insertedNetwork.Bits())
-	records := make([]metadataCall, 0, addressCount)
+	records := make([]metadataCall, 0, insertedNetwork.Addr().BitLen())
 	var previous netip.Prefix
-	for offset := range addressCount {
-		address := ipv4Addr(start + offset)
+	for address := insertedNetwork.Addr(); insertedNetwork.Contains(address); address = address.Next() {
 		existingNetwork, existingValue := tree.Get(address)
 		if existingNetwork == previous {
 			continue
@@ -932,11 +820,6 @@ func metadataOracleRecords(
 		}
 	}
 	return records
-}
-
-func ipv4Uint32(address netip.Addr) uint32 {
-	as4 := address.As4()
-	return binary.BigEndian.Uint32(as4[:])
 }
 
 func ipv4Addr(value uint32) netip.Addr {
@@ -979,9 +862,9 @@ func provenanceSpecificityInserter(
 	return newValue, nil
 }
 
-func stripProvenance(t *testing.T, tree *Tree) {
-	t.Helper()
-	require.NoError(t, tree.InsertFunc(
+func stripProvenance(tb testing.TB, tree *Tree) {
+	tb.Helper()
+	require.NoError(tb, tree.InsertFunc(
 		netip.MustParsePrefix("0.0.0.0/0"),
 		nil,
 		func(existingValue, _ mmdbtype.DataType, _ inserter.Metadata) (mmdbtype.DataType, error) {
@@ -1009,14 +892,14 @@ func verifyLoadedProvenanceExtents(
 	}
 }
 
-func loadMetadataFixture(t *testing.T, path string) *Tree {
-	t.Helper()
+func loadMetadataFixture(tb testing.TB, path string) *Tree {
+	tb.Helper()
 	tree, err := Load(path, Options{
 		BuildEpoch:              1,
 		IPVersion:               4,
 		IncludeReservedNetworks: true,
 	})
-	require.NoError(t, err)
+	require.NoError(tb, err)
 	return tree
 }
 
@@ -1067,11 +950,11 @@ func nextPrefixAddr(t *testing.T, prefix netip.Prefix) netip.Addr {
 	return next
 }
 
-func writeTreeBytes(t *testing.T, tree *Tree) []byte {
-	t.Helper()
+func writeTreeBytes(tb testing.TB, tree *Tree) []byte {
+	tb.Helper()
 	var output bytes.Buffer
 	_, err := tree.WriteTo(&output)
-	require.NoError(t, err)
+	require.NoError(tb, err)
 	return output.Bytes()
 }
 
@@ -1096,6 +979,16 @@ func captureMetadata(calls *[]metadataCall) inserter.Func {
 	) (mmdbtype.DataType, error) {
 		*calls = append(*calls, metadataCall{existing: existingValue, metadata: metadata})
 		return newValue, nil
+	}
+}
+
+func captureExisting(calls *[]metadataCall) inserter.Func {
+	return func(
+		existingValue, _ mmdbtype.DataType,
+		metadata inserter.Metadata,
+	) (mmdbtype.DataType, error) {
+		*calls = append(*calls, metadataCall{existing: existingValue, metadata: metadata})
+		return existingValue, nil
 	}
 }
 

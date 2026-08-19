@@ -645,7 +645,7 @@ func TestMemoPinsItsKeys(t *testing.T) {
 	firstResult, err := store.internUncached(mmdbtype.String("first result"))
 	require.NoError(t, err)
 
-	iRec := &insertRecord{store: store, inserterPure: true}
+	iRec := &insertRecord{store: store}
 	iRec.rememberResolved(first, firstResult)
 	assert.Equal(t, uint32(2), store.nodes[first].refCount,
 		"the memo did not pin its key")

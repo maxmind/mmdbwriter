@@ -226,7 +226,7 @@ func BenchmarkEnterpriseLoadThenOverlay(b *testing.B) {
 		}
 		for _, layer := range overlays {
 			for _, spec := range layer {
-				if err := tree.InsertFunc(
+				if err := tree.InsertPureFunc(
 					spec.network,
 					spec.value.Copy(),
 					inserter.DeepMerge,
@@ -248,28 +248,24 @@ func BenchmarkTreeInsertMetadataOverlayPasses(b *testing.B) {
 	plainBase, provenanceBase, plainOverlays, provenanceOverlays := metadataOverlayBenchmarkSpecs(
 		2_048,
 	)
-	plainSource := writeBenchmarkSource(b, plainBase, "metadata-overlay")
-	provenanceSource := writeBenchmarkSource(b, provenanceBase, "metadata-overlay")
+	plainSource := writeBenchmarkSource(b, plainBase)
+	provenanceSource := writeBenchmarkSource(b, provenanceBase)
 
-	metadataOutput := runMetadataOverlayBenchmark(b, plainSource, plainOverlays)
-	provenanceOutput := runProvenanceOverlayBenchmark(b, provenanceSource, provenanceOverlays)
-	if !bytes.Equal(metadataOutput, provenanceOutput) {
+	metadataTree := loadMetadataFixture(b, plainSource)
+	applyMetadataOverlays(b, metadataTree, plainOverlays)
+	provenanceTree := loadMetadataFixture(b, provenanceSource)
+	applyProvenanceOverlays(b, provenanceTree, provenanceOverlays)
+	if !bytes.Equal(writeTreeBytes(b, metadataTree), writeTreeBytes(b, provenanceTree)) {
 		b.Fatal("metadata and provenance benchmark fixtures produced different databases")
 	}
 
 	b.Run("metadata", func(b *testing.B) {
 		b.ReportAllocs()
 		for b.Loop() {
-			tree := loadBenchmarkSource(b, plainSource)
-			for _, spec := range plainOverlays {
-				if err := tree.InsertFunc(
-					spec.network,
-					spec.value,
-					metadataSpecificityInserter,
-				); err != nil {
-					b.Fatal(err)
-				}
-			}
+			b.StopTimer()
+			tree := loadMetadataFixture(b, plainSource)
+			b.StartTimer()
+			applyMetadataOverlays(b, tree, plainOverlays)
 		}
 		b.ReportMetric(float64(len(plainOverlays)), "overlays/op")
 	})
@@ -277,23 +273,10 @@ func BenchmarkTreeInsertMetadataOverlayPasses(b *testing.B) {
 	b.Run("sort-provenance-strip", func(b *testing.B) {
 		b.ReportAllocs()
 		for b.Loop() {
-			tree := loadBenchmarkSource(b, provenanceSource)
-			overlays := slices.Clone(provenanceOverlays)
-			slices.SortFunc(overlays, func(left, right benchmarkInsertSpec) int {
-				return right.network.Bits() - left.network.Bits()
-			})
-			for _, spec := range overlays {
-				if err := tree.InsertFunc(
-					spec.network,
-					spec.value,
-					provenanceSpecificityInserter,
-				); err != nil {
-					b.Fatal(err)
-				}
-			}
-			if err := stripBenchmarkProvenance(tree); err != nil {
-				b.Fatal(err)
-			}
+			b.StopTimer()
+			tree := loadMetadataFixture(b, provenanceSource)
+			b.StartTimer()
+			applyProvenanceOverlays(b, tree, provenanceOverlays)
 		}
 		b.ReportMetric(float64(len(provenanceOverlays)), "overlays/op")
 	})
@@ -363,12 +346,11 @@ func metadataOverlayBenchmarkSpecs(groupCount int) (
 func writeBenchmarkSource(
 	b *testing.B,
 	specs []benchmarkInsertSpec,
-	databaseType string,
 ) string {
 	b.Helper()
 	tree, err := New(Options{
 		BuildEpoch:              1,
-		DatabaseType:            databaseType,
+		DatabaseType:            "metadata-overlay",
 		Description:             map[string]string{"en": "Metadata overlay benchmark"},
 		IPVersion:               4,
 		IncludeReservedNetworks: true,
@@ -395,45 +377,33 @@ func writeBenchmarkSource(
 	return file.Name()
 }
 
-func loadBenchmarkSource(b *testing.B, path string) *Tree {
-	b.Helper()
-	tree, err := Load(path, Options{
-		BuildEpoch:              1,
-		IPVersion:               4,
-		IncludeReservedNetworks: true,
-	})
-	if err != nil {
-		b.Fatal(err)
-	}
-	return tree
-}
-
-func runMetadataOverlayBenchmark(
-	b *testing.B,
-	path string,
+// applyMetadataOverlays inserts the overlays in one unsorted pass, letting the
+// inserter compare the inserted network with the existing record.
+func applyMetadataOverlays(
+	tb testing.TB,
+	tree *Tree,
 	overlays []benchmarkInsertSpec,
-) []byte {
-	b.Helper()
-	tree := loadBenchmarkSource(b, path)
+) {
+	tb.Helper()
 	for _, spec := range overlays {
 		if err := tree.InsertFunc(
 			spec.network,
 			spec.value,
 			metadataSpecificityInserter,
 		); err != nil {
-			b.Fatal(err)
+			tb.Fatal(err)
 		}
 	}
-	return benchmarkTreeBytes(b, tree)
 }
 
-func runProvenanceOverlayBenchmark(
-	b *testing.B,
-	path string,
+// applyProvenanceOverlays is the pre-metadata equivalent: sort by prefix
+// length, compare against a prefix length carried in the value, then strip it.
+func applyProvenanceOverlays(
+	tb testing.TB,
+	tree *Tree,
 	overlays []benchmarkInsertSpec,
-) []byte {
-	b.Helper()
-	tree := loadBenchmarkSource(b, path)
+) {
+	tb.Helper()
 	sorted := slices.Clone(overlays)
 	slices.SortFunc(sorted, func(left, right benchmarkInsertSpec) int {
 		return right.network.Bits() - left.network.Bits()
@@ -444,37 +414,10 @@ func runProvenanceOverlayBenchmark(
 			spec.value,
 			provenanceSpecificityInserter,
 		); err != nil {
-			b.Fatal(err)
+			tb.Fatal(err)
 		}
 	}
-	if err := stripBenchmarkProvenance(tree); err != nil {
-		b.Fatal(err)
-	}
-	return benchmarkTreeBytes(b, tree)
-}
-
-func stripBenchmarkProvenance(tree *Tree) error {
-	return tree.InsertFunc(
-		netip.MustParsePrefix("0.0.0.0/0"),
-		nil,
-		func(existingValue, _ mmdbtype.DataType, _ inserter.Metadata) (mmdbtype.DataType, error) {
-			if existingValue == nil {
-				return nil, nil
-			}
-			value := existingValue.Copy().(mmdbtype.Map)
-			delete(value, provenancePrefixLengthKey)
-			return value, nil
-		},
-	)
-}
-
-func benchmarkTreeBytes(b *testing.B, tree *Tree) []byte {
-	b.Helper()
-	var output bytes.Buffer
-	if _, err := tree.WriteTo(&output); err != nil {
-		b.Fatal(err)
-	}
-	return output.Bytes()
+	stripProvenance(tb, tree)
 }
 
 func enterpriseBenchmarkLayers(
@@ -517,16 +460,16 @@ func enterpriseBenchmarkLayers(
 func reportOverlappingBenchmarkShape(
 	b *testing.B,
 	specs []benchmarkInsertSpec,
-	insertFunc inserter.Func,
+	pureFunc inserter.PureFunc,
 ) {
 	b.Helper()
 
 	tree := newBenchmarkTree(b)
-	if insertFunc == nil {
+	if pureFunc == nil {
 		insertBenchmarkSpecs(b, tree, specs)
 	} else {
 		for _, spec := range specs {
-			if err := tree.InsertPureFunc(spec.network, spec.value, insertFunc); err != nil {
+			if err := tree.InsertPureFunc(spec.network, spec.value, pureFunc); err != nil {
 				b.Fatal(err)
 			}
 		}

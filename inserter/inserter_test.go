@@ -14,13 +14,13 @@ import (
 var benchmarkMergeValue mmdbtype.DataType
 
 func TestRemove(t *testing.T) {
-	v, err := Remove(mmdbtype.Map{}, mmdbtype.Map{}, Metadata{})
+	v, err := Remove(mmdbtype.Map{}, mmdbtype.Map{})
 	require.NoError(t, err)
 	assert.Nil(t, v)
 }
 
 func TestReplace(t *testing.T) {
-	v, err := Replace(mmdbtype.Bool(true), mmdbtype.Uint64(1), Metadata{})
+	v, err := Replace(mmdbtype.Bool(true), mmdbtype.Uint64(1))
 	require.NoError(t, err)
 	assert.Equal(t, mmdbtype.Uint64(1), v)
 }
@@ -86,7 +86,7 @@ func TestTopLevelMerge(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		v, err := TopLevelMerge(test.existing, test.new, Metadata{})
+		v, err := TopLevelMerge(test.existing, test.new)
 		if test.expectedErr != "" {
 			require.EqualError(t, err, test.expectedErr)
 		} else {
@@ -104,7 +104,7 @@ func BenchmarkTopLevelMergeOverwriteHeavy(b *testing.B) {
 	b.ResetTimer()
 
 	for range b.N {
-		value, err := TopLevelMerge(existing, newValue, Metadata{})
+		value, err := TopLevelMerge(existing, newValue)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -120,7 +120,7 @@ func BenchmarkTopLevelMergeAdditive(b *testing.B) {
 	b.ResetTimer()
 
 	for range b.N {
-		value, err := TopLevelMerge(existing, newValue, Metadata{})
+		value, err := TopLevelMerge(existing, newValue)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -136,7 +136,7 @@ func BenchmarkDeepMergeNestedOverwrite(b *testing.B) {
 	b.ResetTimer()
 
 	for range b.N {
-		value, err := DeepMerge(existing, newValue, Metadata{})
+		value, err := DeepMerge(existing, newValue)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -152,7 +152,7 @@ func BenchmarkDeepMergeNestedAdditive(b *testing.B) {
 	b.ResetTimer()
 
 	for range b.N {
-		value, err := DeepMerge(existing, newValue, Metadata{})
+		value, err := DeepMerge(existing, newValue)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -271,7 +271,7 @@ func TestDeepMerge(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		v, err := DeepMerge(test.existing, test.new, Metadata{})
+		v, err := DeepMerge(test.existing, test.new)
 		if test.expectedErr != "" {
 			require.EqualError(t, err, test.expectedErr)
 		} else {
@@ -291,7 +291,7 @@ func TestDeepMergeReturnsExistingContainersWhenUnchanged(t *testing.T) {
 		"slice": mmdbtype.Slice{
 			mmdbtype.Map{"value": mmdbtype.String("unchanged")},
 		},
-	}, Metadata{})
+	})
 	require.NoError(t, err)
 
 	mergedMap := merged.(mmdbtype.Map)
@@ -311,7 +311,7 @@ func TestDeepMergeReusesUnchangedNestedContainers(t *testing.T) {
 	existingSnapshot := existing.Copy()
 	merged, err := DeepMerge(existing, mmdbtype.Map{
 		"changed": mmdbtype.String("new"),
-	}, Metadata{})
+	})
 	require.NoError(t, err)
 
 	assert.Equal(t, existingSnapshot, existing, "the existing value was modified")
