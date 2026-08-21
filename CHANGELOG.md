@@ -20,11 +20,12 @@
     may memoize repeated argument pairs. `Tree.InsertRangePureFunc` and
     `Tree.InsertRange` share the memo across the entire range.
   - `Func` also receives an `inserter.Metadata` describing the insertion and the
-    existing tree record. Only `Tree.InsertFunc` and `Tree.InsertRangeFunc`
-    accept it, and they call it separately for every covered record. A caller
-    can compare the inserted network with the current record without a separate
-    lookup, and the common and load paths stay unable to depend on tree
-    metadata.
+    existing tree record: `InsertedNetwork`, `ExistingDepth`, `ExistingAddr`,
+    `TreeDepth`, and the derived `InsertedDepth()` and `ExistingNetwork()`. Only
+    `Tree.InsertFunc` and `Tree.InsertRangeFunc` accept it, and they call it
+    separately for every covered record. A caller can compare the inserted
+    network with the current record without a separate lookup, and the common
+    and load paths stay unable to depend on tree metadata.
   - Metadata reports the record as prior splits and merges left it, not the
     network that established its value. A policy that depends on that provenance
     must keep the state in its values. Range metadata reports each decomposed
@@ -39,8 +40,14 @@
     it is resolving.
   - `inserter.Replace`, `inserter.TopLevelMerge`, and `inserter.DeepMerge`
     replace `inserter.ReplaceWith`, `inserter.TopLevelMergeWith`, and
-    `inserter.DeepMergeWith`. `inserter.FuncGenerator` was removed.
-  - A nil function passed to an explicit insert method returns an error.
+    `inserter.DeepMergeWith`.
+  - `inserter.FuncGenerator` was removed. It was the network-aware inserter API,
+    and `inserter.Func` replaces it: pass one to `Tree.InsertFunc` or
+    `Tree.InsertRangeFunc` and read `Metadata.InsertedNetwork` in place of the
+    network the generator closed over, or `Metadata.ExistingNetwork()` for the
+    record being replaced.
+  - A nil function passed to `Tree.InsertFunc`, `Tree.InsertRangeFunc`,
+    `Tree.InsertPureFunc`, or `Tree.InsertRangePureFunc` returns an error.
     `Options.Inserter` may still be nil, which is equivalent to
     `inserter.Replace`.
   - Non-nil callback results become tree-owned and must not be modified after
