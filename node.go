@@ -104,8 +104,17 @@ type insertRecord struct {
 	// flag fits in padding, and rebuilding the prefix per record measures at
 	// about 4ns.
 	insertedAs4 bool
-	// splitDepth is the first pre-insert record depth in a split chain. Tree
-	// depths are at most 128, and zero is the sentinel for no active split.
+	// splitDepth is the depth of the record a split chain started from, which
+	// is the extent that record had before this insertion. Tree depths are at
+	// most 128, and zero is the sentinel for no active split.
+	//
+	// One field is enough for the whole walk, because a split chain and a
+	// descent deeper than prefixLen are never live at the same time. Splitting
+	// happens only at a record shallower than prefixLen, and the chain then
+	// descends through a single child until it resolves at exactly prefixLen.
+	// Records deeper than prefixLen resolve at their own depth and are never
+	// split. Threading the depth through every recursive call would buy
+	// nothing.
 	splitDepth uint8
 	memoSet    bool
 }
@@ -356,12 +365,6 @@ func (iRec *insertRecord) insertNode(
 	index nodeIndex,
 	currentDepth int,
 ) error {
-	// A split chain descends through one child from splitDepth to prefixLen:
-	// splitting only happens above prefixLen, so the next insertNode takes the
-	// single-child path. Below prefixLen, records resolve at their own depths
-	// and are never split. The two depths are therefore never both live, and
-	// iRec.splitDepth alone preserves the pre-insert record boundary without
-	// adding a parameter to every recursive call.
 	newDepth := currentDepth + 1
 	node := iRec.tree.nodeAt(index)
 	// Check if we are inside the network already
@@ -439,6 +442,9 @@ func (iRec *insertRecord) insertRecord(
 		}
 
 		if r.recordType == recordTypeEmpty && iRec.recordType == recordTypeData {
+			// newDepth is the record's own extent, with no splitDepth check.
+			// Only a data record splits, so a split chain never descends into
+			// an empty record and splitDepth is necessarily zero here.
 			value, owned, err := iRec.resolveValue(nilValueRef, newDepth)
 			if err != nil {
 				return err

@@ -429,6 +429,10 @@ func (t *Tree) InsertPureFunc(
 	)
 }
 
+// insertResolver carries the callback for one insert. At most one field is
+// non-nil: both nil for a direct value, an alias, or a reserved insert, and
+// otherwise whichever kind the caller chose. resolve reads pure first, so a
+// value with both set would silently ignore withMetadata.
 type insertResolver struct {
 	withMetadata inserter.Func
 	pure         inserter.PureFunc
