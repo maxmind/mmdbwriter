@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/maxmind/mmdbwriter/v2/inserter"
 	"github.com/maxmind/mmdbwriter/v2/mmdbtype"
 )
 
@@ -142,6 +143,46 @@ func TestFailedInsertsPassTheAudit(t *testing.T) {
 			},
 		},
 		{
+			// The callback fails on the first of two in-network children, so
+			// the walk unwinds before the sibling is visited.
+			name: "inserter error on the first covered record",
+			insert: func(t *testing.T, tree *Tree) error {
+				require.NoError(t, tree.Insert(
+					netip.MustParsePrefix("1.0.0.0/25"), mmdbtype.String("left")))
+				require.NoError(t, tree.Insert(
+					netip.MustParsePrefix("1.0.0.128/25"), mmdbtype.String("right")))
+				calls := 0
+				return tree.InsertPureFunc(
+					netip.MustParsePrefix("1.0.0.0/24"),
+					mmdbtype.String("new"),
+					func(_, _ mmdbtype.DataType) (mmdbtype.DataType, error) {
+						calls++
+						assert.Equal(t, 1, calls, "the walk continued past the failure")
+						return nil, errors.New("inserter failure")
+					},
+				)
+			},
+		},
+		{
+			// The callback fails over an empty record wider than the insert,
+			// where a success would have created a path record.
+			name: "inserter error over a wider empty record",
+			insert: func(t *testing.T, tree *Tree) error {
+				return tree.InsertFunc(
+					netip.MustParsePrefix("1.0.0.0/24"),
+					mmdbtype.String("new"),
+					func(_, _ mmdbtype.DataType, metadata inserter.Metadata) (
+						mmdbtype.DataType,
+						error,
+					) {
+						assert.Less(t, metadata.ExistingDepth, metadata.InsertedDepth(),
+							"the empty record was not wider than the insert")
+						return nil, errors.New("inserter failure")
+					},
+				)
+			},
+		},
+		{
 			name: "invalid nested value from an inserter",
 			insert: func(t *testing.T, tree *Tree) error {
 				require.NoError(t, tree.Insert(
@@ -149,7 +190,7 @@ func TestFailedInsertsPassTheAudit(t *testing.T) {
 				return tree.InsertFunc(
 					netip.MustParsePrefix("1.0.0.0/24"),
 					mmdbtype.String("new"),
-					func(_, _ mmdbtype.DataType) (mmdbtype.DataType, error) {
+					func(_, _ mmdbtype.DataType, _ inserter.Metadata) (mmdbtype.DataType, error) {
 						return mmdbtype.Map{"p": mmdbtype.Pointer(7)}, nil
 					},
 				)

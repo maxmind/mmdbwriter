@@ -1,10 +1,12 @@
 package mmdbwriter
 
 import (
+	"bytes"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"net/netip"
-	"os"
+	"slices"
 	"testing"
 
 	"github.com/maxmind/mmdbwriter/v2/inserter"
@@ -158,23 +160,12 @@ func BenchmarkTreeLoadOverlappingPasses(b *testing.B) {
 	tree := newBenchmarkTree(b)
 	insertBenchmarkSpecs(b, tree, specs)
 
-	file, err := os.CreateTemp(b.TempDir(), "mmdbwriter-benchmark-*.mmdb")
-	if err != nil {
-		b.Fatal(err)
-	}
-
-	_, err = tree.WriteTo(file)
-	if err != nil {
-		b.Fatal(err)
-	}
-	if err := file.Close(); err != nil {
-		b.Fatal(err)
-	}
+	path := writeTempDB(b, tree)
 
 	b.ReportAllocs()
 	for b.Loop() {
 		loadedTree, err := Load(
-			file.Name(),
+			path,
 			Options{
 				IncludeReservedNetworks: true,
 			},
@@ -205,26 +196,17 @@ func BenchmarkEnterpriseLoadThenOverlay(b *testing.B) {
 			b.Fatal(err)
 		}
 	}
-	file, err := os.CreateTemp(b.TempDir(), "mmdbwriter-enterprise-*.mmdb")
-	if err != nil {
-		b.Fatal(err)
-	}
-	if _, err := source.WriteTo(file); err != nil {
-		b.Fatal(err)
-	}
-	if err := file.Close(); err != nil {
-		b.Fatal(err)
-	}
+	path := writeTempDB(b, source)
 
 	b.ReportAllocs()
 	for b.Loop() {
-		tree, err := Load(file.Name(), Options{IncludeReservedNetworks: true})
+		tree, err := Load(path, Options{IncludeReservedNetworks: true})
 		if err != nil {
 			b.Fatal(err)
 		}
 		for _, layer := range overlays {
 			for _, spec := range layer {
-				if err := tree.InsertFunc(
+				if err := tree.InsertPureFunc(
 					spec.network,
 					spec.value.Copy(),
 					inserter.DeepMerge,
@@ -237,6 +219,181 @@ func BenchmarkEnterpriseLoadThenOverlay(b *testing.B) {
 
 	b.ReportMetric(float64(len(base)), "networks/op")
 	b.ReportMetric(float64(len(overlays)), "overlays/op")
+}
+
+// BenchmarkTreeInsertMetadataOverlayPasses compares a single unsorted metadata
+// overlay with the equivalent sort, provenance comparison, and strip pass.
+// The fixture has disjoint overlays that exercise both comparator outcomes.
+func BenchmarkTreeInsertMetadataOverlayPasses(b *testing.B) {
+	plainBase, provenanceBase, plainOverlays, provenanceOverlays := metadataOverlayBenchmarkSpecs(
+		2_048,
+	)
+	plainSource := writeBenchmarkSource(b, plainBase)
+	provenanceSource := writeBenchmarkSource(b, provenanceBase)
+
+	metadataTree := loadMetadataFixture(b, plainSource)
+	applyMetadataOverlays(b, metadataTree, plainOverlays)
+	provenanceTree := loadMetadataFixture(b, provenanceSource)
+	applyProvenanceOverlays(b, provenanceTree, provenanceOverlays)
+	if !bytes.Equal(writeTreeBytes(b, metadataTree), writeTreeBytes(b, provenanceTree)) {
+		b.Fatal("metadata and provenance benchmark fixtures produced different databases")
+	}
+
+	b.Run("metadata", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			b.StopTimer()
+			tree := loadMetadataFixture(b, plainSource)
+			b.StartTimer()
+			applyMetadataOverlays(b, tree, plainOverlays)
+		}
+		b.ReportMetric(float64(len(plainOverlays)), "overlays/op")
+	})
+
+	b.Run("sort-provenance-strip", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			b.StopTimer()
+			tree := loadMetadataFixture(b, provenanceSource)
+			b.StartTimer()
+			applyProvenanceOverlays(b, tree, provenanceOverlays)
+		}
+		b.ReportMetric(float64(len(provenanceOverlays)), "overlays/op")
+	})
+}
+
+func metadataOverlayBenchmarkSpecs(groupCount int) (
+	plainBase,
+	provenanceBase,
+	plainOverlays,
+	provenanceOverlays []benchmarkInsertSpec,
+) {
+	plainBase = make([]benchmarkInsertSpec, 0, groupCount*3)
+	provenanceBase = make([]benchmarkInsertSpec, 0, groupCount*3)
+	plainOverlays = make([]benchmarkInsertSpec, 0, groupCount*2)
+	provenanceOverlays = make([]benchmarkInsertSpec, 0, groupCount*2)
+	for group := range groupCount {
+		start := uint32(0x01000000 + group*4) // 1.0.0.0 and upward.
+		for child := range 2 {
+			prefix := netip.PrefixFrom(ipv4Addr(start+uint32(child)), 32)
+			name := mmdbtype.String(fmt.Sprintf("base-specific-%d-%d", group, child))
+			plainBase = append(plainBase, benchmarkInsertSpec{
+				network: prefix,
+				value:   mmdbtype.Map{"name": name},
+			})
+			provenanceBase = append(provenanceBase, benchmarkInsertSpec{
+				network: prefix,
+				value:   provenanceValue(name, 32),
+			})
+		}
+
+		wideBasePrefix := netip.PrefixFrom(ipv4Addr(start+2), 31)
+		wideBaseName := mmdbtype.String(fmt.Sprintf("base-wide-%d", group))
+		plainBase = append(plainBase, benchmarkInsertSpec{
+			network: wideBasePrefix,
+			value:   mmdbtype.Map{"name": wideBaseName},
+		})
+		provenanceBase = append(provenanceBase, benchmarkInsertSpec{
+			network: wideBasePrefix,
+			value:   provenanceValue(wideBaseName, 31),
+		})
+
+		wideOverlayPrefix := netip.PrefixFrom(ipv4Addr(start), 31)
+		wideOverlayName := mmdbtype.String(fmt.Sprintf("overlay-wide-%d", group))
+		plainOverlays = append(plainOverlays, benchmarkInsertSpec{
+			network: wideOverlayPrefix,
+			value:   mmdbtype.Map{"name": wideOverlayName},
+		})
+		provenanceOverlays = append(provenanceOverlays, benchmarkInsertSpec{
+			network: wideOverlayPrefix,
+			value:   provenanceValue(wideOverlayName, 31),
+		})
+
+		specificOverlayPrefix := netip.PrefixFrom(ipv4Addr(start+2), 32)
+		specificOverlayName := mmdbtype.String(fmt.Sprintf("overlay-specific-%d", group))
+		plainOverlays = append(plainOverlays, benchmarkInsertSpec{
+			network: specificOverlayPrefix,
+			value:   mmdbtype.Map{"name": specificOverlayName},
+		})
+		provenanceOverlays = append(provenanceOverlays, benchmarkInsertSpec{
+			network: specificOverlayPrefix,
+			value:   provenanceValue(specificOverlayName, 32),
+		})
+	}
+	return plainBase, provenanceBase, plainOverlays, provenanceOverlays
+}
+
+func ipv4Addr(value uint32) netip.Addr {
+	var address [4]byte
+	binary.BigEndian.PutUint32(address[:], value)
+	return netip.AddrFrom4(address)
+}
+
+func writeBenchmarkSource(
+	b *testing.B,
+	specs []benchmarkInsertSpec,
+) string {
+	b.Helper()
+	tree, err := New(Options{
+		BuildEpoch:              1,
+		DatabaseType:            "metadata-overlay",
+		Description:             map[string]string{"en": "Metadata overlay benchmark"},
+		IPVersion:               4,
+		IncludeReservedNetworks: true,
+		RecordSize:              24,
+	})
+	if err != nil {
+		b.Fatal(err)
+	}
+	for _, spec := range specs {
+		if err := tree.Insert(spec.network, spec.value); err != nil {
+			b.Fatal(err)
+		}
+	}
+	return writeTempDB(b, tree)
+}
+
+// applyMetadataOverlays inserts the overlays in one unsorted pass, letting the
+// inserter compare the inserted network with the existing record.
+func applyMetadataOverlays(
+	tb testing.TB,
+	tree *Tree,
+	overlays []benchmarkInsertSpec,
+) {
+	tb.Helper()
+	for _, spec := range overlays {
+		if err := tree.InsertFunc(
+			spec.network,
+			spec.value,
+			metadataSpecificityInserter,
+		); err != nil {
+			tb.Fatal(err)
+		}
+	}
+}
+
+// applyProvenanceOverlays is the pre-metadata equivalent: sort by prefix
+// length, compare against a prefix length carried in the value, then strip it.
+func applyProvenanceOverlays(
+	tb testing.TB,
+	tree *Tree,
+	overlays []benchmarkInsertSpec,
+) {
+	tb.Helper()
+	sorted := slices.Clone(overlays)
+	slices.SortFunc(sorted, func(left, right benchmarkInsertSpec) int {
+		return right.network.Bits() - left.network.Bits()
+	})
+	for _, spec := range sorted {
+		if err := tree.InsertFunc(
+			spec.network,
+			spec.value,
+			provenanceSpecificityInserter,
+		); err != nil {
+			tb.Fatal(err)
+		}
+	}
+	stripProvenance(tb, tree)
 }
 
 func enterpriseBenchmarkLayers(
@@ -279,16 +436,16 @@ func enterpriseBenchmarkLayers(
 func reportOverlappingBenchmarkShape(
 	b *testing.B,
 	specs []benchmarkInsertSpec,
-	insertFunc inserter.Func,
+	pureFunc inserter.PureFunc,
 ) {
 	b.Helper()
 
 	tree := newBenchmarkTree(b)
-	if insertFunc == nil {
+	if pureFunc == nil {
 		insertBenchmarkSpecs(b, tree, specs)
 	} else {
 		for _, spec := range specs {
-			if err := tree.InsertPureFunc(spec.network, spec.value, insertFunc); err != nil {
+			if err := tree.InsertPureFunc(spec.network, spec.value, pureFunc); err != nil {
 				b.Fatal(err)
 			}
 		}

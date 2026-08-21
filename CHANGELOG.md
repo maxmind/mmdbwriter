@@ -12,26 +12,60 @@
   trees, IPv4-mapped prefixes at `/96` or longer are treated as IPv4 prefixes,
   IPv4-mapped prefixes shorter than `/96` are rejected, and aliased or reserved
   network errors report masked `netip.Prefix` values.
-- Changed the inserter API so inserters receive both the existing value and the
-  new value directly. This removes per-insertion closure generation from merge
-  insertion paths. `inserter.ReplaceWith`, `inserter.TopLevelMergeWith`, and
-  `inserter.DeepMergeWith` are replaced by `inserter.Replace`,
-  `inserter.TopLevelMerge`, and `inserter.DeepMerge`. `inserter.FuncGenerator`
-  was removed, `Options.Inserter` now accepts an `inserter.Func`, and
-  `Tree.InsertFunc` and `Tree.InsertRangeFunc` now take the new value and a
-  function. These functions are evaluated separately for every covered record,
-  as in v1. Added `Tree.InsertPureFunc` and `Tree.InsertRangePureFunc` for
-  functions whose result and error depend only on their arguments. These methods
-  may memoize repeated argument pairs within an insertion;
-  `Tree.InsertRangePureFunc` shares the memo across the entire range. A nil
-  function passed to `Tree.InsertFunc`, `Tree.InsertRangeFunc`,
-  `Tree.InsertPureFunc`, or `Tree.InsertRangePureFunc` now returns an error;
-  `Options.Inserter` may still be nil, which is equivalent to
-  `inserter.Replace`. Non-nil results become tree-owned and must not be modified
-  after the function returns. As in v1, a function that fails partway through
-  the covered records leaves the records already visited holding their new
-  values; interning now validates values per record, so more error kinds can
-  fire mid-walk.
+- Split inserter callbacks into `inserter.PureFunc` and `inserter.Func`.
+  - `PureFunc` receives the existing and new values. `Options.Inserter`, the
+    default `Tree.Insert` and `Tree.InsertRange` paths, `Tree.InsertPureFunc`,
+    `Tree.InsertRangePureFunc`, and every function in the `inserter` package use
+    it. Its result and error must depend only on those values, so an insertion
+    may memoize repeated argument pairs. `Tree.InsertRangePureFunc` shares the
+    memo across the entire range, as does `Tree.InsertRange` when
+    `Options.Inserter` is set. With the default nil inserter, `Tree.InsertRange`
+    takes the direct-value path and there is no memo.
+  - **This is the one change that does not fail to compile.** `Options.Inserter`
+    keeps the two-argument shape it had in v1, so an existing inserter still
+    compiles, but it is now memoized: it runs once per distinct existing value
+    instead of once per covered record. An inserter that counts calls, allocates
+    identifiers, or reads mutable state changes behavior with no compile error.
+    Pass such a function to `Tree.InsertFunc` or `Tree.InsertRangeFunc` instead,
+    which never memoize.
+  - `Func` also receives an `inserter.Metadata` describing the insertion and the
+    existing tree record: `InsertedNetwork`, `ExistingDepth`, `ExistingAddr`,
+    `TreeDepth`, and the derived `InsertedDepth()` and `ExistingNetwork()`. Only
+    `Tree.InsertFunc` and `Tree.InsertRangeFunc` accept it, and they call it
+    separately for every covered record. A caller can compare the inserted
+    network with the current record without a separate lookup, and the common
+    and load paths stay unable to depend on tree metadata.
+  - Metadata reports the record as prior splits and merges left it, not the
+    network that established its value. A policy that depends on that provenance
+    must keep the state in its values. Range metadata reports each decomposed
+    subnet.
+  - `Metadata.ExistingNetwork()` follows the inserted network's address family.
+    For an IPv4 insert into an IPv6 tree, a record above the IPv4 subtree
+    remains in IPv6 form. Only `Options.DisableIPv4Aliasing` reaches such a
+    record: aliasing splits the path down to depth 96, so an IPv4 insert into a
+    default IPv6 tree resolves at depth 97 or deeper. Every covered record
+    reports its own extent, including records more specific than the inserted
+    network, so an insert covering several records tells the callback which one
+    it is resolving.
+  - `inserter.Replace`, `inserter.TopLevelMerge`, and `inserter.DeepMerge`
+    replace `inserter.ReplaceWith`, `inserter.TopLevelMergeWith`, and
+    `inserter.DeepMergeWith`.
+  - `inserter.FuncGenerator` was removed. It was the network-aware inserter API,
+    and `inserter.Func` replaces it: pass one to `Tree.InsertFunc` or
+    `Tree.InsertRangeFunc` and read `Metadata.InsertedNetwork` in place of the
+    network the generator closed over, or `Metadata.ExistingNetwork()` for the
+    record being replaced.
+  - A nil function passed to `Tree.InsertFunc`, `Tree.InsertRangeFunc`,
+    `Tree.InsertPureFunc`, or `Tree.InsertRangePureFunc` returns an error.
+    `Options.Inserter` may still be nil, which is equivalent to
+    `inserter.Replace`.
+  - Non-nil callback results become tree-owned and must not be modified after
+    the function returns. As in v1, a callback that returns an error partway
+    through the covered records leaves the records already visited holding their
+    new values. Installed equal values, and records that become equally empty,
+    may coalesce during error unwinding, while an error before any result leaves
+    the tree logically unchanged. Interning now validates values per record, so
+    more error kinds can fire mid-walk.
 - Reduced allocations on the tree insert and serialization hot paths, lowering
   memory pressure and GC overhead during large builds.
 - Reworked value storage to intern every value node once in a content-addressed

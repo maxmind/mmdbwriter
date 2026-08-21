@@ -87,26 +87,25 @@ type Options struct {
 	// tree in the process.
 	RefcountAudit bool
 
-	// Inserter is the function used when calling `Insert`. Leaving it nil
-	// is equivalent to `inserter.Replace`, which replaces any conflicting old
-	// value entirely with the new, and allows Insert to use the default
-	// direct-value fast path. Passing `inserter.Replace` explicitly has the same
-	// behavior but skips that optimization.
+	// Inserter is the pure function used by Insert, InsertRange, and Load.
+	// Leaving it nil is equivalent to inserter.Replace, which replaces any
+	// conflicting old value entirely with the new, and allows Insert and
+	// InsertRange to use the default direct-value fast path. Passing
+	// inserter.Replace explicitly has the same behavior but skips that
+	// optimization.
 	//
-	// An Inserter must not modify either argument. The existing value is a
-	// shared, read-only view. It is equal to, but not necessarily the same
-	// object as, the value originally inserted. The new value is the value
-	// passed to the insert call, or a shared view of the decoded record
-	// during Load. Nested containers can be shared across records, so copy a
-	// value before you modify it. The tree calls the function separately for
-	// every covered record. Any non-nil returned value becomes tree-owned and
-	// must not be modified after return.
+	// inserter.PureFunc documents the rules an Inserter must follow: purity,
+	// which values it may modify, and which unvalidated inputs it can receive.
+	// The existing value it sees is equal to, but not necessarily the same
+	// object as, the value originally inserted.
 	//
-	// Only direct inserts and inserter results are validated, so the function
-	// can receive an unsupported input value, such as a raw mmdbtype.Pointer,
-	// and must replace or discard it. If the function fails partway through
-	// the covered records, the records already visited keep their new values.
-	Inserter inserter.Func
+	// Purity is required, not advisory. An Inserter runs once per distinct
+	// existing value, not once per covered record, so one that counts calls or
+	// reads mutable state gives results that depend on the tree's shape. Pass
+	// such a function to InsertFunc or InsertRangeFunc, which never memoize.
+	//
+	// The partial-failure behavior is the same as InsertFunc's.
+	Inserter inserter.PureFunc
 }
 
 // Tree represents a MaxMind DB search tree. A Tree is not safe for
@@ -136,7 +135,7 @@ type Tree struct {
 	treeDepth int
 
 	nodeCount int
-	inserter  inserter.Func
+	inserter  inserter.PureFunc
 	// refcountAudit runs the full ownership audit after every insert that
 	// reaches the value store and after every successful load. New sets it from
 	// Options.RefcountAudit or the MMDBWRITER_REFCOUNT_AUDIT environment variable.
@@ -238,10 +237,10 @@ func metadataDimension(name string, value uint) (int, error) {
 // map and slice graphs. Source networks that share a data offset share one
 // stored value.
 // During the load, a cache holds one reference per distinct offset in the
-// source data section. Load releases the cache before it returns. A
-// non-nil Options.Inserter also receives a materialized view of each
-// decoded record. The inserter must treat its arguments as immutable and must
-// copy a value before modifying it.
+// source data section. Load releases the cache before it returns. A non-nil
+// Options.Inserter also receives a materialized view of each decoded
+// record. The inserter must treat its value arguments as immutable and must copy
+// a value before modifying it.
 func Load(path string, opts Options) (*Tree, error) {
 	db, err := maxminddb.Open(path)
 	if err != nil {
@@ -309,13 +308,7 @@ func Load(path string, opts Options) (*Tree, error) {
 			return nil, err
 		}
 
-		err = tree.insertNormalizedRef(
-			prefix,
-			recordTypeData,
-			tree.inserter,
-			noNodeIndex,
-			value,
-		)
+		err = tree.insertNormalizedRef(prefix, tree.inserter, value)
 		tree.valueStore.release(value)
 		if err != nil {
 			return nil, fmt.Errorf("loading network %s from %s: %w", prefix, path, err)
@@ -358,27 +351,38 @@ func (t *Tree) normalizeLoadPrefix(prefix netip.Prefix) (netip.Prefix, error) {
 //
 // This is not safe to call from multiple threads.
 func (t *Tree) Insert(prefix netip.Prefix, value mmdbtype.DataType) error {
-	return t.insert(prefix, recordTypeData, t.inserter, false, noNodeIndex, value)
+	return t.insert(
+		prefix,
+		recordTypeData,
+		insertResolver{pure: t.inserter},
+		noNodeIndex,
+		value,
+	)
 }
 
 // InsertFunc will insert the output of the function passed to it. The arguments
-// passed to the function are the existing value in the record and the new value
-// passed to InsertFunc. The inserter function should return the
-// mmdbtype.DataType to be inserted. In all cases, a nil value means an empty
-// record.
+// passed to the function are the existing value in the record, the new value
+// passed to InsertFunc, and metadata for the insertion and existing record. The
+// inserter function should return the mmdbtype.DataType to be inserted. In all
+// cases, a nil value means an empty record.
 //
-// You must never modify arguments passed to the function as values may be
-// shared with other records. If you want a copy of the mmdbtype.DataType to
-// modify, call the Copy method on it, which will make a deep copy. This isn't
-// done automatically before calling the function as not all functions will
-// require the record to be copied and there is a non-trivial performance
-// impact.
+// inserter.Func documents the rules the function must follow, including which
+// values it may modify. The tree does not copy a value before the call, as not
+// every function needs a copy and copying costs real time.
 //
-// The function is called separately for every covered record. Any
-// non-nil value it returns becomes tree-owned and must not be modified after the
-// function returns. A nil insertFunc returns an error. If the function fails
-// partway through the covered records, the call returns the error but the
-// records already visited keep their new values.
+// The function is called separately for every covered record, except that a
+// reserved or aliased network inside the inserted network is skipped silently.
+// A nil insertFunc returns an error. If the function returns an error partway through the
+// covered records, the call returns the error but the records already visited
+// keep their new values. A failure before any result is installed leaves
+// values, record boundaries, and lookups logically unchanged. After a partial
+// success, installed equal values, and records that become equally empty, may
+// coalesce, so a retry can observe merged records.
+//
+// A failed insert does not shrink the tree back. Splitting a record to reach
+// the inserted network allocates nodes, and the unwinding merge restores the
+// record boundaries without reclaiming them, so a caller that retries a failing
+// insert many times grows the node arena each time.
 //
 // This is not safe to call from multiple threads.
 func (t *Tree) InsertFunc(
@@ -389,32 +393,58 @@ func (t *Tree) InsertFunc(
 	if insertFunc == nil {
 		return errNilInserterFunc
 	}
-	return t.insert(prefix, recordTypeData, insertFunc, false, noNodeIndex, value)
+	return t.insert(
+		prefix,
+		recordTypeData,
+		insertResolver{withMetadata: insertFunc},
+		noNodeIndex,
+		value,
+	)
 }
 
-// InsertPureFunc is like InsertFunc, but the function's result and error must
-// depend only on its arguments. It must not depend on invocation count, order,
-// or external mutable state. Repeated argument pairs may be memoized during the
-// insert, and a non-nil result may be shared by multiple records. A nil
-// insertFunc returns an error.
+// InsertPureFunc inserts the output of a function that receives the existing
+// and new values but no insertion metadata. The function's result and error
+// must depend only on its arguments. It must not depend on invocation count,
+// order, or external mutable state. Repeated argument pairs may be memoized
+// during the insert, and a non-nil result may be shared by multiple records. A
+// nil pureFunc returns an error. The value ownership and partial-error rules
+// are the same as for InsertFunc.
 //
 // This is not safe to call from multiple threads.
 func (t *Tree) InsertPureFunc(
 	prefix netip.Prefix,
 	value mmdbtype.DataType,
-	insertFunc inserter.Func,
+	pureFunc inserter.PureFunc,
 ) error {
-	if insertFunc == nil {
+	if pureFunc == nil {
 		return errNilInserterFunc
 	}
-	return t.insert(prefix, recordTypeData, insertFunc, true, noNodeIndex, value)
+	return t.insert(
+		prefix,
+		recordTypeData,
+		insertResolver{pure: pureFunc},
+		noNodeIndex,
+		value,
+	)
+}
+
+// insertResolver carries the callback for one insert. At most one field is
+// non-nil: both nil for a direct value, an alias, or a reserved insert, and
+// otherwise whichever kind the caller chose. resolve reads pure first, so a
+// value with both set would silently ignore withMetadata.
+type insertResolver struct {
+	withMetadata inserter.Func
+	pure         inserter.PureFunc
+}
+
+func (r insertResolver) hasFunc() bool {
+	return r.withMetadata != nil || r.pure != nil
 }
 
 func (t *Tree) insert(
 	prefix netip.Prefix,
 	recordType recordType,
-	insertFunc inserter.Func,
-	inserterPure bool,
+	resolver insertResolver,
 	node nodeIndex,
 	value mmdbtype.DataType,
 ) error {
@@ -433,7 +463,7 @@ func (t *Tree) insert(
 			return err
 		}
 	}
-	iRec, err := t.newInsertRecord(recordType, insertFunc, inserterPure, node, value)
+	iRec, err := t.newInsertRecord(recordType, resolver, node, value)
 	if err != nil {
 		return t.finishInsertAudit(err)
 	}
@@ -449,17 +479,20 @@ func (t *Tree) insert(
 // caller's reference, taking one of its own for the insert.
 func (t *Tree) insertNormalizedRef(
 	prefix netip.Prefix,
-	recordType recordType,
-	insertFunc inserter.Func,
-	node nodeIndex,
+	pureFunc inserter.PureFunc,
 	value valueRef,
 ) error {
 	if t.treeDepth == 32 && !prefix.Addr().Is4() {
 		return errors.New("IPv6 prefixes cannot be inserted into an IPv4 tree")
 	}
 	t.valueStore.retain(value)
-	iRec := t.newInsertRecordRef(recordType, insertFunc, false, node, value)
-	if insertFunc != nil {
+	iRec := t.newInsertRecordRef(
+		recordTypeData,
+		insertResolver{pure: pureFunc},
+		noNodeIndex,
+		value,
+	)
+	if pureFunc != nil {
 		iRec.valueView = t.valueStore.materialize(value)
 	}
 	defer iRec.releaseResolved()
@@ -478,13 +511,14 @@ func (t *Tree) insertPrepared(
 	ip, prefixLen := t.prefixInsertIP(prefix)
 	iRec.ip = ip
 	iRec.prefixLen = prefixLen
+	iRec.splitDepth = 0
+	iRec.insertedAs4 = prefix.Addr().Is4()
 	return iRec.insertNode(t.root, 0)
 }
 
 func (t *Tree) newInsertRecord(
 	recordType recordType,
-	insertFunc inserter.Func,
-	inserterPure bool,
+	resolver insertResolver,
 	node nodeIndex,
 	value mmdbtype.DataType,
 ) (*insertRecord, error) {
@@ -492,8 +526,8 @@ func (t *Tree) newInsertRecord(
 	// results are interned. Interning the input here would cost a full intern
 	// and a materialized view per insert. Overlay passes decode a fresh value
 	// per source network, so that cost would buy nothing there.
-	if insertFunc != nil {
-		iRec := t.newInsertRecordRef(recordType, insertFunc, inserterPure, node, nilValueRef)
+	if resolver.hasFunc() {
+		iRec := t.newInsertRecordRef(recordType, resolver, node, nilValueRef)
 		iRec.valueView = value
 		return iRec, nil
 	}
@@ -505,7 +539,7 @@ func (t *Tree) newInsertRecord(
 			return nil, err
 		}
 	}
-	iRec := t.newInsertRecordRef(recordType, insertFunc, inserterPure, node, ref)
+	iRec := t.newInsertRecordRef(recordType, resolver, node, ref)
 	iRec.callerValue = value
 	return iRec, nil
 }
@@ -514,15 +548,13 @@ func (t *Tree) newInsertRecord(
 // which releaseResolved releases.
 func (t *Tree) newInsertRecordRef(
 	recordType recordType,
-	insertFunc inserter.Func,
-	inserterPure bool,
+	resolver insertResolver,
 	node nodeIndex,
 	ref valueRef,
 ) *insertRecord {
 	return &insertRecord{
 		recordType:   recordType,
-		inserter:     insertFunc,
-		inserterPure: inserterPure,
+		resolver:     resolver,
 		insertedNode: node,
 		tree:         t,
 		value:        ref,
@@ -670,12 +702,22 @@ func (t *Tree) InsertRange(
 	end netip.Addr,
 	value mmdbtype.DataType,
 ) error {
-	return t.insertRange(start, end, recordTypeData, t.inserter, false, noNodeIndex, value)
+	return t.insertRange(
+		start,
+		end,
+		recordTypeData,
+		insertResolver{pure: t.inserter},
+		noNodeIndex,
+		value,
+	)
 }
 
 // InsertRangeFunc is the same as InsertFunc, except it will insert all subnets
-// within the range of IPs specified by `[start,end]`. A nil insertFunc returns
-// an error.
+// within the range of IPs specified by `[start,end]`. The metadata's
+// InsertedNetwork is the individual subnet being inserted, not the whole
+// range. Subnets are inserted sequentially, so metadata for a later subnet
+// reflects changes made by earlier subnets in the same call. A nil insertFunc
+// returns an error.
 func (t *Tree) InsertRangeFunc(
 	start netip.Addr,
 	end netip.Addr,
@@ -685,31 +727,44 @@ func (t *Tree) InsertRangeFunc(
 	if insertFunc == nil {
 		return errNilInserterFunc
 	}
-	return t.insertRange(start, end, recordTypeData, insertFunc, false, noNodeIndex, value)
+	return t.insertRange(
+		start,
+		end,
+		recordTypeData,
+		insertResolver{withMetadata: insertFunc},
+		noNodeIndex,
+		value,
+	)
 }
 
 // InsertRangePureFunc is like InsertPureFunc, except it inserts all subnets
 // within the range of IPs specified by `[start,end]`. Repeated argument pairs
 // may be memoized across the entire range, not just within one of its subnets.
-// A nil insertFunc returns an error.
+// A nil pureFunc returns an error.
 func (t *Tree) InsertRangePureFunc(
 	start netip.Addr,
 	end netip.Addr,
 	value mmdbtype.DataType,
-	insertFunc inserter.Func,
+	pureFunc inserter.PureFunc,
 ) error {
-	if insertFunc == nil {
+	if pureFunc == nil {
 		return errNilInserterFunc
 	}
-	return t.insertRange(start, end, recordTypeData, insertFunc, true, noNodeIndex, value)
+	return t.insertRange(
+		start,
+		end,
+		recordTypeData,
+		insertResolver{pure: pureFunc},
+		noNodeIndex,
+		value,
+	)
 }
 
 func (t *Tree) insertRange(
 	start netip.Addr,
 	end netip.Addr,
 	recordType recordType,
-	insertFunc inserter.Func,
-	inserterPure bool,
+	resolver insertResolver,
 	node nodeIndex,
 	value mmdbtype.DataType,
 ) error {
@@ -729,7 +784,7 @@ func (t *Tree) insertRange(
 	if !r.IsValid() {
 		return errors.New("start & end IPs did not give valid range")
 	}
-	iRec, err := t.newInsertRecord(recordType, insertFunc, inserterPure, node, value)
+	iRec, err := t.newInsertRecord(recordType, resolver, node, value)
 	if err != nil {
 		return t.finishInsertAudit(err)
 	}
@@ -748,14 +803,13 @@ func (t *Tree) insertRange(
 func (t *Tree) insertStringNetwork(
 	network string,
 	recordType recordType,
-	insertFunc inserter.Func,
 	node nodeIndex,
 ) error {
 	prefix, err := netip.ParsePrefix(network)
 	if err != nil {
 		return fmt.Errorf("parsing network (%s): %w", network, err)
 	}
-	return t.insert(prefix, recordType, insertFunc, false, node, nil)
+	return t.insert(prefix, recordType, insertResolver{}, node, nil)
 }
 
 var ipv4AliasNetworks = []string{
@@ -773,13 +827,13 @@ func (t *Tree) insertIPv4Aliases() error {
 	ipv4RootNode := t.newNode([2]record{})
 
 	// Make ::/96, the IPv4 root, a fixed node.
-	err = t.insert(ipv4Root, recordTypeFixedNode, nil, false, ipv4RootNode, nil)
+	err = t.insert(ipv4Root, recordTypeFixedNode, insertResolver{}, ipv4RootNode, nil)
 	if err != nil {
 		return err
 	}
 
 	for _, network := range ipv4AliasNetworks {
-		err := t.insertStringNetwork(network, recordTypeAlias, nil, ipv4RootNode)
+		err := t.insertStringNetwork(network, recordTypeAlias, ipv4RootNode)
 		if err != nil {
 			return err
 		}
@@ -795,7 +849,7 @@ func (t *Tree) insertReservedNetworks() error {
 	}
 
 	for _, network := range networks {
-		err := t.insertStringNetwork(network, recordTypeReserved, nil, noNodeIndex)
+		err := t.insertStringNetwork(network, recordTypeReserved, noNodeIndex)
 		if err != nil {
 			return err
 		}
