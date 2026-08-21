@@ -87,8 +87,12 @@ type Metadata struct {
 }
 
 // InsertedDepth returns InsertedNetwork's depth in tree bits from the root,
-// adding 96 for an IPv4 network in an IPv6 tree. It returns 0 for an
-// inconsistent Metadata. It does not read ExistingDepth.
+// adding 96 for an IPv4 network in an IPv6 tree. It does not read
+// ExistingDepth.
+//
+// It returns 0 for an inconsistent Metadata, which is also the depth of a root
+// insert, so 0 does not identify one or the other. Only a hand-built Metadata
+// can be inconsistent.
 func (m Metadata) InsertedDepth() int {
 	if !m.consistent() {
 		return 0
@@ -125,8 +129,9 @@ func (m Metadata) ExistingNetwork() netip.Prefix {
 		return netip.Prefix{}
 	}
 
-	as4 := m.TreeDepth == 32 ||
-		(m.InsertedNetwork.Addr().Is4() && m.ExistingDepth >= 96)
+	// treeaddr.PrefixFromInsertIP returns from its own 32-bit tree branch
+	// before it reads as4, so this only has to answer for a 128-bit tree.
+	as4 := m.InsertedNetwork.Addr().Is4() && m.ExistingDepth >= 96
 	prefix, err := treeaddr.PrefixFromInsertIP(
 		m.ExistingAddr,
 		m.ExistingDepth,

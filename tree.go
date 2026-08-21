@@ -507,9 +507,7 @@ func (t *Tree) insertPrepared(
 	iRec.ip = ip
 	iRec.prefixLen = prefixLen
 	iRec.splitDepth = 0
-	if iRec.resolver.withMetadata != nil {
-		iRec.insertedAs4 = prefix.Addr().Is4()
-	}
+	iRec.insertedAs4 = prefix.Addr().Is4()
 	return iRec.insertNode(t.root, 0)
 }
 

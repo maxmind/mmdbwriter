@@ -52,8 +52,8 @@ const (
 // insertRecord carries the state for one insert call. Most fields are fixed for
 // the life of the value. These are not:
 //
-//   - ip, prefixLen, and insertedAs4, which insertPrepared re-targets for each
-//     subnet of a range.
+//   - ip, prefixLen, and insertedAs4, which insertPrepared re-targets for every
+//     subnet of a range, on every insert path.
 //   - splitDepth, which insertPrepared resets for each subnet and traversal
 //     sets when it splits a record.
 //   - the memo fields, which resolve updates as it goes.
@@ -103,6 +103,9 @@ type insertRecord struct {
 	// prepared Metadata escapes to the heap once per insertRange call. The
 	// flag fits in padding, and rebuilding the prefix per record measures at
 	// about 4ns.
+	//
+	// Only the metadata path reads it, but every path maintains it, so it can
+	// never hold a value from an earlier insert.
 	insertedAs4 bool
 	// splitDepth is the depth of the record a split chain started from, which
 	// is the extent that record had before this insertion. Tree depths are at
