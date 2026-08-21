@@ -303,13 +303,7 @@ func Load(path string, opts Options) (*Tree, error) {
 			return nil, err
 		}
 
-		err = tree.insertNormalizedRef(
-			prefix,
-			recordTypeData,
-			tree.inserter,
-			noNodeIndex,
-			value,
-		)
+		err = tree.insertNormalizedRef(prefix, tree.inserter, value)
 		tree.valueStore.release(value)
 		if err != nil {
 			return nil, fmt.Errorf("loading network %s from %s: %w", prefix, path, err)
@@ -480,9 +474,7 @@ func (t *Tree) insert(
 // caller's reference, taking one of its own for the insert.
 func (t *Tree) insertNormalizedRef(
 	prefix netip.Prefix,
-	recordType recordType,
 	pureFunc inserter.PureFunc,
-	node nodeIndex,
 	value valueRef,
 ) error {
 	if t.treeDepth == 32 && !prefix.Addr().Is4() {
@@ -490,9 +482,9 @@ func (t *Tree) insertNormalizedRef(
 	}
 	t.valueStore.retain(value)
 	iRec := t.newInsertRecordRef(
-		recordType,
+		recordTypeData,
 		insertResolver{pure: pureFunc},
-		node,
+		noNodeIndex,
 		value,
 	)
 	if pureFunc != nil {
