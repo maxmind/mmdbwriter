@@ -101,6 +101,19 @@ func TestMetadataDerivedMethods(t *testing.T) {
 			expectedExistingNetwork: netip.MustParsePrefix("1.0.0.0/8"),
 		},
 		{
+			// Depth 96 is the IPv4 subtree root, the exact hinge of the
+			// follow-the-insert family rule: at 96 the result is IPv4, and one
+			// bit shallower it is IPv6.
+			name: "IPv4 insertion at the IPv4 subtree root",
+			metadata: Metadata{
+				InsertedNetwork: netip.MustParsePrefix("1.0.0.0/16"),
+				ExistingDepth:   96,
+				TreeDepth:       128,
+			},
+			expectedInsertedDepth:   112,
+			expectedExistingNetwork: netip.MustParsePrefix("0.0.0.0/0"),
+		},
+		{
 			name: "IPv4 insertion above IPv4 subtree",
 			metadata: Metadata{
 				InsertedNetwork: netip.MustParsePrefix("1.0.0.0/16"),

@@ -71,6 +71,28 @@ func TestInserterMetadataRecordShapes(t *testing.T) {
 		}
 	})
 
+	t.Run("non-aligned existing depth", func(t *testing.T) {
+		tree := newMetadataTree(t, Options{IPVersion: 4})
+		require.NoError(t, tree.Insert(
+			netip.MustParsePrefix("1.2.3.128/25"),
+			mmdbtype.String("existing"),
+		))
+
+		var calls []metadataCall
+		require.NoError(t, tree.InsertFunc(
+			netip.MustParsePrefix("1.2.3.224/27"),
+			mmdbtype.String("overlay"),
+			captureMetadata(&calls),
+		))
+
+		// The raw address at a depth that ends mid-byte, asserted without
+		// going through ExistingNetwork, whose Prefix call would re-mask and
+		// hide a masking error.
+		require.Len(t, calls, 1)
+		assert.Equal(t, 25, calls[0].metadata.ExistingDepth)
+		assert.Equal(t, [16]byte{1, 2, 3, 128}, calls[0].metadata.ExistingAddr)
+	})
+
 	t.Run("sibling records under one insert", func(t *testing.T) {
 		tree := newMetadataTree(t, Options{IPVersion: 4})
 		require.NoError(t, tree.Insert(
