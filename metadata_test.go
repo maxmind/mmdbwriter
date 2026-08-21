@@ -751,6 +751,25 @@ func FuzzInserterMetadata(f *testing.F) {
 		1, 128, 0,
 		0, 0, 3,
 	})
+	// A /28 inserted into a /24 record: the split chain reports an existing
+	// depth that is neither the inserted depth nor a record boundary.
+	f.Add([]byte{
+		0, 0, 0,
+		4, 0, 0,
+	})
+	// A /24 failing over two existing /32s: the error fires on the first
+	// covered record.
+	f.Add([]byte{
+		8, 0, 0,
+		8, 1, 0,
+		0, 0, 2,
+	})
+	// A /31 inserted into a /24 record, so the split chain descends seven
+	// levels before it resolves.
+	f.Add([]byte{
+		0, 0, 0,
+		7, 0, 0,
+	})
 
 	f.Fuzz(func(t *testing.T, data []byte) {
 		const bytesPerOperation = 3
