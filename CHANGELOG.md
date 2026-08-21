@@ -17,8 +17,17 @@
     default `Tree.Insert` and `Tree.InsertRange` paths, `Tree.InsertPureFunc`,
     `Tree.InsertRangePureFunc`, and every function in the `inserter` package use
     it. Its result and error must depend only on those values, so an insertion
-    may memoize repeated argument pairs. `Tree.InsertRangePureFunc` and
-    `Tree.InsertRange` share the memo across the entire range.
+    may memoize repeated argument pairs. `Tree.InsertRangePureFunc` shares the
+    memo across the entire range, as does `Tree.InsertRange` when
+    `Options.Inserter` is set. With the default nil inserter, `Tree.InsertRange`
+    takes the direct-value path and there is no memo.
+  - **This is the one change that does not fail to compile.** `Options.Inserter`
+    keeps the two-argument shape it had in v1, so an existing inserter still
+    compiles, but it is now memoized: it runs once per distinct existing value
+    instead of once per covered record. An inserter that counts calls, allocates
+    identifiers, or reads mutable state changes behavior with no compile error.
+    Pass such a function to `Tree.InsertFunc` or `Tree.InsertRangeFunc` instead,
+    which never memoize.
   - `Func` also receives an `inserter.Metadata` describing the insertion and the
     existing tree record: `InsertedNetwork`, `ExistingDepth`, `ExistingAddr`,
     `TreeDepth`, and the derived `InsertedDepth()` and `ExistingNetwork()`. Only

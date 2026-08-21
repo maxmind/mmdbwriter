@@ -99,6 +99,11 @@ type Options struct {
 	// The existing value it sees is equal to, but not necessarily the same
 	// object as, the value originally inserted.
 	//
+	// Purity is required, not advisory. An Inserter runs once per distinct
+	// existing value, not once per covered record, so one that counts calls or
+	// reads mutable state gives results that depend on the tree's shape. Pass
+	// such a function to InsertFunc or InsertRangeFunc, which never memoize.
+	//
 	// The partial-failure behavior is the same as InsertFunc's.
 	Inserter inserter.PureFunc
 }
