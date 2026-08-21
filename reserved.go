@@ -2,7 +2,7 @@ package mmdbwriter
 
 // These were taken from the Perl writer.
 //
-// https://www.iana.org/assignments/iana-ipv4-special-registry/iana-ipv4-special-registry.xhtml
+// https://www.iana.org/assignments/iana-ipv4-special-registry
 var reservedNetworksIPv4 = []string{
 	"0.0.0.0/8",
 	"10.0.0.0/8",
@@ -39,7 +39,7 @@ var reservedNetworksIPv4 = []string{
 	// 255.255.255.255/32 gets brought in by 240.0.0.0/4.
 }
 
-// https://www.iana.org/assignments/iana-ipv6-special-registry/iana-ipv6-special-registry.xhtml
+// https://www.iana.org/assignments/iana-ipv6-special-registry
 var reservedNetworksIPv6 = []string{
 	// ::/128 and ::1/128 are reserved under IPv6 but these are already
 	// covered under 0.0.0.0/8.
