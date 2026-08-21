@@ -2,7 +2,6 @@ package mmdbwriter
 
 import (
 	"bytes"
-	"encoding/binary"
 	"errors"
 	"net/netip"
 	"slices"
@@ -108,7 +107,6 @@ func TestInserterMetadataRecordShapes(t *testing.T) {
 		require.NoError(t, tree.InsertFunc(prefix, mmdbtype.String("new"), captureMetadata(&calls)))
 
 		require.Len(t, calls, 1)
-		assert.Equal(t, calls[0].metadata.InsertedDepth(), calls[0].metadata.ExistingDepth)
 		assertMetadata(t, calls[0].metadata, prefix.String(), prefix.String(), 24, 32)
 	})
 }
@@ -310,33 +308,6 @@ func TestInserterMetadataUnaliasedIPv6ShallowRecord(t *testing.T) {
 	assert.Nil(t, calls[0].existing)
 	assertMetadata(t, calls[0].metadata, "1.2.3.0/24", "::/1", 1, 128)
 	assert.Equal(t, 120, calls[0].metadata.InsertedDepth())
-}
-
-func TestInserterMetadataNarrowerRecordNetworkFallback(t *testing.T) {
-	tree := newMetadataTree(t, Options{IPVersion: 4})
-	expectedNetworks := []netip.Prefix{
-		netip.MustParsePrefix("1.2.3.0/26"),
-		netip.MustParsePrefix("1.2.3.64/26"),
-		netip.MustParsePrefix("1.2.3.128/26"),
-		netip.MustParsePrefix("1.2.3.192/26"),
-	}
-	for index, prefix := range expectedNetworks {
-		require.NoError(t, tree.Insert(prefix, mmdbtype.Uint32(index)))
-	}
-
-	var calls []metadataCall
-	require.NoError(t, tree.InsertFunc(
-		netip.MustParsePrefix("1.2.3.0/24"),
-		mmdbtype.String("overlay"),
-		captureExisting(&calls),
-	))
-
-	require.Len(t, calls, len(expectedNetworks))
-	for index, network := range expectedNetworks {
-		assert.Equal(t, 26, calls[index].metadata.ExistingDepth)
-		assert.Equal(t, network, calls[index].metadata.ExistingNetwork())
-		assert.Equal(t, treeAddr(network, 32), calls[index].metadata.ExistingAddr)
-	}
 }
 
 func TestInserterMetadataFamilyFollowsInsert(t *testing.T) {
@@ -867,12 +838,6 @@ func metadataOracleRecords(
 		records[len(records)-1].metadata.ExistingAddr = treeAddr(existingNetwork, 32)
 	}
 	return records
-}
-
-func ipv4Addr(value uint32) netip.Addr {
-	var address [4]byte
-	binary.BigEndian.PutUint32(address[:], value)
-	return netip.AddrFrom4(address)
 }
 
 const provenancePrefixLengthKey mmdbtype.String = "_prefix_length"

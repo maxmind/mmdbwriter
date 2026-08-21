@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/maxmind/mmdbwriter/v2/inserter"
 	"github.com/maxmind/mmdbwriter/v2/mmdbtype"
 )
 
@@ -645,7 +646,11 @@ func TestMemoPinsItsKeys(t *testing.T) {
 	firstResult, err := store.internUncached(mmdbtype.String("first result"))
 	require.NoError(t, err)
 
-	iRec := &insertRecord{store: store}
+	// Only a pure inserter is memoized, so the fixture carries one.
+	iRec := &insertRecord{
+		store:    store,
+		resolver: insertResolver{pure: inserter.Replace},
+	}
 	iRec.rememberResolved(first, firstResult)
 	assert.Equal(t, uint32(2), store.nodes[first].refCount,
 		"the memo did not pin its key")

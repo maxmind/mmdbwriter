@@ -2,10 +2,10 @@ package mmdbwriter
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"net/netip"
-	"os"
 	"slices"
 	"testing"
 
@@ -160,23 +160,12 @@ func BenchmarkTreeLoadOverlappingPasses(b *testing.B) {
 	tree := newBenchmarkTree(b)
 	insertBenchmarkSpecs(b, tree, specs)
 
-	file, err := os.CreateTemp(b.TempDir(), "mmdbwriter-benchmark-*.mmdb")
-	if err != nil {
-		b.Fatal(err)
-	}
-
-	_, err = tree.WriteTo(file)
-	if err != nil {
-		b.Fatal(err)
-	}
-	if err := file.Close(); err != nil {
-		b.Fatal(err)
-	}
+	path := writeTempDB(b, tree)
 
 	b.ReportAllocs()
 	for b.Loop() {
 		loadedTree, err := Load(
-			file.Name(),
+			path,
 			Options{
 				IncludeReservedNetworks: true,
 			},
@@ -207,20 +196,11 @@ func BenchmarkEnterpriseLoadThenOverlay(b *testing.B) {
 			b.Fatal(err)
 		}
 	}
-	file, err := os.CreateTemp(b.TempDir(), "mmdbwriter-enterprise-*.mmdb")
-	if err != nil {
-		b.Fatal(err)
-	}
-	if _, err := source.WriteTo(file); err != nil {
-		b.Fatal(err)
-	}
-	if err := file.Close(); err != nil {
-		b.Fatal(err)
-	}
+	path := writeTempDB(b, source)
 
 	b.ReportAllocs()
 	for b.Loop() {
-		tree, err := Load(file.Name(), Options{IncludeReservedNetworks: true})
+		tree, err := Load(path, Options{IncludeReservedNetworks: true})
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -343,6 +323,12 @@ func metadataOverlayBenchmarkSpecs(groupCount int) (
 	return plainBase, provenanceBase, plainOverlays, provenanceOverlays
 }
 
+func ipv4Addr(value uint32) netip.Addr {
+	var address [4]byte
+	binary.BigEndian.PutUint32(address[:], value)
+	return netip.AddrFrom4(address)
+}
+
 func writeBenchmarkSource(
 	b *testing.B,
 	specs []benchmarkInsertSpec,
@@ -364,17 +350,7 @@ func writeBenchmarkSource(
 			b.Fatal(err)
 		}
 	}
-	file, err := os.CreateTemp(b.TempDir(), "mmdbwriter-metadata-overlay-*.mmdb")
-	if err != nil {
-		b.Fatal(err)
-	}
-	if _, err := tree.WriteTo(file); err != nil {
-		b.Fatal(err)
-	}
-	if err := file.Close(); err != nil {
-		b.Fatal(err)
-	}
-	return file.Name()
+	return writeTempDB(b, tree)
 }
 
 // applyMetadataOverlays inserts the overlays in one unsorted pass, letting the

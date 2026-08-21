@@ -2659,13 +2659,13 @@ func TestInsertReportsNilNestedValueError(t *testing.T) {
 // particular option set it explicitly instead.
 // writeTempDB serializes the tree to a file in the test's temp directory and
 // returns its path. The directory is removed when the test ends.
-func writeTempDB(t *testing.T, tree *Tree) string {
-	t.Helper()
-	file, err := os.CreateTemp(t.TempDir(), "mmdbwriter-*.mmdb")
-	require.NoError(t, err)
+func writeTempDB(tb testing.TB, tree *Tree) string {
+	tb.Helper()
+	file, err := os.CreateTemp(tb.TempDir(), "mmdbwriter-*.mmdb")
+	require.NoError(tb, err)
 	_, err = tree.WriteTo(file)
-	require.NoError(t, err)
-	require.NoError(t, file.Close())
+	require.NoError(tb, err)
+	require.NoError(tb, file.Close())
 	return file.Name()
 }
 
