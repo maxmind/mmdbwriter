@@ -498,7 +498,12 @@ func (iRec *insertRecord) mergeChildrenAfterError(r *record, insertErr error) er
 	if mergeErr == nil {
 		return insertErr
 	}
-	return errors.Join(insertErr, mergeErr)
+	// Name the source, so a log reader can tell a failure to restore the record
+	// boundaries from the insert failure that triggered the restore.
+	return errors.Join(insertErr, fmt.Errorf(
+		"restoring record boundaries after insert failure: %w",
+		mergeErr,
+	))
 }
 
 func (iRec *insertRecord) maybeMergeChildren(r *record) error {

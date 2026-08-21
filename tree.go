@@ -375,10 +375,14 @@ func (t *Tree) Insert(prefix netip.Prefix, value mmdbtype.DataType) error {
 // returns an error. If the function returns an error partway through the
 // covered records, the call returns the error but the records already visited
 // keep their new values. A failure before any result is installed leaves
-// values, record boundaries, and lookups logically unchanged. Internal
-// representation and arena allocation are not restored. After a partial
-// success, installed equal values may coalesce, so a retry can observe merged
-// records.
+// values, record boundaries, and lookups logically unchanged. After a partial
+// success, installed equal values, and records that become equally empty, may
+// coalesce, so a retry can observe merged records.
+//
+// A failed insert does not shrink the tree back. Splitting a record to reach
+// the inserted network allocates nodes, and the unwinding merge restores the
+// record boundaries without reclaiming them, so a caller that retries a failing
+// insert many times grows the node arena each time.
 //
 // This is not safe to call from multiple threads.
 func (t *Tree) InsertFunc(

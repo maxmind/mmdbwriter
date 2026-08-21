@@ -43,10 +43,10 @@
   - Non-nil callback results become tree-owned and must not be modified after
     the function returns. As in v1, a callback that returns an error partway
     through the covered records leaves the records already visited holding their
-    new values. Installed equal values may coalesce during error unwinding,
-    while an error before any result leaves the tree logically unchanged.
-    Interning now validates values per record, so more error kinds can fire
-    mid-walk.
+    new values. Installed equal values, and records that become equally empty,
+    may coalesce during error unwinding, while an error before any result leaves
+    the tree logically unchanged. Interning now validates values per record, so
+    more error kinds can fire mid-walk.
 - Reduced allocations on the tree insert and serialization hot paths, lowering
   memory pressure and GC overhead during large builds.
 - Reworked value storage to intern every value node once in a content-addressed
