@@ -31,8 +31,9 @@
     subnet.
   - `Metadata.ExistingNetwork()` follows the inserted network's address family.
     For an IPv4 insert into an IPv6 tree, a record above the IPv4 subtree
-    remains in IPv6 form. The method returns the zero prefix when the existing
-    record is more specific than the inserted network.
+    remains in IPv6 form. Every covered record reports its own extent, including
+    records more specific than the inserted network, so an insert covering
+    several records tells the callback which one it is resolving.
   - `inserter.Replace`, `inserter.TopLevelMerge`, and `inserter.DeepMerge`
     replace `inserter.ReplaceWith`, `inserter.TopLevelMergeWith`, and
     `inserter.DeepMergeWith`. `inserter.FuncGenerator` was removed.

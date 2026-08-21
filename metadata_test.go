@@ -42,15 +42,13 @@ func TestInserterMetadataRecordShapes(t *testing.T) {
 
 	t.Run("narrower existing records", func(t *testing.T) {
 		tree := newMetadataTree(t, Options{IPVersion: 4})
-		for index, network := range []string{
-			"1.2.3.0/26",
-			"1.2.3.64/26",
-			"1.2.3.128/25",
-		} {
-			require.NoError(t, tree.Insert(
-				netip.MustParsePrefix(network),
-				mmdbtype.Uint32(index+1),
-			))
+		existing := []netip.Prefix{
+			netip.MustParsePrefix("1.2.3.0/26"),
+			netip.MustParsePrefix("1.2.3.64/26"),
+			netip.MustParsePrefix("1.2.3.128/25"),
+		}
+		for index, network := range existing {
+			require.NoError(t, tree.Insert(network, mmdbtype.Uint32(index+1)))
 		}
 
 		var calls []metadataCall
@@ -60,14 +58,44 @@ func TestInserterMetadataRecordShapes(t *testing.T) {
 			captureMetadata(&calls),
 		))
 
-		require.Len(t, calls, 3)
-		for index, expectedDepth := range []int{26, 26, 25} {
+		// Each record reports its own network, so a callback can tell the
+		// covered records apart even though all of them are more specific
+		// than the insert.
+		require.Len(t, calls, len(existing))
+		for index, network := range existing {
 			metadata := calls[index].metadata
 			assert.Equal(t, netip.MustParsePrefix("1.2.3.0/24"), metadata.InsertedNetwork)
-			assert.Equal(t, expectedDepth, metadata.ExistingDepth)
+			assert.Equal(t, network.Bits(), metadata.ExistingDepth)
 			assert.Equal(t, 32, metadata.TreeDepth)
-			assert.Equal(t, netip.Prefix{}, metadata.ExistingNetwork())
-			assert.Equal(t, [16]byte{}, metadata.ExistingAddr)
+			assert.Equal(t, network, metadata.ExistingNetwork())
+			assert.Equal(t, treeAddr(network, 32), metadata.ExistingAddr)
+		}
+	})
+
+	t.Run("sibling records under one insert", func(t *testing.T) {
+		tree := newMetadataTree(t, Options{IPVersion: 4})
+		require.NoError(t, tree.Insert(
+			netip.MustParsePrefix("1.1.1.1/32"),
+			mmdbtype.String("existing"),
+		))
+
+		var calls []metadataCall
+		require.NoError(t, tree.InsertFunc(
+			netip.MustParsePrefix("1.1.1.0/31"),
+			mmdbtype.String("overlay"),
+			captureMetadata(&calls),
+		))
+
+		// Both /32s report the same depth, so only the network distinguishes
+		// the empty sibling from the record that holds the existing value.
+		require.Len(t, calls, 2)
+		assert.Nil(t, calls[0].existing)
+		assert.Equal(t, netip.MustParsePrefix("1.1.1.0/32"), calls[0].metadata.ExistingNetwork())
+		assert.Equal(t, mmdbtype.String("existing"), calls[1].existing)
+		assert.Equal(t, netip.MustParsePrefix("1.1.1.1/32"), calls[1].metadata.ExistingNetwork())
+		for _, call := range calls {
+			assert.Equal(t, 32, call.metadata.ExistingDepth)
+			assert.Equal(t, 31, call.metadata.InsertedDepth())
 		}
 	})
 
@@ -234,13 +262,8 @@ func TestInserterMetadataRangeSubnets(t *testing.T) {
 		assert.Equal(t, prefix, metadata.InsertedNetwork)
 		assert.Equal(t, prefix.Bits(), metadata.InsertedDepth())
 		assert.Equal(t, expectedExisting[index].Bits(), metadata.ExistingDepth)
-		if expectedExisting[index].Bits() > prefix.Bits() {
-			assert.Equal(t, netip.Prefix{}, metadata.ExistingNetwork())
-			assert.Equal(t, [16]byte{}, metadata.ExistingAddr)
-		} else {
-			assert.Equal(t, expectedExisting[index], metadata.ExistingNetwork())
-			assert.Equal(t, treeAddr(expectedExisting[index], 32), metadata.ExistingAddr)
-		}
+		assert.Equal(t, expectedExisting[index], metadata.ExistingNetwork())
+		assert.Equal(t, treeAddr(expectedExisting[index], 32), metadata.ExistingAddr)
 		assert.Equal(t, 32, metadata.TreeDepth)
 	}
 }
@@ -309,10 +332,10 @@ func TestInserterMetadataNarrowerRecordNetworkFallback(t *testing.T) {
 	))
 
 	require.Len(t, calls, len(expectedNetworks))
-	for index := range expectedNetworks {
+	for index, network := range expectedNetworks {
 		assert.Equal(t, 26, calls[index].metadata.ExistingDepth)
-		assert.Equal(t, netip.Prefix{}, calls[index].metadata.ExistingNetwork())
-		assert.Equal(t, [16]byte{}, calls[index].metadata.ExistingAddr)
+		assert.Equal(t, network, calls[index].metadata.ExistingNetwork())
+		assert.Equal(t, treeAddr(network, 32), calls[index].metadata.ExistingAddr)
 	}
 }
 
@@ -352,8 +375,9 @@ func TestInserterMetadataFamilyFollowsInsert(t *testing.T) {
 	})
 	require.NotEqual(t, -1, index)
 	assert.Equal(t, 100, allCalls[index].metadata.ExistingDepth)
-	assert.Equal(t, netip.Prefix{}, allCalls[index].metadata.ExistingNetwork())
-	assert.Equal(t, [16]byte{}, allCalls[index].metadata.ExistingAddr)
+	// The record is the IPv4 subtree's 0.0.0.0/4, reported in IPv6 form
+	// because the insert is IPv6.
+	assert.Equal(t, netip.MustParsePrefix("::/100"), allCalls[index].metadata.ExistingNetwork())
 }
 
 func TestInserterMetadataRootInsert(t *testing.T) {
@@ -367,11 +391,17 @@ func TestInserterMetadataRootInsert(t *testing.T) {
 		mmdbtype.String("root"),
 		captureMetadata(&calls),
 	))
+	// The insert covers both root children, which the callback tells apart by
+	// the branch the walk took to reach each one.
 	require.Len(t, calls, 2)
-	for _, call := range calls {
+	expected := []netip.Prefix{
+		netip.MustParsePrefix("::/1"),
+		netip.MustParsePrefix("8000::/1"),
+	}
+	for index, call := range calls {
 		assert.Equal(t, 1, call.metadata.ExistingDepth)
-		assert.Equal(t, netip.Prefix{}, call.metadata.ExistingNetwork())
-		assert.Equal(t, [16]byte{}, call.metadata.ExistingAddr)
+		assert.Equal(t, expected[index], call.metadata.ExistingNetwork())
+		assert.Equal(t, treeAddr(expected[index], 128), call.metadata.ExistingAddr)
 	}
 }
 
@@ -815,9 +845,7 @@ func metadataOracleRecords(
 				TreeDepth:       32,
 			},
 		})
-		if existingNetwork.Bits() <= insertedNetwork.Bits() {
-			records[len(records)-1].metadata.ExistingAddr = treeAddr(existingNetwork, 32)
-		}
+		records[len(records)-1].metadata.ExistingAddr = treeAddr(existingNetwork, 32)
 	}
 	return records
 }

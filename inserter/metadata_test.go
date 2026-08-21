@@ -86,7 +86,8 @@ func TestMetadataDerivedMethods(t *testing.T) {
 				ExistingAddr:    v4Addr,
 				TreeDepth:       32,
 			},
-			expectedInsertedDepth: 24,
+			expectedInsertedDepth:   24,
+			expectedExistingNetwork: netip.MustParsePrefix("1.2.3.0/25"),
 		},
 		{
 			name: "IPv4 insertion in IPv6 tree",

@@ -166,11 +166,14 @@ func (iRec *insertRecord) resolve(
 			ExistingDepth:   existingDepth,
 			TreeDepth:       iRec.tree.treeDepth,
 		}
-		switch {
-		case existingDepth == iRec.prefixLen:
-			// ip is already masked at prefixLen, so no masking is needed.
+		if existingDepth == iRec.prefixLen {
+			// ip is masked at prefixLen and the walk has not descended past
+			// it, so no masking is needed.
 			metadata.ExistingAddr = iRec.ip
-		case existingDepth < iRec.prefixLen:
+		} else {
+			// Shallower records sit in a split chain, which leaves ip's deeper
+			// bits zero. Deeper records carry the descent path insertNode
+			// wrote, and masking drops the bits past this record.
 			metadata.ExistingAddr = maskedTreeAddr(iRec.ip, existingDepth)
 		}
 		result, err = iRec.resolver.withMetadata(
@@ -365,10 +368,21 @@ func (iRec *insertRecord) insertNode(
 	if newDepth > iRec.prefixLen {
 		// Data already exists for the network so insert into all the children.
 		// Identical child records are merged as recursion unwinds.
+		//
+		// Record which child we take in iRec.ip. Navigation no longer reads
+		// these bits once the walk is deeper than prefixLen, so they can carry
+		// the descent path that metadata needs to report a record more
+		// specific than the insert. Both branches write the bit, because a
+		// sibling subtree may have left it set. Nothing restores it:
+		// maskedTreeAddr drops every bit past the record's own depth,
+		// PrefixFromInsertIP masks at prefixLen, and insertPrepared overwrites
+		// ip for the next subnet of a range.
+		setBitAt(&iRec.ip, currentDepth, 0)
 		err := iRec.insertRecord(&node.children[0], newDepth)
 		if err != nil {
 			return err
 		}
+		setBitAt(&iRec.ip, currentDepth, 1)
 		return iRec.insertRecord(&node.children[1], newDepth)
 	}
 
@@ -603,6 +617,13 @@ func (t *Tree) finalizeNode(index nodeIndex, currentNum int) int {
 
 func bitAt(ip [16]byte, depth int) byte {
 	return (ip[depth/8] >> (7 - (depth % 8))) & 1
+}
+
+// setBitAt sets the bit at depth in ip to bit, which must be 0 or 1.
+func setBitAt(ip *[16]byte, depth int, bit byte) {
+	shift := 7 - (depth % 8)
+	mask := byte(1) << shift
+	ip[depth/8] = ip[depth/8]&^mask | bit<<shift
 }
 
 func maskedTreeAddr(ip [16]byte, depth int) [16]byte {
