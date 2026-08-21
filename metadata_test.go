@@ -479,6 +479,84 @@ func TestOptionsInserterMemoizesAcrossRangeSubnets(t *testing.T) {
 	assert.Equal(t, 1, calls, "the configured pure result was not shared across range subnets")
 }
 
+func TestFailedInsertRestoresDeepSplitChain(t *testing.T) {
+	tree := newMetadataTree(t, Options{IPVersion: 4})
+	require.NoError(t, tree.Insert(
+		netip.MustParsePrefix("1.0.0.0/8"),
+		mmdbtype.String("base"),
+	))
+	before := writeTreeBytes(t, tree)
+
+	// A /32 inside a /8 record splits 24 levels, so the unwinding merge has to
+	// fire at every frame to put the record back.
+	insertErr := errors.New("insert failed")
+	err := tree.InsertFunc(
+		netip.MustParsePrefix("1.2.3.4/32"),
+		mmdbtype.String("overlay"),
+		func(_, _ mmdbtype.DataType, _ inserter.Metadata) (mmdbtype.DataType, error) {
+			return nil, insertErr
+		},
+	)
+	require.ErrorIs(t, err, insertErr)
+	require.NoError(t, tree.auditValueStore())
+	assert.Equal(t, before, writeTreeBytes(t, tree),
+		"the failed insert changed the database")
+}
+
+func TestFailedRangeInsertKeepsEarlierSubnets(t *testing.T) {
+	tree := newMetadataTree(t, Options{IPVersion: 4})
+	require.NoError(t, tree.Insert(
+		netip.MustParsePrefix("1.2.3.0/24"),
+		mmdbtype.String("base"),
+	))
+
+	// The range decomposes into four subnets, so failing on the third leaves
+	// two installed and requires splitDepth to be reset for the failing one.
+	insertErr := errors.New("insert failed mid-range")
+	var networks []netip.Prefix
+	var depths []int
+	err := tree.InsertRangeFunc(
+		netip.MustParseAddr("1.2.3.1"),
+		netip.MustParseAddr("1.2.3.6"),
+		mmdbtype.String("overlay"),
+		func(_, newValue mmdbtype.DataType, metadata inserter.Metadata) (
+			mmdbtype.DataType,
+			error,
+		) {
+			networks = append(networks, metadata.InsertedNetwork)
+			depths = append(depths, metadata.ExistingDepth)
+			if len(networks) == 3 {
+				return nil, insertErr
+			}
+			return newValue, nil
+		},
+	)
+	require.ErrorIs(t, err, insertErr)
+	assert.Equal(t, []netip.Prefix{
+		netip.MustParsePrefix("1.2.3.1/32"),
+		netip.MustParsePrefix("1.2.3.2/31"),
+		netip.MustParsePrefix("1.2.3.4/31"),
+	}, networks)
+	// The depths track the fragmentation each subnet leaves behind: the first
+	// splits the /24, the second lands on a /31 the split produced, and the
+	// third resolves through a split chain from a /30, one level shallower
+	// than the subnet being inserted.
+	assert.Equal(t, []int{24, 31, 30}, depths)
+
+	for address, expected := range map[string]mmdbtype.DataType{
+		"1.2.3.0": mmdbtype.String("base"),
+		"1.2.3.1": mmdbtype.String("overlay"),
+		"1.2.3.2": mmdbtype.String("overlay"),
+		"1.2.3.3": mmdbtype.String("overlay"),
+		"1.2.3.4": mmdbtype.String("base"),
+		"1.2.3.6": mmdbtype.String("base"),
+	} {
+		_, value := tree.Get(netip.MustParseAddr(address))
+		assert.Equal(t, expected, value, "wrong value for %s", address)
+	}
+	require.NoError(t, tree.auditValueStore())
+}
+
 func TestFailedInserterRetryMetadata(t *testing.T) {
 	insertMethods := []struct {
 		name   string
