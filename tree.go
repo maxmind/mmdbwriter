@@ -371,8 +371,9 @@ func (t *Tree) Insert(prefix netip.Prefix, value mmdbtype.DataType) error {
 // values it may modify. The tree does not copy a value before the call, as not
 // every function needs a copy and copying costs real time.
 //
-// The function is called separately for every covered record. A nil insertFunc
-// returns an error. If the function returns an error partway through the
+// The function is called separately for every covered record, except that a
+// reserved or aliased network inside the inserted network is skipped silently.
+// A nil insertFunc returns an error. If the function returns an error partway through the
 // covered records, the call returns the error but the records already visited
 // keep their new values. A failure before any result is installed leaves
 // values, record boundaries, and lookups logically unchanged. After a partial

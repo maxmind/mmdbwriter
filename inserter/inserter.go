@@ -33,20 +33,31 @@ import (
 // than InsertedNetwork. Inserting a /31 over an existing /32 therefore tells
 // the callback which of the two /32s it is resolving.
 //
+// Reserved and aliased networks are the exception. An insertion that contains
+// one skips it silently, so a callback covering, for example, ::/0 never sees
+// those extents and cannot treat its calls as covering the whole insert.
+//
 // A Metadata is inconsistent when InsertedNetwork is invalid, TreeDepth is
 // neither 32 nor 128, or a 32-bit tree carries a non-IPv4 insertion. The
 // insertion methods never produce one. The methods below return zero values
 // for it, and other hand-built combinations are unspecified.
 //
+// Metadata is not comparable, and no release will make it comparable. Compare
+// individual fields instead of whole values, and do not use one as a map key.
+//
 // Fields may be added in later releases. Construct Metadata values with keyed
 // literals.
 type Metadata struct {
 	// Force keyed literals and keep Metadata non-comparable, reserving the
-	// right to add fields of any type.
+	// right to add a field of any type without breaking construction or
+	// comparison.
 	_ [0]func()
 
-	// InsertedNetwork is the network being inserted. For a range insert, it is
-	// the individual prefix into which the range decomposed.
+	// InsertedNetwork is the network being inserted, normalized: masked, and
+	// with an IPv4-mapped prefix at /96 or longer reported as IPv4. Inserting
+	// ::ffff:1.2.3.4/120 therefore reports 1.2.3.0/24, so comparing this
+	// against the prefix passed to the insert method can surprise. For a range
+	// insert, it is the individual prefix into which the range decomposed.
 	InsertedNetwork netip.Prefix
 
 	// ExistingDepth is the depth in tree bits of the record that held the
@@ -103,7 +114,9 @@ func (m Metadata) consistent() bool {
 // value, as that record stood just before this insertion. The result follows
 // the inserted network's address family, as Tree.Get follows its query. For an
 // IPv4 insert into an IPv6 tree, records shallower than the IPv4 subtree are
-// returned in IPv6 form.
+// returned in IPv6 form. A default IPv6 tree aliases the IPv4 subtree, which
+// splits the path down to depth 96, so an IPv4 insert there resolves at depth
+// 97 or deeper. Only Options.DisableIPv4Aliasing reaches a shallower record.
 //
 // It returns the zero Prefix for an inconsistent Metadata or an ExistingDepth
 // outside [0, TreeDepth].

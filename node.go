@@ -477,8 +477,8 @@ func (iRec *insertRecord) insertRecord(
 		if iRec.prefixLen >= newDepth {
 			return newReservedNetworkError(iRec.ip, newDepth, iRec.prefixLen, iRec.tree.treeDepth)
 		}
-		// If we are inserting a network that contains a reserved network,
-		// we silently remove the reserved network.
+		// We are inserting a network that contains a reserved network. Leave
+		// the reserved record as it is, and do not report it to an inserter.
 		return nil
 	case recordTypeAlias:
 		if iRec.prefixLen < newDepth {
