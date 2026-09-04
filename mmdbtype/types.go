@@ -64,6 +64,21 @@ type DataType interface {
 	WriteTo(writer) (int64, error)
 }
 
+var (
+	_ mmdbdata.CursorUnmarshaler = (*Bool)(nil)
+	_ mmdbdata.CursorUnmarshaler = (*Bytes)(nil)
+	_ mmdbdata.CursorUnmarshaler = (*Float32)(nil)
+	_ mmdbdata.CursorUnmarshaler = (*Float64)(nil)
+	_ mmdbdata.CursorUnmarshaler = (*Int32)(nil)
+	_ mmdbdata.CursorUnmarshaler = (*Map)(nil)
+	_ mmdbdata.CursorUnmarshaler = (*Slice)(nil)
+	_ mmdbdata.CursorUnmarshaler = (*String)(nil)
+	_ mmdbdata.CursorUnmarshaler = (*Uint16)(nil)
+	_ mmdbdata.CursorUnmarshaler = (*Uint32)(nil)
+	_ mmdbdata.CursorUnmarshaler = (*Uint64)(nil)
+	_ mmdbdata.CursorUnmarshaler = (*Uint128)(nil)
+)
+
 // Bool is the MaxMind DB boolean type.
 type Bool bool
 
@@ -89,14 +104,17 @@ func (t Bool) typeNum() typeNum {
 	return typeNumBool
 }
 
-// UnmarshalMaxMindDB implements the mmdbdata.Unmarshaler interface.
-func (t *Bool) UnmarshalMaxMindDB(decoder *mmdbdata.Decoder) error {
-	value, err := decoder.ReadBool()
+// UnmarshalMaxMindDBCursor implements the mmdbdata.CursorUnmarshaler interface.
+func (t *Bool) UnmarshalMaxMindDBCursor(
+	cursor mmdbdata.Cursor,
+) (mmdbdata.Cursor, error) {
+	value, next, err := cursor.ReadBool()
 	if err != nil {
-		return fmt.Errorf("reading Bool: %w", err)
+		return mmdbdata.Cursor{}, fmt.Errorf(
+			"reading Bool: %w", mmdbdata.NormalizeUnmarshalError[Bool](err))
 	}
 	*t = Bool(value)
-	return nil
+	return next, nil
 }
 
 // WriteTo writes the value to w.
@@ -134,17 +152,20 @@ func (t Bytes) typeNum() typeNum {
 	return typeNumBytes
 }
 
-// UnmarshalMaxMindDB implements the mmdbdata.Unmarshaler interface.
-func (t *Bytes) UnmarshalMaxMindDB(decoder *mmdbdata.Decoder) error {
-	value, err := decoder.ReadBytes()
+// UnmarshalMaxMindDBCursor implements the mmdbdata.CursorUnmarshaler interface.
+func (t *Bytes) UnmarshalMaxMindDBCursor(
+	cursor mmdbdata.Cursor,
+) (mmdbdata.Cursor, error) {
+	value, next, err := cursor.ReadBytes()
 	if err != nil {
-		return fmt.Errorf("reading Bytes: %w", err)
+		return mmdbdata.Cursor{}, fmt.Errorf(
+			"reading Bytes: %w", mmdbdata.NormalizeUnmarshalError[Bytes](err))
 	}
 	// ReadBytes returns a slice pointing to the underlying mmap.
 	copied := make([]byte, len(value))
 	copy(copied, value)
 	*t = Bytes(copied)
-	return nil
+	return next, nil
 }
 
 // WriteTo writes the value to w.
@@ -186,14 +207,17 @@ func (t Float32) typeNum() typeNum {
 	return typeNumFloat32
 }
 
-// UnmarshalMaxMindDB implements the mmdbdata.Unmarshaler interface.
-func (t *Float32) UnmarshalMaxMindDB(decoder *mmdbdata.Decoder) error {
-	value, err := decoder.ReadFloat32()
+// UnmarshalMaxMindDBCursor implements the mmdbdata.CursorUnmarshaler interface.
+func (t *Float32) UnmarshalMaxMindDBCursor(
+	cursor mmdbdata.Cursor,
+) (mmdbdata.Cursor, error) {
+	value, next, err := cursor.ReadFloat32()
 	if err != nil {
-		return fmt.Errorf("reading Float32: %w", err)
+		return mmdbdata.Cursor{}, fmt.Errorf(
+			"reading Float32: %w", mmdbdata.NormalizeUnmarshalError[Float32](err))
 	}
 	*t = Float32(value)
-	return nil
+	return next, nil
 }
 
 // WriteTo writes the value to w.
@@ -238,14 +262,17 @@ func (t Float64) typeNum() typeNum {
 	return typeNumFloat64
 }
 
-// UnmarshalMaxMindDB implements the mmdbdata.Unmarshaler interface.
-func (t *Float64) UnmarshalMaxMindDB(decoder *mmdbdata.Decoder) error {
-	value, err := decoder.ReadFloat64()
+// UnmarshalMaxMindDBCursor implements the mmdbdata.CursorUnmarshaler interface.
+func (t *Float64) UnmarshalMaxMindDBCursor(
+	cursor mmdbdata.Cursor,
+) (mmdbdata.Cursor, error) {
+	value, next, err := cursor.ReadFloat64()
 	if err != nil {
-		return fmt.Errorf("reading Float64: %w", err)
+		return mmdbdata.Cursor{}, fmt.Errorf(
+			"reading Float64: %w", mmdbdata.NormalizeUnmarshalError[Float64](err))
 	}
 	*t = Float64(value)
-	return nil
+	return next, nil
 }
 
 // WriteTo writes the value to w.
@@ -289,14 +316,17 @@ func (t Int32) typeNum() typeNum {
 	return typeNumInt32
 }
 
-// UnmarshalMaxMindDB implements the mmdbdata.Unmarshaler interface.
-func (t *Int32) UnmarshalMaxMindDB(decoder *mmdbdata.Decoder) error {
-	value, err := decoder.ReadInt32()
+// UnmarshalMaxMindDBCursor implements the mmdbdata.CursorUnmarshaler interface.
+func (t *Int32) UnmarshalMaxMindDBCursor(
+	cursor mmdbdata.Cursor,
+) (mmdbdata.Cursor, error) {
+	value, next, err := cursor.ReadInt32()
 	if err != nil {
-		return fmt.Errorf("reading Int32: %w", err)
+		return mmdbdata.Cursor{}, fmt.Errorf(
+			"reading Int32: %w", mmdbdata.NormalizeUnmarshalError[Int32](err))
 	}
 	*t = Int32(value)
-	return nil
+	return next, nil
 }
 
 // WriteTo writes the value to w.
@@ -364,32 +394,44 @@ func (t Map) typeNum() typeNum {
 	return typeNumMap
 }
 
-// UnmarshalMaxMindDB implements the mmdbdata.Unmarshaler interface.
-func (t *Map) UnmarshalMaxMindDB(decoder *mmdbdata.Decoder) error {
-	return t.unmarshalMaxMindDB(decoder, nil)
+// UnmarshalMaxMindDBCursor implements the mmdbdata.CursorUnmarshaler interface.
+func (t *Map) UnmarshalMaxMindDBCursor(
+	cursor mmdbdata.Cursor,
+) (mmdbdata.Cursor, error) {
+	return t.unmarshalMaxMindDBCursor(cursor, nil)
 }
 
-// unmarshalMaxMindDB is the internal implementation that supports caching.
-func (t *Map) unmarshalMaxMindDB(decoder *mmdbdata.Decoder, cache map[uint]DataType) error {
-	iter, size, err := decoder.ReadMap()
+// unmarshalMaxMindDBCursor is the internal implementation that supports caching.
+func (t *Map) unmarshalMaxMindDBCursor(
+	cursor mmdbdata.Cursor,
+	cache map[uint]DataType,
+) (mmdbdata.Cursor, error) {
+	entries, err := cursor.Map()
 	if err != nil {
-		return fmt.Errorf("reading Map: %w", err)
+		return mmdbdata.Cursor{}, fmt.Errorf(
+			"reading Map: %w", mmdbdata.NormalizeUnmarshalError[Map](err))
 	}
 
-	*t = make(Map, size)
-	for key, iterErr := range iter {
-		if iterErr != nil {
-			return iterErr
+	decoded := make(Map, entries.Size())
+	var next mmdbdata.Cursor
+	for {
+		key, valueCursor, ok := entries.Next(next)
+		if !ok {
+			break
 		}
-
-		value, err := decodeDataTypeValue(decoder, cache)
-		if err != nil {
-			return err
+		value, valueNext, valueErr := decodeDataTypeValue(valueCursor, cache)
+		if valueErr != nil {
+			return mmdbdata.Cursor{}, valueErr
 		}
-
-		(*t)[String(key)] = value
+		next = valueNext
+		decoded[String(key)] = value
 	}
-	return nil
+	next, err = entries.End()
+	if err != nil {
+		return mmdbdata.Cursor{}, fmt.Errorf("reading Map entry: %w", err)
+	}
+	*t = decoded
+	return next, nil
 }
 
 // WriteTo writes the value to w.
@@ -601,32 +643,47 @@ func (t Slice) typeNum() typeNum {
 	return typeNumSlice
 }
 
-// UnmarshalMaxMindDB implements the mmdbdata.Unmarshaler interface.
-func (t *Slice) UnmarshalMaxMindDB(decoder *mmdbdata.Decoder) error {
-	return t.unmarshalMaxMindDB(decoder, nil)
+// UnmarshalMaxMindDBCursor implements the mmdbdata.CursorUnmarshaler interface.
+func (t *Slice) UnmarshalMaxMindDBCursor(
+	cursor mmdbdata.Cursor,
+) (mmdbdata.Cursor, error) {
+	return t.unmarshalMaxMindDBCursor(cursor, nil)
 }
 
-// unmarshalMaxMindDB is the internal implementation that supports caching.
-func (t *Slice) unmarshalMaxMindDB(decoder *mmdbdata.Decoder, cache map[uint]DataType) error {
-	iter, size, err := decoder.ReadSlice()
+// unmarshalMaxMindDBCursor is the internal implementation that supports caching.
+func (t *Slice) unmarshalMaxMindDBCursor(
+	cursor mmdbdata.Cursor,
+	cache map[uint]DataType,
+) (mmdbdata.Cursor, error) {
+	values, err := cursor.Slice()
 	if err != nil {
-		return fmt.Errorf("reading Slice: %w", err)
+		return mmdbdata.Cursor{}, fmt.Errorf(
+			"reading Slice: %w", mmdbdata.NormalizeUnmarshalError[Slice](err))
 	}
-
-	*t = make(Slice, 0, size)
-	for iterErr := range iter {
-		if iterErr != nil {
-			return iterErr
-		}
-
-		value, err := decodeDataTypeValue(decoder, cache)
-		if err != nil {
-			return err
-		}
-
-		*t = append(*t, value)
+	size, err := values.Size()
+	if err != nil {
+		return mmdbdata.Cursor{}, fmt.Errorf("reading Slice size: %w", err)
 	}
-	return nil
+	decoded := make(Slice, 0, size)
+	var next mmdbdata.Cursor
+	for {
+		_, valueCursor, ok := values.Next(next)
+		if !ok {
+			break
+		}
+		value, valueNext, valueErr := decodeDataTypeValue(valueCursor, cache)
+		if valueErr != nil {
+			return mmdbdata.Cursor{}, valueErr
+		}
+		next = valueNext
+		decoded = append(decoded, value)
+	}
+	next, err = values.End()
+	if err != nil {
+		return mmdbdata.Cursor{}, fmt.Errorf("reading Slice element: %w", err)
+	}
+	*t = decoded
+	return next, nil
 }
 
 // WriteTo writes the value to w.
@@ -668,14 +725,17 @@ func (t String) typeNum() typeNum {
 	return typeNumString
 }
 
-// UnmarshalMaxMindDB implements the mmdbdata.Unmarshaler interface.
-func (t *String) UnmarshalMaxMindDB(decoder *mmdbdata.Decoder) error {
-	value, err := decoder.ReadString()
+// UnmarshalMaxMindDBCursor implements the mmdbdata.CursorUnmarshaler interface.
+func (t *String) UnmarshalMaxMindDBCursor(
+	cursor mmdbdata.Cursor,
+) (mmdbdata.Cursor, error) {
+	value, next, err := cursor.ReadString()
 	if err != nil {
-		return fmt.Errorf("reading String: %w", err)
+		return mmdbdata.Cursor{}, fmt.Errorf(
+			"reading String: %w", mmdbdata.NormalizeUnmarshalError[String](err))
 	}
 	*t = String(value)
-	return nil
+	return next, nil
 }
 
 // WriteTo writes the value to w.
@@ -715,14 +775,21 @@ func (t Uint16) typeNum() typeNum {
 	return typeNumUint16
 }
 
-// UnmarshalMaxMindDB implements the mmdbdata.Unmarshaler interface.
-func (t *Uint16) UnmarshalMaxMindDB(decoder *mmdbdata.Decoder) error {
-	value, err := decoder.ReadUint16()
+// UnmarshalMaxMindDBCursor implements the mmdbdata.CursorUnmarshaler interface.
+func (t *Uint16) UnmarshalMaxMindDBCursor(
+	cursor mmdbdata.Cursor,
+) (mmdbdata.Cursor, error) {
+	value, next, err := cursor.ReadUint()
 	if err != nil {
-		return fmt.Errorf("reading Uint16: %w", err)
+		return mmdbdata.Cursor{}, fmt.Errorf(
+			"reading Uint16: %w", mmdbdata.NormalizeUnmarshalError[Uint16](err))
+	}
+	if value > math.MaxUint16 {
+		return mmdbdata.Cursor{}, fmt.Errorf(
+			"reading Uint16: %w", mmdbdata.NewUnmarshalTypeError[Uint16](value))
 	}
 	*t = Uint16(value)
-	return nil
+	return next, nil
 }
 
 // WriteTo writes the value to w.
@@ -765,14 +832,21 @@ func (t Uint32) typeNum() typeNum {
 	return typeNumUint32
 }
 
-// UnmarshalMaxMindDB implements the mmdbdata.Unmarshaler interface.
-func (t *Uint32) UnmarshalMaxMindDB(decoder *mmdbdata.Decoder) error {
-	value, err := decoder.ReadUint32()
+// UnmarshalMaxMindDBCursor implements the mmdbdata.CursorUnmarshaler interface.
+func (t *Uint32) UnmarshalMaxMindDBCursor(
+	cursor mmdbdata.Cursor,
+) (mmdbdata.Cursor, error) {
+	value, next, err := cursor.ReadUint()
 	if err != nil {
-		return fmt.Errorf("reading Uint32: %w", err)
+		return mmdbdata.Cursor{}, fmt.Errorf(
+			"reading Uint32: %w", mmdbdata.NormalizeUnmarshalError[Uint32](err))
+	}
+	if value > math.MaxUint32 {
+		return mmdbdata.Cursor{}, fmt.Errorf(
+			"reading Uint32: %w", mmdbdata.NewUnmarshalTypeError[Uint32](value))
 	}
 	*t = Uint32(value)
-	return nil
+	return next, nil
 }
 
 // WriteTo writes the value to w.
@@ -815,14 +889,17 @@ func (t Uint64) typeNum() typeNum {
 	return typeNumUint64
 }
 
-// UnmarshalMaxMindDB implements the mmdbdata.Unmarshaler interface.
-func (t *Uint64) UnmarshalMaxMindDB(decoder *mmdbdata.Decoder) error {
-	value, err := decoder.ReadUint64()
+// UnmarshalMaxMindDBCursor implements the mmdbdata.CursorUnmarshaler interface.
+func (t *Uint64) UnmarshalMaxMindDBCursor(
+	cursor mmdbdata.Cursor,
+) (mmdbdata.Cursor, error) {
+	value, next, err := cursor.ReadUint()
 	if err != nil {
-		return fmt.Errorf("reading Uint64: %w", err)
+		return mmdbdata.Cursor{}, fmt.Errorf(
+			"reading Uint64: %w", mmdbdata.NormalizeUnmarshalError[Uint64](err))
 	}
 	*t = Uint64(value)
-	return nil
+	return next, nil
 }
 
 // WriteTo writes the value to w.
@@ -878,18 +955,21 @@ func (t *Uint128) typeNum() typeNum {
 	return typeNumUint128
 }
 
-// UnmarshalMaxMindDB implements the mmdbdata.Unmarshaler interface.
-func (t *Uint128) UnmarshalMaxMindDB(decoder *mmdbdata.Decoder) error {
-	hi, lo, err := decoder.ReadUint128()
+// UnmarshalMaxMindDBCursor implements the mmdbdata.CursorUnmarshaler interface.
+func (t *Uint128) UnmarshalMaxMindDBCursor(
+	cursor mmdbdata.Cursor,
+) (mmdbdata.Cursor, error) {
+	hi, lo, next, err := cursor.ReadUint128()
 	if err != nil {
-		return fmt.Errorf("reading Uint128: %w", err)
+		return mmdbdata.Cursor{}, fmt.Errorf(
+			"reading Uint128: %w", mmdbdata.NormalizeUnmarshalError[Uint128](err))
 	}
 	v := new(big.Int)
 	v.SetUint64(hi)
 	v.Lsh(v, 64)
 	v.Add(v, new(big.Int).SetUint64(lo))
 	*t = Uint128(*v)
-	return nil
+	return next, nil
 }
 
 // WriteTo writes the value to w.
@@ -1000,89 +1080,96 @@ func isCacheableKind(kind mmdbdata.Kind) bool {
 	return kind == mmdbdata.KindMap || kind == mmdbdata.KindSlice
 }
 
-// decodeDataTypeValue decodes a value from the decoder and returns the appropriate DataType.
-// If cache is provided (non-nil), it will check for cached values at the current decoder offset
-// and store newly decoded container types (Map, Slice) in the cache. Simple scalar types
-// are not cached as they are cheap to decode and caching them would waste memory.
-func decodeDataTypeValue(decoder *mmdbdata.Decoder, cache map[uint]DataType) (DataType, error) {
-	kind, err := decoder.PeekKind()
+// decodeDataTypeValue decodes the value at cursor and returns its successor.
+// If cache is provided, it caches container types at their resolved offsets.
+// Scalar types are cheap to decode and are not cached.
+func decodeDataTypeValue(
+	cursor mmdbdata.Cursor,
+	cache map[uint]DataType,
+) (DataType, mmdbdata.Cursor, error) {
+	kind, err := cursor.Kind()
 	if err != nil {
-		return nil, fmt.Errorf("peeking kind: %w", err)
+		return nil, mmdbdata.Cursor{}, fmt.Errorf("peeking kind: %w", err)
 	}
 
-	// Only check cache if provided and the type is worth caching
-	// This avoids unnecessary map lookups for scalar types in tight loops
+	// Only check the cache for containers. This avoids map lookups for scalar
+	// types in tight loops.
 	useCache := cache != nil && isCacheableKind(kind)
 	var offset uint
 	if useCache {
-		offset = decoder.Offset()
+		offset = cursor.Offset()
 		if cached, ok := cache[offset]; ok {
-			return cached, nil
+			next, skipErr := cursor.Skip()
+			if skipErr != nil {
+				return nil, mmdbdata.Cursor{}, fmt.Errorf(
+					"skipping cached value at offset %d: %w", offset, skipErr)
+			}
+			return cached, next, nil
 		}
 	}
 
 	var value DataType
+	var next mmdbdata.Cursor
 	switch kind {
 	case mmdbdata.KindString:
 		var v String
-		err = v.UnmarshalMaxMindDB(decoder)
+		next, err = v.UnmarshalMaxMindDBCursor(cursor)
 		value = v
 	case mmdbdata.KindFloat64:
 		var v Float64
-		err = v.UnmarshalMaxMindDB(decoder)
+		next, err = v.UnmarshalMaxMindDBCursor(cursor)
 		value = v
 	case mmdbdata.KindBytes:
 		var v Bytes
-		err = v.UnmarshalMaxMindDB(decoder)
+		next, err = v.UnmarshalMaxMindDBCursor(cursor)
 		value = v
 	case mmdbdata.KindUint16:
 		var v Uint16
-		err = v.UnmarshalMaxMindDB(decoder)
+		next, err = v.UnmarshalMaxMindDBCursor(cursor)
 		value = v
 	case mmdbdata.KindUint32:
 		var v Uint32
-		err = v.UnmarshalMaxMindDB(decoder)
+		next, err = v.UnmarshalMaxMindDBCursor(cursor)
 		value = v
 	case mmdbdata.KindInt32:
 		var v Int32
-		err = v.UnmarshalMaxMindDB(decoder)
+		next, err = v.UnmarshalMaxMindDBCursor(cursor)
 		value = v
 	case mmdbdata.KindUint64:
 		var v Uint64
-		err = v.UnmarshalMaxMindDB(decoder)
+		next, err = v.UnmarshalMaxMindDBCursor(cursor)
 		value = v
 	case mmdbdata.KindUint128:
 		var v Uint128
-		err = v.UnmarshalMaxMindDB(decoder)
-		value = &v // Return pointer for Uint128
+		next, err = v.UnmarshalMaxMindDBCursor(cursor)
+		value = &v
 	case mmdbdata.KindBool:
 		var v Bool
-		err = v.UnmarshalMaxMindDB(decoder)
+		next, err = v.UnmarshalMaxMindDBCursor(cursor)
 		value = v
 	case mmdbdata.KindFloat32:
 		var v Float32
-		err = v.UnmarshalMaxMindDB(decoder)
+		next, err = v.UnmarshalMaxMindDBCursor(cursor)
 		value = v
 	case mmdbdata.KindMap:
 		var v Map
-		err = v.unmarshalMaxMindDB(decoder, cache)
+		next, err = v.unmarshalMaxMindDBCursor(cursor, cache)
 		value = v
 	case mmdbdata.KindSlice:
 		var v Slice
-		err = v.unmarshalMaxMindDB(decoder, cache)
+		next, err = v.unmarshalMaxMindDBCursor(cursor, cache)
 		value = v
 	default:
-		return nil, fmt.Errorf("unsupported data type: %v", kind)
+		return nil, mmdbdata.Cursor{}, fmt.Errorf("unsupported data type: %v", kind)
 	}
 
 	if err != nil {
-		return nil, err
+		return nil, mmdbdata.Cursor{}, err
 	}
 
-	// Store the decoded value in cache.
 	if useCache {
 		cache[offset] = value
 	}
 
-	return value, nil
+	return value, next, nil
 }

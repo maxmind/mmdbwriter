@@ -1167,11 +1167,13 @@ func TestStoreDecoderReleasesOverwrittenResult(t *testing.T) {
 
 	// A map with one string entry: {"k": "a"}.
 	first := []byte{0xe1, 0x41, 'k', 0x41, 'a'}
-	require.NoError(t, decoder.UnmarshalMaxMindDB(mmdbdata.NewDecoder(first, 0)))
+	_, err := mmdbdata.NewDecoder(first, 0).Cursor().UnmarshalCursor(decoder)
+	require.NoError(t, err)
 	// Pad the second buffer so its value has a distinct offset. The offset
 	// cache would otherwise answer it with the first result.
 	second := []byte{0x00, 0xe1, 0x41, 'k', 0x41, 'b'}
-	require.NoError(t, decoder.UnmarshalMaxMindDB(mmdbdata.NewDecoder(second, 1)))
+	_, err = mmdbdata.NewDecoder(second, 1).Cursor().UnmarshalCursor(decoder)
+	require.NoError(t, err)
 
 	store.release(decoder.takeResult())
 	decoder.close()
@@ -1187,7 +1189,7 @@ func TestStoreDecoderRejectsDuplicateMapKeys(t *testing.T) {
 
 	// A map with two entries that share the key "k".
 	data := []byte{0xe2, 0x41, 'k', 0x41, 'a', 0x41, 'k', 0x41, 'b'}
-	err := decoder.UnmarshalMaxMindDB(mmdbdata.NewDecoder(data, 0))
+	_, err := mmdbdata.NewDecoder(data, 0).Cursor().UnmarshalCursor(decoder)
 	require.ErrorContains(t, err, `map has duplicate key "k"`)
 
 	decoder.close()
@@ -1238,7 +1240,7 @@ func TestStoreDecoderReleasesChildrenOnContainerErrors(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			store := newValueStore()
 			decoder := newStoreDecoder(store)
-			err := decoder.UnmarshalMaxMindDB(mmdbdata.NewDecoder(test.data, 0))
+			_, err := mmdbdata.NewDecoder(test.data, 0).Cursor().UnmarshalCursor(decoder)
 			require.Error(t, err)
 			for _, want := range test.want {
 				require.ErrorContains(t, err, want)

@@ -4,14 +4,13 @@ import (
 	"github.com/oschwald/maxminddb-golang/v2/mmdbdata"
 )
 
-// Unmarshaler implements the mmdbdata.Unmarshaler interface for converting
+// Unmarshaler implements the mmdbdata.CursorUnmarshaler interface for converting
 // MMDB data back into mmdbtype.DataType values. This is used when loading
 // existing MMDB files to reconstruct the original data structures.
 //
-// The Unmarshaler caches decoded complex types (Map, Slice, Uint128) at all
-// nesting levels to improve performance when loading databases with shared
-// nested data structures. Simple scalar types are not cached as they are
-// cheap to decode.
+// The Unmarshaler caches decoded containers (Map and Slice) at all nesting
+// levels to improve performance when loading databases with shared nested data
+// structures. Scalar types are not cached as they are cheap to decode.
 //
 // The zero value of Unmarshaler is safe to use and will unmarshal data
 // without caching. Use NewUnmarshaler() to create an Unmarshaler with
@@ -20,6 +19,8 @@ type Unmarshaler struct {
 	cache  map[uint]DataType
 	result DataType
 }
+
+var _ mmdbdata.CursorUnmarshaler = (*Unmarshaler)(nil)
 
 // NewUnmarshaler creates a new Unmarshaler with caching enabled for converting
 // MMDB data to mmdbtype values. The cache improves performance when loading
@@ -30,15 +31,17 @@ func NewUnmarshaler() *Unmarshaler {
 	}
 }
 
-// UnmarshalMaxMindDB implements the mmdbdata.Unmarshaler interface.
-func (u *Unmarshaler) UnmarshalMaxMindDB(decoder *mmdbdata.Decoder) error {
-	value, err := decodeDataTypeValue(decoder, u.cache)
+// UnmarshalMaxMindDBCursor implements the mmdbdata.CursorUnmarshaler interface.
+func (u *Unmarshaler) UnmarshalMaxMindDBCursor(
+	cursor mmdbdata.Cursor,
+) (mmdbdata.Cursor, error) {
+	value, next, err := decodeDataTypeValue(cursor, u.cache)
 	if err != nil {
-		return err
+		return mmdbdata.Cursor{}, err
 	}
 
 	u.result = value
-	return nil
+	return next, nil
 }
 
 // Clear resets the unmarshaler state for reuse.
