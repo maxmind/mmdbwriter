@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"net/netip"
+	"os"
+	"runtime"
 	"slices"
 	"testing"
 
@@ -179,6 +181,38 @@ func BenchmarkTreeLoadOverlappingPasses(b *testing.B) {
 	}
 
 	b.ReportMetric(float64(len(specs)), "insertions/source")
+}
+
+// BenchmarkTreeLoadExternalMMDB measures Load against a caller-provided
+// database. Set MMDBWRITER_BENCHMARK_DB to the database path to enable it.
+func BenchmarkTreeLoadExternalMMDB(b *testing.B) {
+	path := os.Getenv("MMDBWRITER_BENCHMARK_DB")
+	if path == "" {
+		b.Skip("MMDBWRITER_BENCHMARK_DB is not set")
+	}
+
+	// Validate the fixture and warm its pages before timing it. The warm tree is
+	// discarded so it does not contribute to the benchmark's live heap.
+	warmTree, err := Load(path, Options{IncludeReservedNetworks: true})
+	if err != nil {
+		b.Fatal(err)
+	}
+	if warmTree.nodeCountAllocated == 0 {
+		b.Fatal("loaded tree has no nodes")
+	}
+	runtime.KeepAlive(warmTree)
+	runtime.GC() //nolint:revive // Keep the warm-up tree out of measured heap work.
+
+	b.ReportAllocs()
+	for b.Loop() {
+		loadedTree, err := Load(path, Options{IncludeReservedNetworks: true})
+		if err != nil {
+			b.Fatal(err)
+		}
+		if loadedTree.nodeCountAllocated == 0 {
+			b.Fatal("loaded tree has no nodes")
+		}
+	}
 }
 
 // BenchmarkEnterpriseLoadThenOverlay models the production Enterprise build:
