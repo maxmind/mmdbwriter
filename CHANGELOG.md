@@ -95,6 +95,9 @@
   A non-nil `Options.Inserter` also materializes a view of each decoded record
   for its callback. `Load` now returns an error for a source record whose map
   repeats a key. The previous decoder collapsed duplicate keys silently.
+- `Load` and the `mmdbtype` decoders now use the cursor unmarshaling API from
+  maxminddb-golang v2.5.1. Custom decoding returns validated successor cursors,
+  while shared source containers remain cached by their resolved offsets.
 - A `Tree` is not safe for concurrent use. In v1, concurrent lookups on a tree
   that was not being modified were safe. In v2, lookups materialize shared views
   lazily, so the caller must synchronize even concurrent `Tree.Get` calls.

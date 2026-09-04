@@ -459,7 +459,7 @@ linters:
       exclusions:
         # We need a pointer here to follow interface and to modify
         # value.
-        - "*.UnmarshalMaxMindDB"
+        - "*.UnmarshalMaxMindDBCursor"
 
     revive:
       severity: warning
