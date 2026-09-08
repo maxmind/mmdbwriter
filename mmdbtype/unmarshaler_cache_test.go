@@ -2,6 +2,7 @@ package mmdbtype
 
 import (
 	"bytes"
+	"math/big"
 	"testing"
 
 	"github.com/oschwald/maxminddb-golang/v2/mmdbdata"
@@ -22,6 +23,7 @@ func TestUnmarshalerCache(t *testing.T) {
 // TestZeroUnmarshaler verifies that the zero value of Unmarshaler is safe to use
 // and correctly unmarshals data without caching enabled.
 func TestZeroUnmarshaler(t *testing.T) {
+	uint128 := Uint128(*new(big.Int).Lsh(big.NewInt(1), 100))
 	// Create test data with nested structures
 	testData := Map{
 		"outer": Map{
@@ -35,7 +37,14 @@ func TestZeroUnmarshaler(t *testing.T) {
 			},
 			"other": Uint64(100),
 		},
-		"simple": String("test"),
+		"simple":  String("test"),
+		"bool":    Bool(true),
+		"bytes":   Bytes{1, 2, 3},
+		"float32": Float32(1.25),
+		"float64": Float64(2.5),
+		"int32":   Int32(-42),
+		"uint16":  Uint16(42),
+		"uint128": &uint128,
 	}
 
 	// Encode to bytes
