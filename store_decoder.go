@@ -119,13 +119,13 @@ func (d *storeDecoder) decodeRef(
 		var value string
 		value, next, err = cursor.ReadString()
 		if err == nil {
-			ref, err = d.store.internString(mmdbtype.String(value))
+			ref, err = d.store.internScalar(mmdbtype.String(value))
 		}
 	case mmdbdata.KindFloat64:
 		var value float64
 		value, next, err = cursor.ReadFloat64()
 		if err == nil {
-			ref, err = d.store.internUncached(mmdbtype.Float64(value))
+			ref, err = d.store.internScalar(mmdbtype.Float64(value))
 		}
 	case mmdbdata.KindBytes:
 		var value []byte
@@ -138,14 +138,14 @@ func (d *storeDecoder) decodeRef(
 		value, next, err = cursor.ReadUint()
 		if err == nil {
 			// #nosec G115 -- kind is Uint16.
-			ref, err = d.store.internUncached(mmdbtype.Uint16(value))
+			ref, err = d.store.internScalar(mmdbtype.Uint16(value))
 		}
 	case mmdbdata.KindUint32:
 		var value uint64
 		value, next, err = cursor.ReadUint()
 		if err == nil {
 			// #nosec G115 -- kind is Uint32.
-			ref, err = d.store.internUncached(mmdbtype.Uint32(value))
+			ref, err = d.store.internScalar(mmdbtype.Uint32(value))
 		}
 	case mmdbdata.KindInt32:
 		var value int32

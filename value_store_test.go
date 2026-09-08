@@ -24,7 +24,7 @@ func TestValueStoreInternStringBytes(t *testing.T) {
 			ref, err := store.internStringBytes(input)
 			require.NoError(t, err)
 			expected := mmdbtype.String(string(input))
-			other, err := store.internString(expected)
+			other, err := store.internScalar(expected)
 			require.NoError(t, err)
 			assert.Equal(t, other, ref, "byte and string inputs must share one canonical value")
 			clear(input)
@@ -57,6 +57,102 @@ func TestValueStoreInternStringBytesReusesStorage(t *testing.T) {
 	assert.Zero(t, allocations, "repeated keys must not allocate")
 	store.release(ref)
 	assert.Zero(t, liveValueNodeCount(store))
+}
+
+func TestValueStoreInternScalarString(t *testing.T) {
+	store := newValueStore()
+	value := mmdbtype.String("registered_country")
+	ref, err := store.internScalar(value)
+	require.NoError(t, err)
+	allocations := testing.AllocsPerRun(100, func() {
+		other, internErr := store.internScalar(value)
+		require.NoError(t, internErr)
+		store.release(other)
+	})
+	assert.Zero(t, allocations, "repeated strings must not allocate")
+	store.release(ref)
+	assert.Zero(t, liveValueNodeCount(store))
+}
+
+func TestValueStoreInternFloat64(t *testing.T) {
+	for _, value := range []float64{0, math.Copysign(0, -1), 1.25, -1.25, math.SmallestNonzeroFloat64, math.MaxFloat64, math.Inf(1), math.Inf(-1), math.NaN()} {
+		t.Run(fmt.Sprint(value), func(t *testing.T) {
+			store := newValueStore()
+			ref, err := store.internScalar(mmdbtype.Float64(value))
+			require.NoError(t, err)
+			other, err := store.internUncached(mmdbtype.Float64(value))
+			require.NoError(t, err)
+			assert.Equal(
+				t,
+				other,
+				ref,
+				"concrete and interface inputs must share one canonical value",
+			)
+			store.release(other)
+			allocations := testing.AllocsPerRun(100, func() {
+				repeated, internErr := store.internScalar(mmdbtype.Float64(value))
+				require.NoError(t, internErr)
+				store.release(repeated)
+			})
+			assert.Zero(t, allocations, "repeated values must not allocate")
+			store.release(ref)
+			assert.Zero(t, liveValueNodeCount(store))
+		})
+	}
+}
+
+func TestValueStoreInternUint16(t *testing.T) {
+	for _, value := range []mmdbtype.Uint16{0, 1, 255, 256, math.MaxUint16} {
+		t.Run(fmt.Sprint(value), func(t *testing.T) {
+			store := newValueStore()
+			ref, err := store.internScalar(value)
+			require.NoError(t, err)
+			other, err := store.internUncached(value)
+			require.NoError(t, err)
+			assert.Equal(
+				t,
+				other,
+				ref,
+				"concrete and interface inputs must share one canonical value",
+			)
+			store.release(other)
+			allocations := testing.AllocsPerRun(100, func() {
+				repeated, internErr := store.internScalar(value)
+				require.NoError(t, internErr)
+				store.release(repeated)
+			})
+			assert.Zero(t, allocations, "repeated values must not allocate")
+			store.release(ref)
+			assert.Zero(t, liveValueNodeCount(store))
+		})
+	}
+}
+
+func TestValueStoreInternUint32(t *testing.T) {
+	for _, value := range []mmdbtype.Uint32{0, 1, 255, 256, math.MaxUint16, 1 << 16, (1 << 24) - 1, 1 << 24, math.MaxUint32} {
+		t.Run(fmt.Sprint(value), func(t *testing.T) {
+			store := newValueStore()
+			ref, err := store.internScalar(value)
+			require.NoError(t, err)
+			other, err := store.internUncached(value)
+			require.NoError(t, err)
+			assert.Equal(
+				t,
+				other,
+				ref,
+				"concrete and interface inputs must share one canonical value",
+			)
+			store.release(other)
+			allocations := testing.AllocsPerRun(100, func() {
+				repeated, internErr := store.internScalar(value)
+				require.NoError(t, internErr)
+				store.release(repeated)
+			})
+			assert.Zero(t, allocations, "repeated values must not allocate")
+			store.release(ref)
+			assert.Zero(t, liveValueNodeCount(store))
+		})
+	}
 }
 
 func TestValueStoreCanonicalizesAndMaterializesValues(t *testing.T) {

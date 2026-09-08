@@ -469,14 +469,29 @@ func (s *valueStore) intern(value mmdbtype.DataType) (valueRef, error) {
 	return s.internUncached(value)
 }
 
-// internString takes a concrete String so map keys avoid boxing into
-// DataType, which otherwise allocates for every key of every container.
-func (s *valueStore) internString(value mmdbtype.String) (valueRef, error) {
+type internScalarValue interface {
+	mmdbtype.DataType
+	mmdbtype.String | mmdbtype.Float64 | mmdbtype.Uint16 | mmdbtype.Uint32
+}
+
+// internScalar avoids boxing scalar values into DataType while encoding them.
+func (s *valueStore) internScalar[T internScalarValue](value T) (valueRef, error) {
+	var kind valueKind
+	switch any(value).(type) {
+	case mmdbtype.String:
+		kind = valueKindString
+	case mmdbtype.Float64:
+		kind = valueKindFloat64
+	case mmdbtype.Uint16:
+		kind = valueKindUint16
+	case mmdbtype.Uint32:
+		kind = valueKindUint32
+	}
 	s.encodeScratch.Reset()
 	if _, err := value.WriteTo(&s.encodeScratch); err != nil {
 		return nilValueRef, fmt.Errorf("encoding %T for value store: %w", value, err)
 	}
-	ref, _, err := s.internNode(valueKindString, s.encodeScratch.Bytes(), nil)
+	ref, _, err := s.internNode(kind, s.encodeScratch.Bytes(), nil)
 	return ref, err
 }
 
@@ -601,7 +616,7 @@ func (s *valueStore) internMap(value mmdbtype.Map) (valueRef, error) {
 		}
 	}
 	for _, pair := range pairs {
-		keyRef, err := s.internString(mmdbtype.String(pair.key))
+		keyRef, err := s.internScalar(mmdbtype.String(pair.key))
 		if err != nil {
 			releaseChildren()
 			return nilValueRef, err
