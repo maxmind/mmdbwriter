@@ -201,7 +201,9 @@ func BenchmarkTreeLoadExternalMMDB(b *testing.B) {
 		b.Fatal("loaded tree has no nodes")
 	}
 	runtime.KeepAlive(warmTree)
-	runtime.GC() //nolint:revive // Keep the warm-up tree out of measured heap work.
+	// Keep the warm-up tree out of measured heap work.
+	//revive:disable-next-line:call-to-gc
+	runtime.GC()
 
 	b.ReportAllocs()
 	for b.Loop() {
