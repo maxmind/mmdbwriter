@@ -1,10 +1,12 @@
 package mmdbwriter
 
 import (
+	"bytes"
 	"fmt"
 	"math"
 	"math/big"
 	"reflect"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -13,6 +15,49 @@ import (
 	"github.com/maxmind/mmdbwriter/v2/inserter"
 	"github.com/maxmind/mmdbwriter/v2/mmdbtype"
 )
+
+func TestValueStoreInternStringBytes(t *testing.T) {
+	for _, size := range []int{0, 1, 28, 29, 284, 285, 286, 65820, 65821, 65822, 16843036} {
+		t.Run(strconv.Itoa(size), func(t *testing.T) {
+			input := bytes.Repeat([]byte("x"), size)
+			store := newValueStore()
+			ref, err := store.internStringBytes(input)
+			require.NoError(t, err)
+			expected := mmdbtype.String(string(input))
+			other, err := store.internString(expected)
+			require.NoError(t, err)
+			assert.Equal(t, other, ref, "byte and string inputs must share one canonical value")
+			clear(input)
+			assert.Equal(t, expected, store.materialize(ref), "the store must own the key bytes")
+			store.release(ref)
+			store.release(other)
+			assert.Zero(t, liveValueNodeCount(store))
+		})
+	}
+}
+
+func TestValueStoreInternStringBytesRejectsOversizedInput(t *testing.T) {
+	store := newValueStore()
+	ref, err := store.internStringBytes(make([]byte, 16843037))
+	require.ErrorContains(t, err, "cannot store 16843037 bytes; max size is 16843036")
+	assert.Equal(t, nilValueRef, ref)
+	assert.Zero(t, liveValueNodeCount(store))
+}
+
+func TestValueStoreInternStringBytesReusesStorage(t *testing.T) {
+	store := newValueStore()
+	key := []byte("registered_country")
+	ref, err := store.internStringBytes(key)
+	require.NoError(t, err)
+	allocations := testing.AllocsPerRun(100, func() {
+		other, internErr := store.internStringBytes(key)
+		require.NoError(t, internErr)
+		store.release(other)
+	})
+	assert.Zero(t, allocations, "repeated keys must not allocate")
+	store.release(ref)
+	assert.Zero(t, liveValueNodeCount(store))
+}
 
 func TestValueStoreCanonicalizesAndMaterializesValues(t *testing.T) {
 	uint128 := mmdbtype.Uint128(*big.NewInt(1 << 20))

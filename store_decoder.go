@@ -1,10 +1,10 @@
 package mmdbwriter
 
 import (
+	"bytes"
 	"fmt"
 	"math/big"
 	"slices"
-	"strings"
 
 	"github.com/oschwald/maxminddb-golang/v2/mmdbdata"
 
@@ -27,7 +27,8 @@ var _ mmdbdata.CursorUnmarshaler = (*storeDecoder)(nil)
 
 // decodedPair carries one interned key and value of a map being decoded.
 type decodedPair struct {
-	key      string
+	// key borrows the source bytes until decodeMap returns and clears the pool.
+	key      []byte
 	keyRef   valueRef
 	valueRef valueRef
 }
@@ -216,7 +217,7 @@ func (d *storeDecoder) decodeMap(
 		if !ok {
 			break
 		}
-		keyRef, keyErr := d.store.internString(mmdbtype.String(key))
+		keyRef, keyErr := d.store.internStringBytes(key)
 		if keyErr != nil {
 			release()
 			return nilValueRef, mmdbdata.Cursor{}, fmt.Errorf(
@@ -230,7 +231,7 @@ func (d *storeDecoder) decodeMap(
 				"decoding value for map key %q: %w", key, valueErr)
 		}
 		next = valueNext
-		pairs = append(pairs, decodedPair{key: string(key), keyRef: keyRef, valueRef: childRef})
+		pairs = append(pairs, decodedPair{key: key, keyRef: keyRef, valueRef: childRef})
 	}
 	next, err = entries.End()
 	if err != nil {
@@ -240,10 +241,10 @@ func (d *storeDecoder) decodeMap(
 	// The sort must stay byte-order identical to internMap's, or loaded and
 	// inserted maps stop deduplicating against each other.
 	slices.SortFunc(pairs, func(left, right decodedPair) int {
-		return strings.Compare(left.key, right.key)
+		return bytes.Compare(left.key, right.key)
 	})
 	for index := 1; index < len(pairs); index++ {
-		if pairs[index].key == pairs[index-1].key {
+		if bytes.Equal(pairs[index].key, pairs[index-1].key) {
 			key := pairs[index].key
 			release()
 			return nilValueRef, mmdbdata.Cursor{}, fmt.Errorf("map has duplicate key %q", key)

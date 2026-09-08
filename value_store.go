@@ -480,6 +480,59 @@ func (s *valueStore) internString(value mmdbtype.String) (valueRef, error) {
 	return ref, err
 }
 
+// internStringBytes encodes borrowed string bytes without creating a Go string.
+// The encoding must match mmdbtype.String.WriteTo so both paths deduplicate.
+// internNode copies new values into the arena before the input can expire.
+func (s *valueStore) internStringBytes(value []byte) (valueRef, error) {
+	const (
+		firstSize  = 29
+		secondSize = firstSize + 256
+		thirdSize  = secondSize + (1 << 16)
+		maxSize    = thirdSize + (1 << 24)
+	)
+	size := len(value)
+	if size >= maxSize {
+		return nilValueRef, fmt.Errorf("cannot store %d bytes; max size is %d", size, maxSize-1)
+	}
+	s.encodeScratch.Reset()
+	encoded := s.encodeScratch.AvailableBuffer()
+	// The high three bits select the MMDB string type. Extended sizes use
+	// the same offsets and big-endian lengths as mmdbtype.writeCtrlByte.
+	switch {
+	case size < firstSize:
+		encoded = append(encoded, 0x40|byte(size))
+	case size < secondSize:
+		encoded = append(
+			encoded,
+			0x5d,
+			byte(size-firstSize),
+		)
+	case size < thirdSize:
+		remainder := size - secondSize
+		encoded = append(
+			encoded,
+			0x5e,
+			byte(remainder>>8),
+			byte(remainder&0xff),
+		)
+	default:
+		remainder := size - thirdSize
+		encoded = append(
+			encoded,
+			0x5f,
+			byte(remainder>>16),
+			byte((remainder>>8)&0xff),
+			byte(remainder&0xff),
+		)
+	}
+	encoded = append(encoded, value...)
+	if _, err := s.encodeScratch.Write(encoded); err != nil {
+		return nilValueRef, fmt.Errorf("encoding string bytes for value store: %w", err)
+	}
+	ref, _, err := s.internNode(valueKindString, s.encodeScratch.Bytes(), nil)
+	return ref, err
+}
+
 func (s *valueStore) internUncached(value mmdbtype.DataType) (valueRef, error) {
 	switch value := value.(type) {
 	case mmdbtype.Map:

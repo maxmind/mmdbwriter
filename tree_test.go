@@ -1198,6 +1198,35 @@ func TestStoreDecoderRejectsDuplicateMapKeys(t *testing.T) {
 		"a rejected map leaked its children")
 }
 
+func TestStoreDecoderOwnsMapKeys(t *testing.T) {
+	// The source keys are unsorted, and one is a prefix of another.
+	data := []byte{
+		0xe3,
+		0x41, 'b', 0x41, '1',
+		0x42, 'a', 'a', 0x41, '2',
+		0x41, 'a', 0x41, '3',
+	}
+	expected := mmdbtype.Map{
+		"a":  mmdbtype.String("3"),
+		"aa": mmdbtype.String("2"),
+		"b":  mmdbtype.String("1"),
+	}
+	store := newValueStore()
+	decoder := newStoreDecoder(store)
+	_, err := mmdbdata.NewDecoder(data, 0).Cursor().UnmarshalCursor(decoder)
+	require.NoError(t, err)
+	ref := decoder.takeResult()
+	decoder.close()
+	clear(data)
+	assert.Equal(t, expected, store.materialize(ref))
+	other, err := store.internUncached(expected)
+	require.NoError(t, err)
+	assert.Equal(t, other, ref, "loaded and inserted maps must share the same key order")
+	store.release(ref)
+	store.release(other)
+	assert.Zero(t, liveValueNodeCount(store))
+}
+
 // TestStoreDecoderReleasesChildrenOnContainerErrors pins that the container
 // error paths release every partial child, so a truncated or corrupt source
 // database yields an error instead of a refcount panic on hostile input.
