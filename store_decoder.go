@@ -302,7 +302,7 @@ func (d *storeDecoder) decodeSlice(
 		for _, child := range children {
 			d.store.release(child)
 		}
-		return nilValueRef, mmdbdata.Cursor{}, fmt.Errorf("reading slice element: %w", err)
+		return nilValueRef, mmdbdata.Cursor{}, fmt.Errorf("finishing slice: %w", err)
 	}
 	ref, err := d.store.internOwnedChildren(valueKindSlice, children)
 	if err != nil {

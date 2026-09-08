@@ -687,7 +687,7 @@ func (t *Slice) unmarshalMaxMindDBCursor(
 	}
 	next, err = values.End()
 	if err != nil {
-		return mmdbdata.Cursor{}, fmt.Errorf("reading Slice element: %w", err)
+		return mmdbdata.Cursor{}, fmt.Errorf("finishing Slice: %w", err)
 	}
 	*t = decoded
 	return next, nil
