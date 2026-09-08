@@ -1196,6 +1196,7 @@ func TestStoreDecoderRejectsDuplicateMapKeys(t *testing.T) {
 	decoder.close()
 	assert.Zero(t, liveValueNodeCount(store),
 		"a rejected map leaked its children")
+	require.NoError(t, store.audit(nil))
 }
 
 func TestStoreDecoderOwnsMapKeys(t *testing.T) {
@@ -1287,6 +1288,7 @@ func TestStoreDecoderReleasesChildrenOnContainerErrors(t *testing.T) {
 			decoder.close()
 			assert.Zero(t, liveValueNodeCount(store),
 				"the failed decode leaked references")
+			require.NoError(t, store.audit(nil))
 		})
 	}
 }
