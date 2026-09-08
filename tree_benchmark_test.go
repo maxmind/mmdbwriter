@@ -200,7 +200,6 @@ func BenchmarkTreeLoadExternalMMDB(b *testing.B) {
 	if warmTree.nodeCountAllocated == 0 {
 		b.Fatal("loaded tree has no nodes")
 	}
-	runtime.KeepAlive(warmTree)
 	// Keep the warm-up tree out of measured heap work.
 	//revive:disable-next-line:call-to-gc
 	runtime.GC()
