@@ -373,7 +373,8 @@ func (s *valueStore) retain(ref valueRef) {
 	node := s.node(ref)
 	if node.refCount == math.MaxUint32 {
 		panic(fmt.Sprintf(
-			"mmdbwriter: reference count overflow for ref %d (kind %d)", ref, node.kind))
+			"mmdbwriter: reference count overflow for ref %d (kind %d)", ref, node.kind,
+		))
 	}
 	node.refCount++
 }
@@ -391,7 +392,8 @@ func (s *valueStore) release(ref valueRef) {
 		if node.refCount == 0 {
 			panic(fmt.Sprintf(
 				"mmdbwriter: reference count underflow for ref %d (kind %d)",
-				current, node.kind))
+				current, node.kind,
+			))
 		}
 		node.refCount--
 		if node.refCount != 0 {
@@ -422,7 +424,8 @@ func (s *valueStore) release(ref valueRef) {
 		}
 		if !unlinked {
 			panic(fmt.Sprintf(
-				"mmdbwriter: released ref %d is missing from its hash bucket", current))
+				"mmdbwriter: released ref %d is missing from its hash bucket", current,
+			))
 		}
 
 		if node.hasIdentity {
@@ -469,12 +472,82 @@ func (s *valueStore) intern(value mmdbtype.DataType) (valueRef, error) {
 	return s.internUncached(value)
 }
 
-// internString takes a concrete String so map keys avoid boxing into
-// DataType, which otherwise allocates for every key of every container.
-func (s *valueStore) internString(value mmdbtype.String) (valueRef, error) {
+type internScalarValue interface {
+	mmdbtype.DataType
+	mmdbtype.String | mmdbtype.Float64 | mmdbtype.Uint16 | mmdbtype.Uint32
+}
+
+// internScalar avoids boxing scalar values into DataType while encoding them.
+func (s *valueStore) internScalar[T internScalarValue](value T) (valueRef, error) {
+	var kind valueKind
+	switch any(value).(type) {
+	case mmdbtype.String:
+		kind = valueKindString
+	case mmdbtype.Float64:
+		kind = valueKindFloat64
+	case mmdbtype.Uint16:
+		kind = valueKindUint16
+	case mmdbtype.Uint32:
+		kind = valueKindUint32
+	default:
+		return nilValueRef, fmt.Errorf("internScalar has no value kind for %T", value)
+	}
 	s.encodeScratch.Reset()
 	if _, err := value.WriteTo(&s.encodeScratch); err != nil {
 		return nilValueRef, fmt.Errorf("encoding %T for value store: %w", value, err)
+	}
+	ref, _, err := s.internNode(kind, s.encodeScratch.Bytes(), nil)
+	return ref, err
+}
+
+// internStringBytes encodes borrowed string bytes without creating a Go string.
+// The encoding must match mmdbtype.String.WriteTo so both paths deduplicate.
+// internNode copies new values into the arena before the input can expire.
+func (s *valueStore) internStringBytes(value []byte) (valueRef, error) {
+	const (
+		firstSize  = 29
+		secondSize = firstSize + 256
+		thirdSize  = secondSize + (1 << 16)
+		maxSize    = thirdSize + (1 << 24)
+	)
+	size := len(value)
+	if size >= maxSize {
+		return nilValueRef, fmt.Errorf("cannot store %d bytes; max size is %d", size, maxSize-1)
+	}
+	s.encodeScratch.Reset()
+	encoded := s.encodeScratch.AvailableBuffer()
+	// The high three bits select the MMDB string type. Extended sizes use
+	// the same offsets and big-endian lengths as mmdbtype.writeCtrlByte.
+	switch {
+	case size < firstSize:
+		encoded = append(encoded, 0x40|byte(size))
+	case size < secondSize:
+		encoded = append(
+			encoded,
+			0x5d,
+			byte(size-firstSize),
+		)
+	case size < thirdSize:
+		remainder := size - secondSize
+		encoded = append(
+			encoded,
+			0x5e,
+			byte(remainder>>8),
+			byte(remainder&0xff),
+		)
+	default:
+		remainder := size - thirdSize
+		encoded = append(
+			encoded,
+			0x5f,
+			byte(remainder>>16),
+			byte((remainder>>8)&0xff),
+			byte(remainder&0xff),
+		)
+	}
+	encoded = append(encoded, value...)
+	if _, err := s.encodeScratch.Write(encoded); err != nil {
+		return nilValueRef, fmt.Errorf("encoding string bytes for value store: %w", err)
 	}
 	ref, _, err := s.internNode(valueKindString, s.encodeScratch.Bytes(), nil)
 	return ref, err
@@ -548,7 +621,7 @@ func (s *valueStore) internMap(value mmdbtype.Map) (valueRef, error) {
 		}
 	}
 	for _, pair := range pairs {
-		keyRef, err := s.internString(mmdbtype.String(pair.key))
+		keyRef, err := s.internScalar(mmdbtype.String(pair.key))
 		if err != nil {
 			releaseChildren()
 			return nilValueRef, err
@@ -802,7 +875,8 @@ func kindOf(value mmdbtype.DataType) (valueKind, error) {
 		}
 		if integer.BitLen() > 128 {
 			return valueKindInvalid, errors.New(
-				"cannot intern a *mmdbtype.Uint128 wider than 128 bits")
+				"cannot intern a *mmdbtype.Uint128 wider than 128 bits",
+			)
 		}
 		return valueKindUint128, nil
 	default:

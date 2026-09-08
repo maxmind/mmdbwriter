@@ -1,10 +1,12 @@
 package mmdbwriter
 
 import (
+	"bytes"
 	"fmt"
 	"math"
 	"math/big"
 	"reflect"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -13,6 +15,145 @@ import (
 	"github.com/maxmind/mmdbwriter/v2/inserter"
 	"github.com/maxmind/mmdbwriter/v2/mmdbtype"
 )
+
+func TestValueStoreInternStringBytes(t *testing.T) {
+	for _, size := range []int{0, 1, 28, 29, 284, 285, 286, 65820, 65821, 65822, 16843036} {
+		t.Run(strconv.Itoa(size), func(t *testing.T) {
+			input := bytes.Repeat([]byte("x"), size)
+			store := newValueStore()
+			ref, err := store.internStringBytes(input)
+			require.NoError(t, err)
+			expected := mmdbtype.String(string(input))
+			other, err := store.internScalar(expected)
+			require.NoError(t, err)
+			assert.Equal(t, other, ref, "byte and string inputs must share one canonical value")
+			clear(input)
+			assert.Equal(t, expected, store.materialize(ref), "the store must own the key bytes")
+			store.release(ref)
+			store.release(other)
+			assert.Zero(t, liveValueNodeCount(store))
+		})
+	}
+}
+
+func TestValueStoreInternStringBytesRejectsOversizedInput(t *testing.T) {
+	store := newValueStore()
+	ref, err := store.internStringBytes(make([]byte, 16843037))
+	require.ErrorContains(t, err, "cannot store 16843037 bytes; max size is 16843036")
+	assert.Equal(t, nilValueRef, ref)
+	assert.Zero(t, liveValueNodeCount(store))
+}
+
+func TestValueStoreInternStringBytesReusesStorage(t *testing.T) {
+	store := newValueStore()
+	key := []byte("registered_country")
+	ref, err := store.internStringBytes(key)
+	require.NoError(t, err)
+	allocations := testing.AllocsPerRun(100, func() {
+		other, internErr := store.internStringBytes(key)
+		require.NoError(t, internErr)
+		store.release(other)
+	})
+	assert.Zero(t, allocations, "repeated keys must not allocate")
+	store.release(ref)
+	assert.Zero(t, liveValueNodeCount(store))
+}
+
+func TestValueStoreInternScalarString(t *testing.T) {
+	store := newValueStore()
+	value := mmdbtype.String("registered_country")
+	ref, err := store.internScalar(value)
+	require.NoError(t, err)
+	allocations := testing.AllocsPerRun(100, func() {
+		other, internErr := store.internScalar(value)
+		require.NoError(t, internErr)
+		store.release(other)
+	})
+	assert.Zero(t, allocations, "repeated strings must not allocate")
+	store.release(ref)
+	assert.Zero(t, liveValueNodeCount(store))
+}
+
+func TestValueStoreInternFloat64(t *testing.T) {
+	for _, value := range []float64{0, math.Copysign(0, -1), 1.25, -1.25, math.SmallestNonzeroFloat64, math.MaxFloat64, math.Inf(1), math.Inf(-1), math.NaN()} {
+		t.Run(fmt.Sprint(value), func(t *testing.T) {
+			store := newValueStore()
+			ref, err := store.internScalar(mmdbtype.Float64(value))
+			require.NoError(t, err)
+			other, err := store.internUncached(mmdbtype.Float64(value))
+			require.NoError(t, err)
+			assert.Equal(
+				t,
+				other,
+				ref,
+				"concrete and interface inputs must share one canonical value",
+			)
+			store.release(other)
+			allocations := testing.AllocsPerRun(100, func() {
+				repeated, internErr := store.internScalar(mmdbtype.Float64(value))
+				require.NoError(t, internErr)
+				store.release(repeated)
+			})
+			assert.Zero(t, allocations, "repeated values must not allocate")
+			store.release(ref)
+			assert.Zero(t, liveValueNodeCount(store))
+		})
+	}
+}
+
+func TestValueStoreInternUint16(t *testing.T) {
+	for _, value := range []mmdbtype.Uint16{0, 1, 255, 256, math.MaxUint16} {
+		t.Run(fmt.Sprint(value), func(t *testing.T) {
+			store := newValueStore()
+			ref, err := store.internScalar(value)
+			require.NoError(t, err)
+			other, err := store.internUncached(value)
+			require.NoError(t, err)
+			assert.Equal(
+				t,
+				other,
+				ref,
+				"concrete and interface inputs must share one canonical value",
+			)
+			store.release(other)
+			allocations := testing.AllocsPerRun(100, func() {
+				repeated, internErr := store.internScalar(value)
+				require.NoError(t, internErr)
+				store.release(repeated)
+			})
+			assert.Zero(t, allocations, "repeated values must not allocate")
+			store.release(ref)
+			assert.Zero(t, liveValueNodeCount(store))
+		})
+	}
+}
+
+func TestValueStoreInternUint32(t *testing.T) {
+	for _, value := range []mmdbtype.Uint32{0, 1, 255, 256, math.MaxUint16, 1 << 16, (1 << 24) - 1, 1 << 24, math.MaxUint32} {
+		t.Run(fmt.Sprint(value), func(t *testing.T) {
+			store := newValueStore()
+			ref, err := store.internScalar(value)
+			require.NoError(t, err)
+			other, err := store.internUncached(value)
+			require.NoError(t, err)
+			assert.Equal(
+				t,
+				other,
+				ref,
+				"concrete and interface inputs must share one canonical value",
+			)
+			store.release(other)
+			allocations := testing.AllocsPerRun(100, func() {
+				repeated, internErr := store.internScalar(value)
+				require.NoError(t, internErr)
+				store.release(repeated)
+			})
+			assert.Zero(t, allocations, "repeated values must not allocate")
+			store.release(ref)
+			assert.Zero(t, liveValueNodeCount(store))
+		})
+	}
+}
 
 func TestValueStoreCanonicalizesAndMaterializesValues(t *testing.T) {
 	uint128 := mmdbtype.Uint128(*big.NewInt(1 << 20))
@@ -126,7 +267,8 @@ func TestValueStoreRejectsInvalidUint128(t *testing.T) {
 	assert.Zero(t, liveValueNodeCount(store))
 
 	maxValue := mmdbtype.Uint128(
-		*new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 128), big.NewInt(1)))
+		*new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 128), big.NewInt(1)),
+	)
 	ref, err := store.intern(&maxValue)
 	require.NoError(t, err)
 	assert.True(t, maxValue.Equal(store.materialize(ref)))
@@ -447,7 +589,8 @@ func TestStoreCrashGuards(t *testing.T) {
 		require.PanicsWithValue(t,
 			fmt.Sprintf(
 				"mmdbwriter: reference count overflow for ref %d (kind %d)",
-				ref, valueKindString),
+				ref, valueKindString,
+			),
 			func() { store.retain(ref) })
 	})
 
@@ -459,7 +602,8 @@ func TestStoreCrashGuards(t *testing.T) {
 		require.PanicsWithValue(t,
 			fmt.Sprintf(
 				"mmdbwriter: reference count underflow for ref %d (kind %d)",
-				ref, valueKindString),
+				ref, valueKindString,
+			),
 			func() { store.release(ref) })
 	})
 

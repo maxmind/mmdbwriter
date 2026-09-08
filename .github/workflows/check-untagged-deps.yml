@@ -18,3 +18,5 @@ jobs:
           persist-credentials: false
 
       - uses: horgh/check-untagged-go-deps@1e727f9fffc10de1d5db85032c02e17081077602 # v1.1.0
+        env:
+          GOTOOLCHAIN: auto

@@ -111,7 +111,8 @@ func TestDataWriterOnlyPointersWhenSmaller(t *testing.T) {
 	t.Run("a long value becomes a pointer", func(t *testing.T) {
 		store := newValueStore()
 		ref, err := store.intern(
-			mmdbtype.String("this string is comfortably longer than a pointer"))
+			mmdbtype.String("this string is comfortably longer than a pointer"),
+		)
 		require.NoError(t, err)
 		defer store.release(ref)
 		dw := newDataWriter(store, true)

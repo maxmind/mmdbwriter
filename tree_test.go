@@ -39,10 +39,11 @@ type testInsertError struct {
 }
 
 type testGet struct {
-	ip                  string
-	expectedNetwork     string
-	expectedGetValue    mmdbtype.DataType
-	expectedLookupValue *any
+	ip                        string
+	expectedNetwork           string
+	expectedGetValue          mmdbtype.DataType
+	expectedLookupValue       *any
+	exceedsReaderDecodeBudget bool
 }
 
 func TestTreeInsert(t *testing.T) {
@@ -1167,11 +1168,13 @@ func TestStoreDecoderReleasesOverwrittenResult(t *testing.T) {
 
 	// A map with one string entry: {"k": "a"}.
 	first := []byte{0xe1, 0x41, 'k', 0x41, 'a'}
-	require.NoError(t, decoder.UnmarshalMaxMindDB(mmdbdata.NewDecoder(first, 0)))
+	_, err := mmdbdata.NewDecoder(first, 0).Cursor().UnmarshalCursor(decoder)
+	require.NoError(t, err)
 	// Pad the second buffer so its value has a distinct offset. The offset
 	// cache would otherwise answer it with the first result.
 	second := []byte{0x00, 0xe1, 0x41, 'k', 0x41, 'b'}
-	require.NoError(t, decoder.UnmarshalMaxMindDB(mmdbdata.NewDecoder(second, 1)))
+	_, err = mmdbdata.NewDecoder(second, 1).Cursor().UnmarshalCursor(decoder)
+	require.NoError(t, err)
 
 	store.release(decoder.takeResult())
 	decoder.close()
@@ -1187,12 +1190,42 @@ func TestStoreDecoderRejectsDuplicateMapKeys(t *testing.T) {
 
 	// A map with two entries that share the key "k".
 	data := []byte{0xe2, 0x41, 'k', 0x41, 'a', 0x41, 'k', 0x41, 'b'}
-	err := decoder.UnmarshalMaxMindDB(mmdbdata.NewDecoder(data, 0))
+	_, err := mmdbdata.NewDecoder(data, 0).Cursor().UnmarshalCursor(decoder)
 	require.ErrorContains(t, err, `map has duplicate key "k"`)
 
 	decoder.close()
 	assert.Zero(t, liveValueNodeCount(store),
 		"a rejected map leaked its children")
+	require.NoError(t, store.audit(nil))
+}
+
+func TestStoreDecoderOwnsMapKeys(t *testing.T) {
+	// The source keys are unsorted, and one is a prefix of another.
+	data := []byte{
+		0xe3,
+		0x41, 'b', 0x41, '1',
+		0x42, 'a', 'a', 0x41, '2',
+		0x41, 'a', 0x41, '3',
+	}
+	expected := mmdbtype.Map{
+		"a":  mmdbtype.String("3"),
+		"aa": mmdbtype.String("2"),
+		"b":  mmdbtype.String("1"),
+	}
+	store := newValueStore()
+	decoder := newStoreDecoder(store)
+	_, err := mmdbdata.NewDecoder(data, 0).Cursor().UnmarshalCursor(decoder)
+	require.NoError(t, err)
+	ref := decoder.takeResult()
+	decoder.close()
+	clear(data)
+	assert.Equal(t, expected, store.materialize(ref))
+	other, err := store.internUncached(expected)
+	require.NoError(t, err)
+	assert.Equal(t, other, ref, "loaded and inserted maps must share the same key order")
+	store.release(ref)
+	store.release(other)
+	assert.Zero(t, liveValueNodeCount(store))
 }
 
 // TestStoreDecoderReleasesChildrenOnContainerErrors pins that the container
@@ -1205,9 +1238,28 @@ func TestStoreDecoderReleasesChildrenOnContainerErrors(t *testing.T) {
 		want []string
 	}{
 		{
+			name: "oversized uint16 encoding",
+			data: []byte{0xa3, 0x01, 0x00, 0x00},
+			want: []string{"uint16 size of 3"},
+		},
+		{
+			name: "oversized uint32 encoding",
+			data: []byte{0xc5, 0x01, 0x00, 0x00, 0x00, 0x00},
+			want: []string{"uint32 size of 5"},
+		},
+		{
 			name: "truncated map value",
 			data: []byte{0xe1, 0x41, 'k', 0x4a},
 			want: []string{`decoding value for map key "k"`, "decoding String at offset 3"},
+		},
+		{
+			name: "invalid map key after valid entry",
+			data: []byte{
+				0xe2,
+				0x41, 'k', 0x41, 'a',
+				0x00, 0x07, 0x41, 'b',
+			},
+			want: []string{"reading map entry", "unexpected map key type: Bool"},
 		},
 		{
 			name: "truncated slice element",
@@ -1238,7 +1290,7 @@ func TestStoreDecoderReleasesChildrenOnContainerErrors(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			store := newValueStore()
 			decoder := newStoreDecoder(store)
-			err := decoder.UnmarshalMaxMindDB(mmdbdata.NewDecoder(test.data, 0))
+			_, err := mmdbdata.NewDecoder(test.data, 0).Cursor().UnmarshalCursor(decoder)
 			require.Error(t, err)
 			for _, want := range test.want {
 				require.ErrorContains(t, err, want)
@@ -1246,6 +1298,7 @@ func TestStoreDecoderReleasesChildrenOnContainerErrors(t *testing.T) {
 			decoder.close()
 			assert.Zero(t, liveValueNodeCount(store),
 				"the failed decode leaked references")
+			require.NoError(t, store.audit(nil))
 		})
 	}
 }
@@ -1304,7 +1357,8 @@ func TestInsertRejectsUnsupportedValues(t *testing.T) {
 func TestInserterResultWithPointerIsRejected(t *testing.T) {
 	tree := newTestTree(t, "mmdbwriter-inserter-pointer")
 	require.NoError(t, tree.Insert(
-		netip.MustParsePrefix("1.2.3.0/24"), mmdbtype.String("old")))
+		netip.MustParsePrefix("1.2.3.0/24"), mmdbtype.String("old"),
+	))
 	err := tree.InsertFunc(
 		netip.MustParsePrefix("1.2.3.0/24"),
 		mmdbtype.String("new"),
@@ -1488,19 +1542,6 @@ func TestTreeInsertAndGet(t *testing.T) {
 		"size65822": mmdbtype.String(strings.Repeat("*", 65822)),
 		// maxSize
 		"maxSizeMinus1": mmdbtype.String(strings.Repeat("*", 16843036)),
-	}
-
-	var stringsLookupRecord any = map[string]any{
-		"size28":        strings.Repeat("*", 28),
-		"size29":        strings.Repeat("*", 29),
-		"size30":        strings.Repeat("*", 30),
-		"size284":       strings.Repeat("*", 284),
-		"size285":       strings.Repeat("*", 285),
-		"size286":       strings.Repeat("*", 286),
-		"size65820":     strings.Repeat("*", 65820),
-		"size65821":     strings.Repeat("*", 65821),
-		"size65822":     strings.Repeat("*", 65822),
-		"maxSizeMinus1": strings.Repeat("*", 16843036),
 	}
 
 	tests := []struct {
@@ -1959,10 +2000,10 @@ func TestTreeInsertAndGet(t *testing.T) {
 			},
 			gets: []testGet{
 				{
-					ip:                  "1.1.1.1",
-					expectedNetwork:     "1.1.1.1/32",
-					expectedGetValue:    stringsGetRecord,
-					expectedLookupValue: &stringsLookupRecord,
+					ip:                        "1.1.1.1",
+					expectedNetwork:           "1.1.1.1/32",
+					expectedGetValue:          stringsGetRecord,
+					exceedsReaderDecodeBudget: true,
 				},
 			},
 			expectedNodeCount: 375,
@@ -2085,12 +2126,25 @@ func checkMMDB(t *testing.T, buf *bytes.Buffer, gets []testGet, name string) {
 
 		defer reader.Close()
 
+		expectVerifyBudgetError := false
 		for _, get := range gets {
-			var v any
-
 			res := reader.Lookup(netip.MustParseAddr(get.ip))
-			err := res.Decode(&v)
-			require.NoError(t, err)
+			if get.exceedsReaderDecodeBudget {
+				expectVerifyBudgetError = true
+				decoder := mmdbtype.NewUnmarshaler()
+				err := res.Decode(decoder)
+				require.NoError(t, err)
+				assert.True(t, get.expectedGetValue.Equal(decoder.Result()),
+					"value for %s in database", get.ip)
+			} else {
+				var value any
+				err := res.Decode(&value)
+				require.NoError(t, err)
+				if get.expectedLookupValue != nil {
+					assert.Equal(t, *get.expectedLookupValue, value,
+						"value for %s in database", get.ip)
+				}
+			}
 
 			assert.Equal(
 				t,
@@ -2100,13 +2154,18 @@ func checkMMDB(t *testing.T, buf *bytes.Buffer, gets []testGet, name string) {
 				get.ip,
 			)
 
-			if get.expectedLookupValue == nil {
+			if get.expectedLookupValue == nil && !get.exceedsReaderDecodeBudget {
 				assert.False(t, res.Found(), "%s is not in the database", get.ip)
 			} else {
-				assert.Equal(t, *get.expectedLookupValue, v, "value for %s in database", get.ip)
+				assert.True(t, res.Found(), "%s is in the database", get.ip)
 			}
 		}
-		require.NoError(t, reader.Verify(), "verify database format")
+		verifyErr := reader.Verify()
+		if expectVerifyBudgetError {
+			require.ErrorContains(t, verifyErr, "maximum decoded record size")
+		} else {
+			require.NoError(t, verifyErr, "verify database format")
+		}
 	})
 }
 
@@ -2207,7 +2266,8 @@ func TestInsertPureFuncEqualResultKeepsReference(t *testing.T) {
 		"the retained value was unlinked while a record still referenced it")
 
 	require.NoError(t, tree.Insert(
-		netip.MustParsePrefix("2.0.0.0/8"), mmdbtype.String("value")))
+		netip.MustParsePrefix("2.0.0.0/8"), mmdbtype.String("value"),
+	))
 	assert.Equal(t, 1, liveValueNodeCount(tree.valueStore),
 		"an equal value failed to deduplicate")
 }
@@ -2262,7 +2322,8 @@ func TestInsertPureFuncMatchesInsertFuncOutput(t *testing.T) {
 		for i := range 8 {
 			require.NoError(t, tree.Insert(
 				netip.MustParsePrefix(
-					netip.AddrFrom4([4]byte{1, byte(i), 0, 0}).String()+"/16"),
+					netip.AddrFrom4([4]byte{1, byte(i), 0, 0}).String()+"/16",
+				),
 				mmdbtype.Map{"n": mmdbtype.Uint32(uint32(i % 3))},
 			))
 		}
@@ -2301,7 +2362,8 @@ func TestInsertPureFuncNilResultRemovesRecords(t *testing.T) {
 	for i := range 4 {
 		require.NoError(t, tree.Insert(
 			netip.MustParsePrefix(
-				netip.AddrFrom4([4]byte{1, byte(i), 0, 0}).String()+"/16"),
+				netip.AddrFrom4([4]byte{1, byte(i), 0, 0}).String()+"/16",
+			),
 			mmdbtype.String("value"),
 		))
 	}
@@ -2322,7 +2384,8 @@ func TestInsertPureFuncCreatesPathFromEmptySpace(t *testing.T) {
 
 	prefix := netip.MustParsePrefix("9.9.9.0/24")
 	require.NoError(t, tree.InsertPureFunc(
-		prefix, mmdbtype.String("value"), inserter.Replace))
+		prefix, mmdbtype.String("value"), inserter.Replace,
+	))
 
 	gotPrefix, value := tree.Get(netip.MustParseAddr("9.9.9.1"))
 	assert.Equal(t, prefix, gotPrefix)
