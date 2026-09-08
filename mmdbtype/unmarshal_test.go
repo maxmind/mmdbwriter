@@ -145,3 +145,60 @@ func TestUnmarshalerCachesResolvedContainerOffsets(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "z", trailing)
 }
+
+func TestCursorContainersPreserveReceiverOnError(t *testing.T) {
+	tests := []struct {
+		name        string
+		data        []byte
+		destination cursorDataType
+		want        string
+	}{
+		{
+			name:        "map value after valid entry",
+			data:        []byte{0xe2, 0x41, 'k', 0x41, 'a', 0x41, 'l', 0x4a},
+			destination: &Map{"pre": String("existing")},
+			want:        "reading String",
+		},
+		{
+			name:        "map key after valid entry",
+			data:        []byte{0xe2, 0x41, 'k', 0x41, 'a', 0x00, 0x07, 0x41, 'b'},
+			destination: &Map{"pre": String("existing")},
+			want:        "reading Map entry",
+		},
+		{
+			name:        "slice element after valid element",
+			data:        []byte{0x02, 0x04, 0x41, 'a', 0x4a},
+			destination: &Slice{String("existing")},
+			want:        "reading String",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			before := test.destination.Copy()
+			_, err := mmdbdata.NewDecoder(test.data, 0).Cursor().UnmarshalCursor(test.destination)
+			require.ErrorContains(t, err, test.want)
+			assert.True(t, test.destination.Equal(before), "failed decoding changed the receiver")
+		})
+	}
+}
+
+func TestUnmarshalerRejectsMalformedData(t *testing.T) {
+	tests := []struct {
+		name string
+		data []byte
+		want string
+	}{
+		{"empty", nil, "peeking kind"},
+		{"map size", []byte{0xe3, 0x41, 'k', 0x41, 'a'}, "reading Map"},
+		{"slice size", []byte{0x03, 0x04, 0x41, 'a'}, "reading Slice"},
+		{"unsupported type", []byte{0x00, 0x09}, "unsupported data type"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			unmarshaler := NewUnmarshaler()
+			_, err := mmdbdata.NewDecoder(test.data, 0).Cursor().UnmarshalCursor(unmarshaler)
+			require.ErrorContains(t, err, test.want)
+			assert.Nil(t, unmarshaler.Result())
+		})
+	}
+}
