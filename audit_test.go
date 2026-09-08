@@ -61,7 +61,8 @@ func TestRefcountAuditMode(t *testing.T) {
 	require.Equal(t, recordTypeData, staleRecord.recordType)
 	stale := staleRecord.value
 	require.NoError(t, tree.Insert(
-		netip.MustParsePrefix("1.2.3.0/24"), mmdbtype.String("replacement")))
+		netip.MustParsePrefix("1.2.3.0/24"), mmdbtype.String("replacement"),
+	))
 	assert.Empty(t, tree.valueStore.freeRefs,
 		"audit mode queued a released ref for reuse")
 	require.PanicsWithValue(t,
@@ -97,7 +98,8 @@ func TestAuditFailureReturnsTypedError(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.NoError(t, tree.Insert(
-		netip.MustParsePrefix("1.2.0.0/16"), mmdbtype.String("first")))
+		netip.MustParsePrefix("1.2.0.0/16"), mmdbtype.String("first"),
+	))
 
 	ref := requireDataRef(t, tree)
 	tree.valueStore.nodes[ref].refCount++
@@ -118,16 +120,19 @@ func TestFailedInsertsPassTheAudit(t *testing.T) {
 			name: "reserved network",
 			insert: func(_ *testing.T, tree *Tree) error {
 				return tree.Insert(
-					netip.MustParsePrefix("10.0.0.0/8"), mmdbtype.String("nope"))
+					netip.MustParsePrefix("10.0.0.0/8"), mmdbtype.String("nope"),
+				)
 			},
 		},
 		{
 			name: "inserter error mid-walk",
 			insert: func(t *testing.T, tree *Tree) error {
 				require.NoError(t, tree.Insert(
-					netip.MustParsePrefix("1.0.0.0/25"), mmdbtype.String("left")))
+					netip.MustParsePrefix("1.0.0.0/25"), mmdbtype.String("left"),
+				))
 				require.NoError(t, tree.Insert(
-					netip.MustParsePrefix("1.0.0.128/25"), mmdbtype.String("right")))
+					netip.MustParsePrefix("1.0.0.128/25"), mmdbtype.String("right"),
+				))
 				calls := 0
 				return tree.InsertPureFunc(
 					netip.MustParsePrefix("1.0.0.0/24"),
@@ -148,9 +153,11 @@ func TestFailedInsertsPassTheAudit(t *testing.T) {
 			name: "inserter error on the first covered record",
 			insert: func(t *testing.T, tree *Tree) error {
 				require.NoError(t, tree.Insert(
-					netip.MustParsePrefix("1.0.0.0/25"), mmdbtype.String("left")))
+					netip.MustParsePrefix("1.0.0.0/25"), mmdbtype.String("left"),
+				))
 				require.NoError(t, tree.Insert(
-					netip.MustParsePrefix("1.0.0.128/25"), mmdbtype.String("right")))
+					netip.MustParsePrefix("1.0.0.128/25"), mmdbtype.String("right"),
+				))
 				calls := 0
 				return tree.InsertPureFunc(
 					netip.MustParsePrefix("1.0.0.0/24"),
@@ -186,7 +193,8 @@ func TestFailedInsertsPassTheAudit(t *testing.T) {
 			name: "invalid nested value from an inserter",
 			insert: func(t *testing.T, tree *Tree) error {
 				require.NoError(t, tree.Insert(
-					netip.MustParsePrefix("1.0.0.0/24"), mmdbtype.String("old")))
+					netip.MustParsePrefix("1.0.0.0/24"), mmdbtype.String("old"),
+				))
 				return tree.InsertFunc(
 					netip.MustParsePrefix("1.0.0.0/24"),
 					mmdbtype.String("new"),
@@ -282,7 +290,8 @@ func TestDirectValueFailureRunsAudit(t *testing.T) {
 			})
 			require.NoError(t, err)
 			require.NoError(t, tree.Insert(
-				netip.MustParsePrefix("1.2.0.0/16"), mmdbtype.String("existing")))
+				netip.MustParsePrefix("1.2.0.0/16"), mmdbtype.String("existing"),
+			))
 			ref := requireDataRef(t, tree)
 			tree.valueStore.nodes[ref].refCount++
 
@@ -464,7 +473,8 @@ func TestValueStoreAuditRejectsCorruptStores(t *testing.T) {
 				t.Helper()
 				tree.valueStore.payloads.release(
 					// #nosec G115 -- test arenas stay far below 2^32 bytes.
-					uint32(len(tree.valueStore.payloads.data)), 8)
+					uint32(len(tree.valueStore.payloads.data)), 8,
+				)
 			},
 			want: "past the arena end",
 		},

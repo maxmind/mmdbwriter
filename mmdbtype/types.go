@@ -111,7 +111,8 @@ func (t *Bool) UnmarshalMaxMindDBCursor(
 	value, next, err := cursor.ReadBool()
 	if err != nil {
 		return mmdbdata.Cursor{}, fmt.Errorf(
-			"reading Bool: %w", mmdbdata.NormalizeUnmarshalError[Bool](err))
+			"reading Bool: %w", mmdbdata.NormalizeUnmarshalError[Bool](err),
+		)
 	}
 	*t = Bool(value)
 	return next, nil
@@ -159,7 +160,8 @@ func (t *Bytes) UnmarshalMaxMindDBCursor(
 	value, next, err := cursor.ReadBytes()
 	if err != nil {
 		return mmdbdata.Cursor{}, fmt.Errorf(
-			"reading Bytes: %w", mmdbdata.NormalizeUnmarshalError[Bytes](err))
+			"reading Bytes: %w", mmdbdata.NormalizeUnmarshalError[Bytes](err),
+		)
 	}
 	// ReadBytes returns a slice pointing to the underlying mmap.
 	copied := make([]byte, len(value))
@@ -214,7 +216,8 @@ func (t *Float32) UnmarshalMaxMindDBCursor(
 	value, next, err := cursor.ReadFloat32()
 	if err != nil {
 		return mmdbdata.Cursor{}, fmt.Errorf(
-			"reading Float32: %w", mmdbdata.NormalizeUnmarshalError[Float32](err))
+			"reading Float32: %w", mmdbdata.NormalizeUnmarshalError[Float32](err),
+		)
 	}
 	*t = Float32(value)
 	return next, nil
@@ -269,7 +272,8 @@ func (t *Float64) UnmarshalMaxMindDBCursor(
 	value, next, err := cursor.ReadFloat64()
 	if err != nil {
 		return mmdbdata.Cursor{}, fmt.Errorf(
-			"reading Float64: %w", mmdbdata.NormalizeUnmarshalError[Float64](err))
+			"reading Float64: %w", mmdbdata.NormalizeUnmarshalError[Float64](err),
+		)
 	}
 	*t = Float64(value)
 	return next, nil
@@ -323,7 +327,8 @@ func (t *Int32) UnmarshalMaxMindDBCursor(
 	value, next, err := cursor.ReadInt32()
 	if err != nil {
 		return mmdbdata.Cursor{}, fmt.Errorf(
-			"reading Int32: %w", mmdbdata.NormalizeUnmarshalError[Int32](err))
+			"reading Int32: %w", mmdbdata.NormalizeUnmarshalError[Int32](err),
+		)
 	}
 	*t = Int32(value)
 	return next, nil
@@ -409,7 +414,8 @@ func (t *Map) unmarshalMaxMindDBCursor(
 	entries, err := cursor.Map()
 	if err != nil {
 		return mmdbdata.Cursor{}, fmt.Errorf(
-			"reading Map: %w", mmdbdata.NormalizeUnmarshalError[Map](err))
+			"reading Map: %w", mmdbdata.NormalizeUnmarshalError[Map](err),
+		)
 	}
 
 	decoded := make(Map, entries.Size())
@@ -658,7 +664,8 @@ func (t *Slice) unmarshalMaxMindDBCursor(
 	values, err := cursor.Slice()
 	if err != nil {
 		return mmdbdata.Cursor{}, fmt.Errorf(
-			"reading Slice: %w", mmdbdata.NormalizeUnmarshalError[Slice](err))
+			"reading Slice: %w", mmdbdata.NormalizeUnmarshalError[Slice](err),
+		)
 	}
 	size, err := values.Size()
 	if err != nil {
@@ -732,7 +739,8 @@ func (t *String) UnmarshalMaxMindDBCursor(
 	value, next, err := cursor.ReadString()
 	if err != nil {
 		return mmdbdata.Cursor{}, fmt.Errorf(
-			"reading String: %w", mmdbdata.NormalizeUnmarshalError[String](err))
+			"reading String: %w", mmdbdata.NormalizeUnmarshalError[String](err),
+		)
 	}
 	*t = String(value)
 	return next, nil
@@ -782,11 +790,13 @@ func (t *Uint16) UnmarshalMaxMindDBCursor(
 	value, next, err := cursor.ReadUint()
 	if err != nil {
 		return mmdbdata.Cursor{}, fmt.Errorf(
-			"reading Uint16: %w", mmdbdata.NormalizeUnmarshalError[Uint16](err))
+			"reading Uint16: %w", mmdbdata.NormalizeUnmarshalError[Uint16](err),
+		)
 	}
 	if value > math.MaxUint16 {
 		return mmdbdata.Cursor{}, fmt.Errorf(
-			"reading Uint16: %w", mmdbdata.NewUnmarshalTypeError[Uint16](value))
+			"reading Uint16: %w", mmdbdata.NewUnmarshalTypeError[Uint16](value),
+		)
 	}
 	*t = Uint16(value)
 	return next, nil
@@ -839,11 +849,13 @@ func (t *Uint32) UnmarshalMaxMindDBCursor(
 	value, next, err := cursor.ReadUint()
 	if err != nil {
 		return mmdbdata.Cursor{}, fmt.Errorf(
-			"reading Uint32: %w", mmdbdata.NormalizeUnmarshalError[Uint32](err))
+			"reading Uint32: %w", mmdbdata.NormalizeUnmarshalError[Uint32](err),
+		)
 	}
 	if value > math.MaxUint32 {
 		return mmdbdata.Cursor{}, fmt.Errorf(
-			"reading Uint32: %w", mmdbdata.NewUnmarshalTypeError[Uint32](value))
+			"reading Uint32: %w", mmdbdata.NewUnmarshalTypeError[Uint32](value),
+		)
 	}
 	*t = Uint32(value)
 	return next, nil
@@ -896,7 +908,8 @@ func (t *Uint64) UnmarshalMaxMindDBCursor(
 	value, next, err := cursor.ReadUint()
 	if err != nil {
 		return mmdbdata.Cursor{}, fmt.Errorf(
-			"reading Uint64: %w", mmdbdata.NormalizeUnmarshalError[Uint64](err))
+			"reading Uint64: %w", mmdbdata.NormalizeUnmarshalError[Uint64](err),
+		)
 	}
 	*t = Uint64(value)
 	return next, nil
@@ -962,7 +975,8 @@ func (t *Uint128) UnmarshalMaxMindDBCursor(
 	hi, lo, next, err := cursor.ReadUint128()
 	if err != nil {
 		return mmdbdata.Cursor{}, fmt.Errorf(
-			"reading Uint128: %w", mmdbdata.NormalizeUnmarshalError[Uint128](err))
+			"reading Uint128: %w", mmdbdata.NormalizeUnmarshalError[Uint128](err),
+		)
 	}
 	v := new(big.Int)
 	v.SetUint64(hi)
@@ -1105,7 +1119,8 @@ func decodeDataTypeValue(
 			next, skipErr := cursor.Skip()
 			if skipErr != nil {
 				return nil, mmdbdata.Cursor{}, fmt.Errorf(
-					"skipping cached value at offset %d: %w", offset, skipErr)
+					"skipping cached value at offset %d: %w", offset, skipErr,
+				)
 			}
 			return cached, next, nil
 		}

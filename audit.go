@@ -46,7 +46,8 @@ func (t *Tree) auditValueStore() error {
 		if record.recordType != recordTypeData && record.value != nilValueRef {
 			return fmt.Errorf(
 				"refcount audit found a type %d record holding value ref %d",
-				record.recordType, record.value)
+				record.recordType, record.value,
+			)
 		}
 		switch record.recordType {
 		case recordTypeData:
@@ -218,13 +219,15 @@ func (s *valueStore) auditBuckets() ([]int, error) {
 			}
 			if s.nodes[ref].kind == valueKindInvalid || s.nodes[ref].hash != hash {
 				return nil, fmt.Errorf(
-					"refcount audit found ref %d in the wrong hash bucket", ref)
+					"refcount audit found ref %d in the wrong hash bucket", ref,
+				)
 			}
 			bucketCounts[ref]++
 			steps++
 			if steps > len(s.nodes) {
 				return nil, fmt.Errorf(
-					"refcount audit found a bucket chain cycle for hash %d", hash)
+					"refcount audit found a bucket chain cycle for hash %d", hash,
+				)
 			}
 		}
 	}
@@ -275,13 +278,15 @@ func auditArenaExtents(
 		if int64(offset)+int64(length) > int64(size) {
 			return fmt.Errorf(
 				"arena audit found a %s extent [%d, %d) past the arena end %d",
-				name, offset, int64(offset)+int64(length), size)
+				name, offset, int64(offset)+int64(length), size,
+			)
 		}
 		for index := offset; index < offset+length; index++ {
 			if claimed[index] {
 				return fmt.Errorf(
 					"arena audit found overlapping extents at %s arena offset %d",
-					name, index)
+					name, index,
+				)
 			}
 			claimed[index] = true
 		}
@@ -292,7 +297,8 @@ func auditArenaExtents(
 			if extent.offset != 0 {
 				return fmt.Errorf(
 					"arena audit found a zero-length %s extent at offset %d",
-					name, extent.offset)
+					name, extent.offset,
+				)
 			}
 			continue
 		}
@@ -305,7 +311,8 @@ func auditArenaExtents(
 			if length == 0 {
 				return fmt.Errorf(
 					"arena audit found a zero-length free %s extent at offset %d",
-					name, offset)
+					name, offset,
+				)
 			}
 			if err := mark(offset, length); err != nil {
 				return err
@@ -315,7 +322,8 @@ func auditArenaExtents(
 	for index, isClaimed := range claimed {
 		if !isClaimed {
 			return fmt.Errorf(
-				"arena audit found unclaimed %s arena offset %d", name, index)
+				"arena audit found unclaimed %s arena offset %d", name, index,
+			)
 		}
 	}
 	return nil
@@ -332,7 +340,8 @@ func (s *valueStore) auditMaterializedIdentities() error {
 		}
 		if !s.nodes[ref].hasIdentity || s.nodes[ref].identity != identity {
 			return fmt.Errorf(
-				"identity audit found ref %d under an identity it does not carry", ref)
+				"identity audit found ref %d under an identity it does not carry", ref,
+			)
 		}
 	}
 	return nil

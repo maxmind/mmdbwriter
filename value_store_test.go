@@ -267,7 +267,8 @@ func TestValueStoreRejectsInvalidUint128(t *testing.T) {
 	assert.Zero(t, liveValueNodeCount(store))
 
 	maxValue := mmdbtype.Uint128(
-		*new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 128), big.NewInt(1)))
+		*new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 128), big.NewInt(1)),
+	)
 	ref, err := store.intern(&maxValue)
 	require.NoError(t, err)
 	assert.True(t, maxValue.Equal(store.materialize(ref)))
@@ -588,7 +589,8 @@ func TestStoreCrashGuards(t *testing.T) {
 		require.PanicsWithValue(t,
 			fmt.Sprintf(
 				"mmdbwriter: reference count overflow for ref %d (kind %d)",
-				ref, valueKindString),
+				ref, valueKindString,
+			),
 			func() { store.retain(ref) })
 	})
 
@@ -600,7 +602,8 @@ func TestStoreCrashGuards(t *testing.T) {
 		require.PanicsWithValue(t,
 			fmt.Sprintf(
 				"mmdbwriter: reference count underflow for ref %d (kind %d)",
-				ref, valueKindString),
+				ref, valueKindString,
+			),
 			func() { store.release(ref) })
 	})
 

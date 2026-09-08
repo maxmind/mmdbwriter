@@ -1345,7 +1345,8 @@ func TestInsertRejectsUnsupportedValues(t *testing.T) {
 func TestInserterResultWithPointerIsRejected(t *testing.T) {
 	tree := newTestTree(t, "mmdbwriter-inserter-pointer")
 	require.NoError(t, tree.Insert(
-		netip.MustParsePrefix("1.2.3.0/24"), mmdbtype.String("old")))
+		netip.MustParsePrefix("1.2.3.0/24"), mmdbtype.String("old"),
+	))
 	err := tree.InsertFunc(
 		netip.MustParsePrefix("1.2.3.0/24"),
 		mmdbtype.String("new"),
@@ -2253,7 +2254,8 @@ func TestInsertPureFuncEqualResultKeepsReference(t *testing.T) {
 		"the retained value was unlinked while a record still referenced it")
 
 	require.NoError(t, tree.Insert(
-		netip.MustParsePrefix("2.0.0.0/8"), mmdbtype.String("value")))
+		netip.MustParsePrefix("2.0.0.0/8"), mmdbtype.String("value"),
+	))
 	assert.Equal(t, 1, liveValueNodeCount(tree.valueStore),
 		"an equal value failed to deduplicate")
 }
@@ -2308,7 +2310,8 @@ func TestInsertPureFuncMatchesInsertFuncOutput(t *testing.T) {
 		for i := range 8 {
 			require.NoError(t, tree.Insert(
 				netip.MustParsePrefix(
-					netip.AddrFrom4([4]byte{1, byte(i), 0, 0}).String()+"/16"),
+					netip.AddrFrom4([4]byte{1, byte(i), 0, 0}).String()+"/16",
+				),
 				mmdbtype.Map{"n": mmdbtype.Uint32(uint32(i % 3))},
 			))
 		}
@@ -2347,7 +2350,8 @@ func TestInsertPureFuncNilResultRemovesRecords(t *testing.T) {
 	for i := range 4 {
 		require.NoError(t, tree.Insert(
 			netip.MustParsePrefix(
-				netip.AddrFrom4([4]byte{1, byte(i), 0, 0}).String()+"/16"),
+				netip.AddrFrom4([4]byte{1, byte(i), 0, 0}).String()+"/16",
+			),
 			mmdbtype.String("value"),
 		))
 	}
@@ -2368,7 +2372,8 @@ func TestInsertPureFuncCreatesPathFromEmptySpace(t *testing.T) {
 
 	prefix := netip.MustParsePrefix("9.9.9.0/24")
 	require.NoError(t, tree.InsertPureFunc(
-		prefix, mmdbtype.String("value"), inserter.Replace))
+		prefix, mmdbtype.String("value"), inserter.Replace,
+	))
 
 	gotPrefix, value := tree.Get(netip.MustParseAddr("9.9.9.1"))
 	assert.Equal(t, prefix, gotPrefix)

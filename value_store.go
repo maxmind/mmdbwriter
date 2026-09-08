@@ -373,7 +373,8 @@ func (s *valueStore) retain(ref valueRef) {
 	node := s.node(ref)
 	if node.refCount == math.MaxUint32 {
 		panic(fmt.Sprintf(
-			"mmdbwriter: reference count overflow for ref %d (kind %d)", ref, node.kind))
+			"mmdbwriter: reference count overflow for ref %d (kind %d)", ref, node.kind,
+		))
 	}
 	node.refCount++
 }
@@ -391,7 +392,8 @@ func (s *valueStore) release(ref valueRef) {
 		if node.refCount == 0 {
 			panic(fmt.Sprintf(
 				"mmdbwriter: reference count underflow for ref %d (kind %d)",
-				current, node.kind))
+				current, node.kind,
+			))
 		}
 		node.refCount--
 		if node.refCount != 0 {
@@ -422,7 +424,8 @@ func (s *valueStore) release(ref valueRef) {
 		}
 		if !unlinked {
 			panic(fmt.Sprintf(
-				"mmdbwriter: released ref %d is missing from its hash bucket", current))
+				"mmdbwriter: released ref %d is missing from its hash bucket", current,
+			))
 		}
 
 		if node.hasIdentity {
@@ -870,7 +873,8 @@ func kindOf(value mmdbtype.DataType) (valueKind, error) {
 		}
 		if integer.BitLen() > 128 {
 			return valueKindInvalid, errors.New(
-				"cannot intern a *mmdbtype.Uint128 wider than 128 bits")
+				"cannot intern a *mmdbtype.Uint128 wider than 128 bits",
+			)
 		}
 		return valueKindUint128, nil
 	default:

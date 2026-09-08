@@ -97,7 +97,8 @@ func (d *storeDecoder) decodeRef(
 		next, skipErr := cursor.Skip()
 		if skipErr != nil {
 			return nilValueRef, mmdbdata.Cursor{}, fmt.Errorf(
-				"skipping cached value at offset %d: %w", offset, skipErr)
+				"skipping cached value at offset %d: %w", offset, skipErr,
+			)
 		}
 		d.store.retain(ref)
 		return ref, next, nil
@@ -183,11 +184,13 @@ func (d *storeDecoder) decodeRef(
 		}
 	default:
 		return nilValueRef, mmdbdata.Cursor{}, fmt.Errorf(
-			"unsupported data type %v at offset %d", kind, offset)
+			"unsupported data type %v at offset %d", kind, offset,
+		)
 	}
 	if err != nil {
 		return nilValueRef, mmdbdata.Cursor{}, fmt.Errorf(
-			"decoding %v at offset %d: %w", kind, offset, err)
+			"decoding %v at offset %d: %w", kind, offset, err,
+		)
 	}
 
 	// The returned ref and the cache each own one reference.
@@ -221,14 +224,16 @@ func (d *storeDecoder) decodeMap(
 		if keyErr != nil {
 			release()
 			return nilValueRef, mmdbdata.Cursor{}, fmt.Errorf(
-				"interning map key %q: %w", key, keyErr)
+				"interning map key %q: %w", key, keyErr,
+			)
 		}
 		childRef, valueNext, valueErr := d.decodeRef(valueCursor)
 		if valueErr != nil {
 			d.store.release(keyRef)
 			release()
 			return nilValueRef, mmdbdata.Cursor{}, fmt.Errorf(
-				"decoding value for map key %q: %w", key, valueErr)
+				"decoding value for map key %q: %w", key, valueErr,
+			)
 		}
 		next = valueNext
 		pairs = append(pairs, decodedPair{key: key, keyRef: keyRef, valueRef: childRef})
@@ -285,7 +290,8 @@ func (d *storeDecoder) decodeSlice(
 				d.store.release(child)
 			}
 			return nilValueRef, mmdbdata.Cursor{}, fmt.Errorf(
-				"decoding slice index %d: %w", index, valueErr)
+				"decoding slice index %d: %w", index, valueErr,
+			)
 		}
 		next = valueNext
 		children = append(children, ref)

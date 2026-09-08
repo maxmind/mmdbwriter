@@ -298,7 +298,8 @@ func Load(path string, opts Options) (*Tree, error) {
 
 		if err := res.Decode(decoder); err != nil {
 			return nil, fmt.Errorf(
-				"unmarshaling record for network %s from %s: %w", prefix, path, err)
+				"unmarshaling record for network %s from %s: %w", prefix, path, err,
+			)
 		}
 		value := decoder.takeResult()
 
