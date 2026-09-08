@@ -1238,6 +1238,16 @@ func TestStoreDecoderReleasesChildrenOnContainerErrors(t *testing.T) {
 		want []string
 	}{
 		{
+			name: "oversized uint16 encoding",
+			data: []byte{0xa3, 0x01, 0x00, 0x00},
+			want: []string{"uint16 size of 3"},
+		},
+		{
+			name: "oversized uint32 encoding",
+			data: []byte{0xc5, 0x01, 0x00, 0x00, 0x00, 0x00},
+			want: []string{"uint32 size of 5"},
+		},
+		{
 			name: "truncated map value",
 			data: []byte{0xe1, 0x41, 'k', 0x4a},
 			want: []string{`decoding value for map key "k"`, "decoding String at offset 3"},
