@@ -27,7 +27,8 @@ var _ mmdbdata.CursorUnmarshaler = (*storeDecoder)(nil)
 
 // decodedPair carries one interned key and value of a map being decoded.
 type decodedPair struct {
-	// key borrows the source bytes until decodeMap returns and clears the pool.
+	// key borrows the source buffer through sorting and duplicate detection.
+	// putPairScratch clears it when decodeMap returns so the pool does not retain it.
 	key      []byte
 	keyRef   valueRef
 	valueRef valueRef
@@ -138,14 +139,14 @@ func (d *storeDecoder) decodeRef(
 		var value uint64
 		value, next, err = cursor.ReadUint()
 		if err == nil {
-			// #nosec G115 -- kind is Uint16.
+			//nolint:gosec // ReadUint widens a validated uint16 value.
 			ref, err = d.store.internScalar(mmdbtype.Uint16(value))
 		}
 	case mmdbdata.KindUint32:
 		var value uint64
 		value, next, err = cursor.ReadUint()
 		if err == nil {
-			// #nosec G115 -- kind is Uint32.
+			//nolint:gosec // ReadUint widens a validated uint32 value.
 			ref, err = d.store.internScalar(mmdbtype.Uint32(value))
 		}
 	case mmdbdata.KindInt32:
