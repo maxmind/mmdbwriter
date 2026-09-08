@@ -1,6 +1,7 @@
 package mmdbwriter
 
 import (
+	"bytes"
 	"io"
 	"maps"
 	"net/netip"
@@ -299,5 +300,46 @@ func benchmarkEnterpriseValue() mmdbtype.Map {
 			"organization":                   mmdbtype.String("Example Organization"),
 			"user_type":                      mmdbtype.String("business"),
 		},
+	}
+}
+
+func BenchmarkValueStoreStringInterning(b *testing.B) {
+	for _, size := range []int{2, 18, 28, 29, 284, 285, 65820, 65821} {
+		input := bytes.Repeat([]byte("x"), size)
+		value := mmdbtype.String(input)
+		b.Run(strconv.Itoa(size), func(b *testing.B) {
+			b.Run("bytes", func(b *testing.B) {
+				store := newValueStore()
+				ref, err := store.internStringBytes(input)
+				if err != nil {
+					b.Fatal(err)
+				}
+				defer store.release(ref)
+				b.ReportAllocs()
+				for b.Loop() {
+					other, internErr := store.internStringBytes(input)
+					if internErr != nil {
+						b.Fatal(internErr)
+					}
+					store.release(other)
+				}
+			})
+			b.Run("string", func(b *testing.B) {
+				store := newValueStore()
+				ref, err := store.internScalar(value)
+				if err != nil {
+					b.Fatal(err)
+				}
+				defer store.release(ref)
+				b.ReportAllocs()
+				for b.Loop() {
+					other, internErr := store.internScalar(value)
+					if internErr != nil {
+						b.Fatal(internErr)
+					}
+					store.release(other)
+				}
+			})
+		})
 	}
 }
