@@ -2,6 +2,11 @@
 
 ## 2.0.0
 
+- Added `Compose` to merge sorted network sources in one pass. Each callback
+  receives all layer values for a refined prefix. Added `NetworkSource`,
+  `MMDBSource`, `SourceFunc`, `SortingSource`, and `Tree.Networks` to supply
+  inputs. Composition rejects unsorted or overlapping source networks.
+
 - Changed the module path to `github.com/maxmind/mmdbwriter/v2`.
 - Changed `Tree.Insert`, `Tree.InsertFunc`, `Tree.InsertRange`,
   `Tree.InsertRangeFunc`, and `Tree.Get` to use `net/netip` types instead of
