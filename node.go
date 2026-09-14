@@ -19,6 +19,7 @@ const (
 	recordTypeFixedNode
 	recordTypeReserved
 	recordTypePath
+	recordTypeRetired
 )
 
 type record struct {
@@ -321,31 +322,83 @@ func newNodeIndex(index int) nodeIndex {
 }
 
 func (t *Tree) newNode(children [2]record) nodeIndex {
-	index := newNodeIndex(t.nodeCountAllocated)
-	if t.nodeCountAllocated == len(t.nodeBlocks)*nodeBlockSize {
-		t.nodeBlocks = append(t.nodeBlocks, make([]node, nodeBlockSize))
+	var index nodeIndex
+	if n := len(t.freeNodes); n != 0 {
+		index = t.freeNodes[n-1]
+		t.freeNodes = t.freeNodes[:n-1]
+	} else {
+		index = newNodeIndex(t.nodeCountAllocated)
+		if t.nodeCountAllocated == len(t.nodeBlocks)*nodeBlockSize {
+			t.nodeBlocks = append(t.nodeBlocks, make([]node, nodeBlockSize))
+		}
+		t.nodeCountAllocated++
 	}
-	// Node blocks are never reallocated, which keeps node pointers stable while
-	// insertion allocates more nodes. Dead nodes are not reclaimed.
-	t.nodeCountAllocated++
-	*t.nodeAt(index) = node{children: children}
+	*t.rawNodeAt(index) = node{children: children}
 	return index
 }
 
-func (t *Tree) nodeAt(index nodeIndex) *node {
+// rawNodeAt bypasses retirement checks for slot initialization and auditing.
+func (t *Tree) rawNodeAt(index nodeIndex) *node {
 	return &t.nodeBlocks[int(index)/nodeBlockSize][int(index)%nodeBlockSize]
 }
 
-// newPath stores a compressed path for a sparse insertion. This avoids
-// allocating one node per remaining bit until a later insert reaches the path
-// or finalize expands it. Path entries are not reclaimed after materialization.
-func (t *Tree) newPath(ip [16]byte, endDepth int, record record) nodeIndex {
+func (t *Tree) nodeAt(index nodeIndex) *node {
+	n := t.rawNodeAt(index)
+	if n.children[0].recordType == recordTypeRetired {
+		// A retired index indicates an internal use-after-free bug, not invalid
+		// caller input. The caller cannot safely continue using the tree.
+		panic(fmt.Sprintf("mmdbwriter: retired node index %d", index))
+	}
+	return n
+}
+
+// retireNode transfers no ownership. The caller must first move or release
+// both child records and remove the owning edge.
+func (t *Tree) retireNode(index nodeIndex) {
+	if index == t.root {
+		// The root must remain live for the tree's lifetime. Retiring it
+		// indicates an internal ownership bug.
+		panic("mmdbwriter: cannot retire the root node")
+	}
+	n := t.nodeAt(index)
+	*n = node{children: [2]record{{recordType: recordTypeRetired}, {}}}
+	if !t.poisonTreeSlots {
+		t.freeNodes = append(t.freeNodes, index)
+	}
+}
+
+func (t *Tree) pathAt(index nodeIndex) compressedPath {
+	path := t.paths[index]
+	if path.record.recordType == recordTypeRetired {
+		// As in nodeAt, accessing a retired slot indicates an internal
+		// use-after-free bug that the caller cannot recover from.
+		panic(fmt.Sprintf("mmdbwriter: retired path index %d", index))
+	}
+	return path
+}
+
+// The caller must transfer the path's record and replace its owning edge
+// before calling retirePath.
+func (t *Tree) retirePath(index nodeIndex) {
+	_ = t.pathAt(index)
+	t.paths[index] = compressedPath{record: record{recordType: recordTypeRetired}}
+	if !t.poisonTreeSlots {
+		t.freePaths = append(t.freePaths, index)
+	}
+}
+
+// newPath avoids allocating one node per remaining bit until an insert
+// reaches the path or finalization expands it.
+func (t *Tree) newPath(ip [16]byte, endDepth int, r record) nodeIndex {
+	path := compressedPath{ip: ip, endDepth: endDepth, record: r}
+	if n := len(t.freePaths); n != 0 {
+		index := t.freePaths[n-1]
+		t.freePaths = t.freePaths[:n-1]
+		t.paths[index] = path
+		return index
+	}
 	index := newNodeIndex(len(t.paths))
-	t.paths = append(t.paths, compressedPath{
-		ip:       ip,
-		endDepth: endDepth,
-		record:   record,
-	})
+	t.paths = append(t.paths, path)
 	return index
 }
 
@@ -411,12 +464,10 @@ func (iRec *insertRecord) insertRecord(
 	case recordTypeFixedNode:
 		return iRec.insertNode(r.nodeIndex, newDepth)
 	case recordTypePath:
-		path := iRec.tree.paths[r.nodeIndex]
-		// materializePath moves the path record's value ownership into the
-		// expanded nodes. Zero the dead slot, so an accidental later read
-		// fails loudly instead of double-counting the moved reference.
-		iRec.tree.paths[r.nodeIndex].record = record{}
+		index := r.nodeIndex
+		path := iRec.tree.pathAt(index)
 		*r = iRec.tree.materializePath(newDepth, path)
+		iRec.tree.retirePath(index)
 		return iRec.insertRecord(r, newDepth)
 	case recordTypeEmpty, recordTypeData:
 		if newDepth >= iRec.prefixLen {
@@ -520,7 +571,8 @@ func (iRec *insertRecord) maybeMergeChildren(r *record) error {
 	// Use pointer access to avoid copying the record struct; this is
 	// called from every node-level insert, so the copies add up across
 	// millions of inserts.
-	node := iRec.tree.nodeAt(r.nodeIndex)
+	index := r.nodeIndex
+	node := iRec.tree.nodeAt(index)
 	child0 := &node.children[0]
 	child1 := &node.children[1]
 	if child0.recordType != child1.recordType {
@@ -533,6 +585,7 @@ func (iRec *insertRecord) maybeMergeChildren(r *record) error {
 	case recordTypeEmpty, recordTypeReserved:
 		r.recordType = child0.recordType
 		r.nodeIndex = noNodeIndex
+		iRec.tree.retireNode(index)
 		return nil
 	case recordTypeData:
 		// The store keeps exactly one live node per wire-equal value, so
@@ -545,6 +598,7 @@ func (iRec *insertRecord) maybeMergeChildren(r *record) error {
 		r.value = child0.value
 		iRec.store.release(child1.value)
 		r.nodeIndex = noNodeIndex
+		iRec.tree.retireNode(index)
 		return nil
 	default:
 		return fmt.Errorf("merging record type %d is not implemented", child0.recordType)
@@ -570,7 +624,7 @@ func (t *Tree) getRecord(
 	depth int,
 ) (int, record) {
 	if r.recordType == recordTypePath {
-		path := t.paths[r.nodeIndex]
+		path := t.pathAt(r.nodeIndex)
 		for pathDepth := depth; pathDepth < path.endDepth; pathDepth++ {
 			if bitAt(ip, pathDepth) != bitAt(path.ip, pathDepth) {
 				return pathDepth + 1, record{}
@@ -594,15 +648,19 @@ func (t *Tree) expandPaths(index nodeIndex, currentDepth int) {
 		recordDepth := currentDepth + 1
 		switch child.recordType {
 		case recordTypePath:
-			path := t.paths[child.nodeIndex]
-			// Zero the dead slot, as in insertRecord's path case.
-			t.paths[child.nodeIndex].record = record{}
+			pathIndex := child.nodeIndex
+			path := t.pathAt(pathIndex)
 			*child = t.materializePath(recordDepth, path)
+			t.retirePath(pathIndex)
 			if child.recordType == recordTypeNode {
 				t.expandPaths(child.nodeIndex, recordDepth)
 			}
 		case recordTypeNode, recordTypeFixedNode:
 			t.expandPaths(child.nodeIndex, recordDepth)
+		case recordTypeRetired:
+			// A reachable retired record indicates an internal ownership bug.
+			// Panic before the writer can serialize the corrupt tree.
+			panic("mmdbwriter: retired record during path expansion")
 		case recordTypeEmpty, recordTypeData, recordTypeAlias, recordTypeReserved:
 		}
 	}
@@ -612,7 +670,8 @@ func (t *Tree) expandPaths(index nodeIndex, currentDepth int) {
 // this so compressed paths cannot be confused with node indexes.
 func (t *Tree) finalizeNode(index nodeIndex, currentNum int) int {
 	n := t.nodeAt(index)
-	t.nodeNumbers[index] = currentNum
+	// Allocation bounds every index below the uint32 sentinel.
+	t.nodeNumbers[index] = uint32(newNodeIndex(currentNum))
 	currentNum++
 
 	for i := range 2 {

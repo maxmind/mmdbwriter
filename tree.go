@@ -81,8 +81,8 @@ type Options struct {
 	// after every insert that reaches the value store, including failed
 	// inserts, and after every successful load. The audit is a debugging tool.
 	// It slows each insert to a full walk of the tree and the store and disables
-	// recycling of released value-node slots, so mutation-heavy trees retain
-	// those slots until the tree is discarded. Setting the
+	// recycling of released value, tree-node, and path slots. Mutation-heavy trees
+	// retain those slots until the tree is discarded. Setting the
 	// MMDBWRITER_REFCOUNT_AUDIT environment variable turns the audit on for every
 	// tree in the process.
 	RefcountAudit bool
@@ -120,16 +120,19 @@ type Tree struct {
 	ipVersion               int
 	languages               []string
 	recordSize              int
-	// nodeBlocks is an append-only arena split into fixed-size blocks. Blocks
-	// preserve pointer stability during inserts but grow monotonically; merged
-	// or abandoned nodes are not reclaimed until the Tree is discarded.
+	// Node blocks preserve pointer stability while retired slots are reused.
 	nodeBlocks         [][]node
 	nodeCountAllocated int
 	// nodeNumbers and nodeCount are invalidated by mutation and rebuilt lazily
 	// by finalize before writing.
-	nodeNumbers []int
-	// paths is an append-only arena for compressed sparse insertion paths. Path
-	// entries are not reclaimed after materialization.
+	nodeNumbers []uint32
+	// freeNodes and freePaths hold retired slot indexes ready for reuse.
+	freeNodes []nodeIndex
+	freePaths []nodeIndex
+	// poisonTreeSlots prevents index reuse so stale references keep failing.
+	// New enables it with refcountAudit to expose use-after-free bugs.
+	poisonTreeSlots bool
+	// paths stores sparse insertion paths until they are materialized.
 	paths     []compressedPath
 	root      nodeIndex
 	treeDepth int
@@ -170,6 +173,7 @@ func New(opts Options) (*Tree, error) {
 		tree.ipVersion = opts.IPVersion
 	}
 
+	tree.poisonTreeSlots = tree.refcountAudit
 	tree.valueStore = newValueStore()
 	tree.valueStore.poisonFreedRefs = tree.refcountAudit
 
@@ -380,10 +384,8 @@ func (t *Tree) Insert(prefix netip.Prefix, value mmdbtype.DataType) error {
 // success, installed equal values, and records that become equally empty, may
 // coalesce, so a retry can observe merged records.
 //
-// A failed insert does not shrink the tree back. Splitting a record to reach
-// the inserted network allocates nodes, and the unwinding merge restores the
-// record boundaries without reclaiming them, so a caller that retries a failing
-// insert many times grows the node arena each time.
+// Nodes retired while restoring record boundaries are reused by later
+// inserts. Audit mode retains retired slots to detect stale references.
 //
 // This is not safe to call from multiple threads.
 func (t *Tree) InsertFunc(
@@ -885,7 +887,12 @@ func (t *Tree) Get(ip netip.Addr) (netip.Prefix, mmdbtype.DataType) {
 // finalize prepares the tree for writing. It is not threadsafe.
 func (t *Tree) finalize() {
 	t.expandPaths(t.root, 0)
-	t.nodeNumbers = make([]int, t.nodeCountAllocated)
+	// Keep poisoned path indexes invalid across writes and later inserts.
+	if !t.poisonTreeSlots {
+		t.paths = nil
+		t.freePaths = nil
+	}
+	t.nodeNumbers = make([]uint32, t.nodeCountAllocated)
 	t.nodeCount = t.finalizeNode(t.root, 0)
 }
 
@@ -1015,7 +1022,7 @@ func (t *Tree) recordValue(
 	case recordTypePath:
 		return 0, errors.New("compressed path record cannot be written before finalization")
 	default:
-		return t.nodeNumbers[r.nodeIndex], nil
+		return int(t.nodeNumbers[r.nodeIndex]), nil
 	}
 }
 

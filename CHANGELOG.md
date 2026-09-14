@@ -108,9 +108,9 @@
   and retrying cannot help. Setting the `MMDBWRITER_REFCOUNT_AUDIT` environment
   variable turns the audit on for every tree in the process. The audit is a
   debugging tool. It slows each insert to a full walk of the tree and the store,
-  and it disables recycling of released value-node slots so stale references
-  remain invalid. Mutation-heavy trees retain those slots until they are
-  discarded.
+  and it disables recycling of released value, tree-node, and path slots so
+  stale references remain invalid. Mutation-heavy trees retain those slots until
+  they are discarded.
 - Inserting a raw `mmdbtype.Pointer` value now returns an error. The previous
   writer emitted it as a literal, dangling pointer that no reader could resolve.
 - Inserting a negative or wider-than-128-bit `mmdbtype.Uint128` now returns an
@@ -119,11 +119,10 @@
 - The two validations above apply to direct inserts and to inserter results. A
   custom inserter can receive an unsupported input value and must replace or
   discard it.
-- Reworked tree storage to use an append-only indexed arena. This reduces
-  pointer overhead and keeps node references stable, but merged or abandoned
-  nodes and materialized sparse paths are retained until the `Tree` is
-  discarded. Workloads with heavy mutation churn may see higher peak memory than
-  v1.
+- Reworked tree storage to use indexed arenas with stable node addresses. Merged
+  nodes and materialized sparse paths are recycled during mutation. Finalization
+  releases the expanded path arena and uses 32-bit node numbers. Audit mode
+  retains retired slots to detect stale references.
 - Removed `Options.KeyGenerator` and the `KeyGenerator` interface. There is no
   replacement. Record values are now indexed by a seeded structural content
   hash, and values are compared exactly before deduplication, so hash collisions
