@@ -185,3 +185,70 @@ func TestTreeArenaAuditRejectsPoisonedFreeLists(t *testing.T) {
 		})
 	}
 }
+
+func TestTreeArenaRejectsInvalidReuse(t *testing.T) {
+	t.Setenv("MMDBWRITER_REFCOUNT_AUDIT", "")
+	for _, kind := range []string{"node", "path"} {
+		for _, scenario := range []string{"live", "duplicate", "poison"} {
+			t.Run(kind+"/"+scenario, func(t *testing.T) {
+				tree, err := New(
+					Options{
+						IPVersion:               4,
+						IncludeReservedNetworks: true,
+						RefcountAudit:           scenario == "poison",
+					},
+				)
+				require.NoError(t, err)
+				if kind == "node" {
+					index := tree.newNode([2]record{{recordType: recordTypeReserved}, {}})
+					if scenario != "live" {
+						tree.retireNode(index)
+					}
+					tree.freeNodes = []nodeIndex{index}
+					if scenario == "duplicate" {
+						tree.freeNodes = append(tree.freeNodes, index)
+						require.Equal(
+							t,
+							index,
+							tree.newNode([2]record{{recordType: recordTypeReserved}, {}}),
+						)
+					}
+					before := *tree.rawNodeAt(index)
+					want := "mmdbwriter: recycled node slot is not retired"
+					if scenario == "poison" {
+						want = "mmdbwriter: cannot reuse node slot in poison mode"
+					}
+					require.PanicsWithValue(t, want, func() { tree.newNode([2]record{}) })
+					require.Equal(t, before, *tree.rawNodeAt(index))
+					require.Equal(t, []nodeIndex{index}, tree.freeNodes)
+				} else {
+					index := tree.newPath([16]byte{}, 32, record{recordType: recordTypeReserved})
+					if scenario != "live" {
+						tree.retirePath(index)
+					}
+					tree.freePaths = []nodeIndex{index}
+					if scenario == "duplicate" {
+						tree.freePaths = append(tree.freePaths, index)
+						require.Equal(
+							t,
+							index,
+							tree.newPath([16]byte{}, 32, record{recordType: recordTypeReserved}),
+						)
+					}
+					before := tree.paths[index]
+					want := "mmdbwriter: recycled path slot is not retired"
+					if scenario == "poison" {
+						want = "mmdbwriter: cannot reuse path slot in poison mode"
+					}
+					require.PanicsWithValue(
+						t,
+						want,
+						func() { tree.newPath([16]byte{}, 8, record{}) },
+					)
+					require.Equal(t, before, tree.paths[index])
+					require.Equal(t, []nodeIndex{index}, tree.freePaths)
+				}
+			})
+		}
+	}
+}

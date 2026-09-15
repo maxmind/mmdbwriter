@@ -325,6 +325,14 @@ func (t *Tree) newNode(children [2]record) nodeIndex {
 	var index nodeIndex
 	if n := len(t.freeNodes); n != 0 {
 		index = t.freeNodes[n-1]
+		if t.poisonTreeSlots {
+			// Reuse would make stale indexes valid and erase evidence of this bug.
+			panic("mmdbwriter: cannot reuse node slot in poison mode")
+		}
+		if t.rawNodeAt(index).children[0].recordType != recordTypeRetired {
+			// A live slot on the free list indicates an internal ownership bug.
+			panic("mmdbwriter: recycled node slot is not retired")
+		}
 		t.freeNodes = t.freeNodes[:n-1]
 	} else {
 		index = newNodeIndex(t.nodeCountAllocated)
@@ -403,6 +411,14 @@ func (t *Tree) newPath(ip [16]byte, endDepth int, r record) nodeIndex {
 	path := compressedPath{ip: ip, endDepth: endDepth, record: r}
 	if n := len(t.freePaths); n != 0 {
 		index := t.freePaths[n-1]
+		if t.poisonTreeSlots {
+			// Reuse would make stale indexes valid and erase evidence of this bug.
+			panic("mmdbwriter: cannot reuse path slot in poison mode")
+		}
+		if t.paths[index].record.recordType != recordTypeRetired {
+			// A live slot on the free list indicates an internal ownership bug.
+			panic("mmdbwriter: recycled path slot is not retired")
+		}
 		t.freePaths = t.freePaths[:n-1]
 		t.paths[index] = path
 		return index
