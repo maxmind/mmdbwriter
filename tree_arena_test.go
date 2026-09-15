@@ -252,3 +252,37 @@ func TestTreeArenaRejectsInvalidReuse(t *testing.T) {
 		}
 	}
 }
+
+func TestTreeArenaRejectsRetiredRecord(t *testing.T) {
+	for _, finalized := range []bool{false, true} {
+		t.Run(fmt.Sprintf("finalized=%t", finalized), func(t *testing.T) {
+			tree, err := New(Options{IPVersion: 4, IncludeReservedNetworks: true})
+			require.NoError(t, err)
+			var output bytes.Buffer
+			if finalized {
+				_, err = tree.WriteTo(&output)
+				require.NoError(t, err)
+				output.Reset()
+			}
+			// The left child holds the whole-node poison marker. Corrupt the right
+			// child to exercise record validation independently of nodeAt.
+			tree.nodeAt(tree.root).children[1] = record{recordType: recordTypeRetired}
+			require.PanicsWithValue(t, "mmdbwriter: retired record during lookup", func() {
+				tree.Get(netip.MustParseAddr("200.1.1.1"))
+			})
+			if finalized {
+				_, err = tree.WriteTo(&output)
+				require.EqualError(t, err, "retired record cannot be written")
+			} else {
+				require.PanicsWithValue(
+					t,
+					"mmdbwriter: retired record during path expansion",
+					func() {
+						_, err := tree.WriteTo(&output)
+						require.NoError(t, err)
+					},
+				)
+			}
+		})
+	}
+}

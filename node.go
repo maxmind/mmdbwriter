@@ -662,6 +662,10 @@ func (t *Tree) getRecord(
 	switch r.recordType {
 	case recordTypeNode, recordTypeAlias, recordTypeFixedNode:
 		return t.getNode(r.nodeIndex, ip, depth)
+	case recordTypeRetired:
+		// A reachable retired record indicates an internal ownership bug.
+		// Panic instead of reporting missing data from a corrupt tree.
+		panic("mmdbwriter: retired record during lookup")
 	default:
 		return depth, r
 	}

@@ -1021,6 +1021,8 @@ func (t *Tree) recordValue(
 		return t.nodeCount, nil
 	case recordTypePath:
 		return 0, errors.New("compressed path record cannot be written before finalization")
+	case recordTypeRetired:
+		return 0, errors.New("retired record cannot be written")
 	default:
 		return int(t.nodeNumbers[r.nodeIndex]), nil
 	}
