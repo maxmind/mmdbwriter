@@ -347,9 +347,19 @@ func (t *Tree) nodeAt(index nodeIndex) *node {
 	if n.children[0].recordType == recordTypeRetired {
 		// A retired index indicates an internal use-after-free bug, not invalid
 		// caller input. The caller cannot safely continue using the tree.
-		panic(fmt.Sprintf("mmdbwriter: retired node index %d", index))
+		panic(retiredIndexError{kind: "node", index: index})
 	}
 	return n
+}
+
+// Defer formatting until a panic is printed so slot accessors can be inlined.
+type retiredIndexError struct {
+	kind  string
+	index nodeIndex
+}
+
+func (e retiredIndexError) Error() string {
+	return fmt.Sprintf("mmdbwriter: retired %s index %d", e.kind, e.index)
 }
 
 // retireNode transfers no ownership. The caller must first move or release
@@ -372,7 +382,7 @@ func (t *Tree) pathAt(index nodeIndex) compressedPath {
 	if path.record.recordType == recordTypeRetired {
 		// As in nodeAt, accessing a retired slot indicates an internal
 		// use-after-free bug that the caller cannot recover from.
-		panic(fmt.Sprintf("mmdbwriter: retired path index %d", index))
+		panic(retiredIndexError{kind: "path", index: index})
 	}
 	return path
 }

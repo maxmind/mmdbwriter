@@ -3,6 +3,7 @@ package mmdbwriter
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"net/netip"
 	"testing"
 
@@ -82,14 +83,22 @@ func TestTreeArenaPoison(t *testing.T) {
 	require.NoError(t, err)
 	index := tree.newNode([2]record{})
 	tree.retireNode(index)
-	require.Panics(t, func() { tree.nodeAt(index) })
+	require.PanicsWithError(
+		t,
+		fmt.Sprintf("mmdbwriter: retired node index %d", index),
+		func() { tree.nodeAt(index) },
+	)
 	require.Panics(t, func() { tree.retireNode(index) })
 	fresh := tree.newNode([2]record{})
 	require.NotEqual(t, index, fresh)
 	tree.retireNode(fresh)
 	path := tree.newPath([16]byte{}, 32, record{})
 	tree.retirePath(path)
-	require.Panics(t, func() { tree.pathAt(path) })
+	require.PanicsWithError(
+		t,
+		fmt.Sprintf("mmdbwriter: retired path index %d", path),
+		func() { tree.pathAt(path) },
+	)
 	require.Panics(t, func() { tree.retirePath(path) })
 	next := tree.newPath([16]byte{}, 32, record{})
 	require.NotEqual(t, path, next)
