@@ -40,6 +40,7 @@ func (t *Tree) auditValueStore() error {
 	external := map[valueRef]uint64{}
 	seenNodes := map[nodeIndex]bool{}
 	seenPaths := map[nodeIndex]bool{}
+	var aliases []nodeIndex
 	var walkRecord func(record) error
 	var walkNode func(nodeIndex) error
 	walkRecord = func(record record) error {
@@ -64,12 +65,17 @@ func (t *Tree) auditValueStore() error {
 					record.nodeIndex,
 				)
 			}
+			if t.paths[record.nodeIndex].record.recordType == recordTypeRetired {
+				return fmt.Errorf("refcount audit found retired path %d", record.nodeIndex)
+			}
 			seenPaths[record.nodeIndex] = true
 			return walkRecord(t.paths[record.nodeIndex].record)
-		case recordTypeEmpty, recordTypeReserved, recordTypeAlias:
-			// Alias records point at the IPv4 root node the walk already
-			// reaches as a fixed node. Following them would trip the
-			// multiple-owning-paths check.
+		case recordTypeAlias:
+			// Aliases do not own their targets. Check reachability after the
+			// owning walk finishes instead of following these edges.
+			aliases = append(aliases, record.nodeIndex)
+			return nil
+		case recordTypeEmpty, recordTypeReserved:
 			return nil
 		default:
 			return fmt.Errorf("refcount audit found record type %d", record.recordType)
@@ -83,8 +89,11 @@ func (t *Tree) auditValueStore() error {
 		if seenNodes[index] {
 			return fmt.Errorf("refcount audit found node %d with multiple owning paths", index)
 		}
+		node := t.rawNodeAt(index)
+		if node.children[0].recordType == recordTypeRetired {
+			return fmt.Errorf("refcount audit found retired node %d", index)
+		}
 		seenNodes[index] = true
-		node := t.nodeAt(index)
 		for _, child := range node.children {
 			if err := walkRecord(child); err != nil {
 				return err
@@ -95,7 +104,64 @@ func (t *Tree) auditValueStore() error {
 	if err := walkNode(t.root); err != nil {
 		return err
 	}
+	for _, index := range aliases {
+		if !seenNodes[index] {
+			return fmt.Errorf("refcount audit found alias to unreachable node %d", index)
+		}
+	}
+	if err := auditTreeSlots(
+		"node",
+		t.nodeCountAllocated,
+		t.freeNodes,
+		seenNodes,
+		t.poisonTreeSlots,
+		func(index nodeIndex) bool { return t.rawNodeAt(index).children[0].recordType == recordTypeRetired },
+	); err != nil {
+		return err
+	}
+	if err := auditTreeSlots(
+		"path",
+		len(t.paths),
+		t.freePaths,
+		seenPaths,
+		t.poisonTreeSlots,
+		func(index nodeIndex) bool { return t.paths[index].record.recordType == recordTypeRetired },
+	); err != nil {
+		return err
+	}
 	return t.valueStore.audit(external)
+}
+
+// auditTreeSlots accounts for every allocated slot, including retired slots
+// withheld from recycling by poison mode.
+func auditTreeSlots(
+	name string,
+	count int,
+	free []nodeIndex,
+	seen map[nodeIndex]bool,
+	poison bool,
+	retired func(nodeIndex) bool,
+) error {
+	if poison && len(free) != 0 {
+		return fmt.Errorf("refcount audit found queued free %s slots in poison mode", name)
+	}
+	queued := make(map[nodeIndex]bool, len(free))
+	for _, index := range free {
+		if int64(index) >= int64(count) || queued[index] || seen[index] || !retired(index) {
+			return fmt.Errorf("refcount audit found invalid free %s index %d", name, index)
+		}
+		queued[index] = true
+	}
+	for i := range count {
+		index := newNodeIndex(i)
+		if seen[index] {
+			continue
+		}
+		if !retired(index) || (!poison && !queued[index]) {
+			return fmt.Errorf("refcount audit found unclaimed %s index %d", name, index)
+		}
+	}
+	return nil
 }
 
 func (s *valueStore) audit(external map[valueRef]uint64) error {
