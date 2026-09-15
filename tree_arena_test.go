@@ -110,31 +110,38 @@ func TestTreeArenaPoison(t *testing.T) {
 func TestTreeArenaAuditRejectsCorruption(t *testing.T) {
 	tests := []struct {
 		name    string
+		want    string
 		corrupt func(*Tree)
 	}{
 		{
 			"duplicate free node",
+			"invalid free node index",
 			func(tree *Tree) { tree.freeNodes = append(tree.freeNodes, tree.freeNodes[0]) },
 		},
 		{
 			"duplicate free path",
+			"invalid free path index",
 			func(tree *Tree) { tree.freePaths = append(tree.freePaths, tree.freePaths[0]) },
 		},
-		{"unclaimed node", func(tree *Tree) { tree.newNode([2]record{}) }},
-		{"unclaimed path", func(tree *Tree) { tree.newPath([16]byte{}, 32, record{}) }},
-		{"retired node edge", func(tree *Tree) {
+		{"unclaimed node", "unclaimed node index", func(tree *Tree) { tree.newNode([2]record{}) }},
+		{
+			"unclaimed path",
+			"unclaimed path index",
+			func(tree *Tree) { tree.newPath([16]byte{}, 32, record{}) },
+		},
+		{"retired node edge", "refcount audit found retired node ", func(tree *Tree) {
 			tree.nodeAt(tree.root).children[0] = record{
 				recordType: recordTypeNode,
 				nodeIndex:  tree.freeNodes[0],
 			}
 		}},
-		{"retired path edge", func(tree *Tree) {
+		{"retired path edge", "refcount audit found retired path ", func(tree *Tree) {
 			tree.nodeAt(tree.root).children[0] = record{
 				recordType: recordTypePath,
 				nodeIndex:  tree.freePaths[0],
 			}
 		}},
-		{"invalid alias", func(tree *Tree) {
+		{"invalid alias", "alias to unreachable node", func(tree *Tree) {
 			tree.nodeAt(tree.root).children[0] = record{
 				recordType: recordTypeAlias,
 				nodeIndex:  noNodeIndex,
@@ -149,7 +156,32 @@ func TestTreeArenaAuditRejectsCorruption(t *testing.T) {
 			churnTree(t, tree)
 			require.NoError(t, tree.auditValueStore())
 			tt.corrupt(tree)
-			require.Error(t, tree.auditValueStore())
+			require.ErrorContains(t, tree.auditValueStore(), tt.want)
+		})
+	}
+}
+
+func TestTreeArenaAuditRejectsPoisonedFreeLists(t *testing.T) {
+	for _, kind := range []string{"node", "path"} {
+		t.Run(kind, func(t *testing.T) {
+			tree, err := New(
+				Options{IPVersion: 4, IncludeReservedNetworks: true, RefcountAudit: true},
+			)
+			require.NoError(t, err)
+			if kind == "node" {
+				index := tree.newNode([2]record{})
+				tree.retireNode(index)
+				tree.freeNodes = append(tree.freeNodes, index)
+			} else {
+				index := tree.newPath([16]byte{}, 32, record{})
+				tree.retirePath(index)
+				tree.freePaths = append(tree.freePaths, index)
+			}
+			require.EqualError(
+				t,
+				tree.auditValueStore(),
+				"refcount audit found queued free "+kind+" slots in poison mode",
+			)
 		})
 	}
 }

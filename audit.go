@@ -71,12 +71,11 @@ func (t *Tree) auditValueStore() error {
 			seenPaths[record.nodeIndex] = true
 			return walkRecord(t.paths[record.nodeIndex].record)
 		case recordTypeAlias:
+			// Aliases do not own their targets. Check reachability after the
+			// owning walk finishes instead of following these edges.
 			aliases = append(aliases, record.nodeIndex)
 			return nil
 		case recordTypeEmpty, recordTypeReserved:
-			// Alias records point at the IPv4 root node the walk already
-			// reaches as a fixed node. Following them would trip the
-			// multiple-owning-paths check.
 			return nil
 		default:
 			return fmt.Errorf("refcount audit found record type %d", record.recordType)
@@ -143,10 +142,12 @@ func auditTreeSlots(
 	poison bool,
 	retired func(nodeIndex) bool,
 ) error {
+	if poison && len(free) != 0 {
+		return fmt.Errorf("refcount audit found queued free %s slots in poison mode", name)
+	}
 	queued := make(map[nodeIndex]bool, len(free))
 	for _, index := range free {
-		if int64(index) >= int64(count) || queued[index] || seen[index] || !retired(index) ||
-			poison {
+		if int64(index) >= int64(count) || queued[index] || seen[index] || !retired(index) {
 			return fmt.Errorf("refcount audit found invalid free %s index %d", name, index)
 		}
 		queued[index] = true
