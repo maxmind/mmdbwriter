@@ -884,19 +884,29 @@ func (t *Tree) Get(ip netip.Addr) (netip.Prefix, mmdbtype.DataType) {
 	return t.getPrefixForAddr(ip, prefixLen), value
 }
 
-// finalize prepares the tree for writing. It is not threadsafe.
-func (t *Tree) finalize() {
+// expandTree expands compressed paths and releases their storage before writing.
+func (t *Tree) expandTree() {
 	t.expandPaths(t.root, 0)
 	// Keep poisoned path indexes invalid across writes and later inserts.
 	if !t.poisonTreeSlots {
 		t.paths = nil
 		t.freePaths = nil
 	}
-	t.nodeNumbers = make([]uint32, t.nodeCountAllocated)
-	t.nodeCount = t.finalizeNode(t.root, 0)
 }
 
-// WriteTo writes the tree to the provided Writer.
+// finalize prepares the tree for writing. It is not threadsafe.
+func (t *Tree) finalize() {
+	t.expandTree()
+	t.nodeNumbers = make([]uint32, t.nodeCountAllocated)
+	t.finalizeSubtrees()
+}
+
+// WriteTo writes the tree to the provided Writer. Identical search subtrees
+// share serialized nodes without changing mutable-tree ownership or lookup
+// behavior. Finalization expands compressed paths in the mutable tree.
+// Finalization uses temporary memory and caches numbering until the next
+// insertion. Custom tree walkers must support multiple parents and backward
+// references.
 func (t *Tree) WriteTo(w io.Writer) (int64, error) {
 	if t.nodeCount == 0 {
 		t.finalize()
@@ -914,16 +924,17 @@ func (t *Tree) WriteTo(w io.Writer) (int64, error) {
 	usePointers := true
 	dataWriter := newDataWriter(t.valueStore, usePointers)
 
-	nodeCount, numBytes, err := t.writeNode(buf, t.root, dataWriter, recordBuf)
+	nextNumber := uint32(0)
+	numBytes, err := t.writeSubtree(buf, t.root, dataWriter, recordBuf, &nextNumber)
 	if err != nil {
 		return numBytes, err
 	}
-	if nodeCount != t.nodeCount {
+	if int64(nextNumber) != int64(t.nodeCount) {
 		// This should only happen if there is a programming bug
 		// in this library.
 		return numBytes, fmt.Errorf(
 			"number of nodes written (%d) doesn't match number expected (%d)",
-			nodeCount,
+			nextNumber,
 			t.nodeCount,
 		)
 	}
@@ -966,47 +977,6 @@ func (t *Tree) WriteTo(w io.Writer) (int64, error) {
 	}
 
 	return numBytes, nil
-}
-
-func (t *Tree) writeNode(
-	w io.Writer,
-	nodeIndex nodeIndex,
-	dataWriter *dataWriter,
-	recordBuf []byte,
-) (int, int64, error) {
-	n := t.nodeAt(nodeIndex)
-	err := t.copyNode(recordBuf, n, dataWriter)
-	if err != nil {
-		return 0, 0, err
-	}
-
-	numBytes := int64(0)
-	nb, err := w.Write(recordBuf)
-	numBytes += int64(nb)
-	nodesWritten := 1
-	if err != nil {
-		return nodesWritten, numBytes, fmt.Errorf("writing node: %w", err)
-	}
-
-	for i := range 2 {
-		child := &n.children[i]
-		if child.recordType != recordTypeNode && child.recordType != recordTypeFixedNode {
-			continue
-		}
-		addedNodes, addedBytes, err := t.writeNode(
-			w,
-			child.nodeIndex,
-			dataWriter,
-			recordBuf,
-		)
-		nodesWritten += addedNodes
-		numBytes += addedBytes
-		if err != nil {
-			return nodesWritten, numBytes, err
-		}
-	}
-
-	return nodesWritten, numBytes, nil
 }
 
 func (t *Tree) recordValue(
