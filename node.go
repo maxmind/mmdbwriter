@@ -696,28 +696,6 @@ func (t *Tree) expandPaths(index nodeIndex, currentDepth int) {
 	}
 }
 
-// finalizeNode assigns node numbers depth-first. expandPaths must run before
-// this so compressed paths cannot be confused with node indexes.
-func (t *Tree) finalizeNode(index nodeIndex, currentNum int) int {
-	n := t.nodeAt(index)
-	// Allocation bounds every index below the uint32 sentinel.
-	t.nodeNumbers[index] = uint32(newNodeIndex(currentNum))
-	currentNum++
-
-	for i := range 2 {
-		switch n.children[i].recordType {
-		case recordTypeFixedNode,
-			recordTypeNode:
-			currentNum = t.finalizeNode(n.children[i].nodeIndex, currentNum)
-		case recordTypePath:
-			panic("compressed path found after expandPaths")
-		default:
-		}
-	}
-
-	return currentNum
-}
-
 func bitAt(ip [16]byte, depth int) byte {
 	return (ip[depth/8] >> (7 - (depth % 8))) & 1
 }
