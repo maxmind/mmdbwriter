@@ -151,6 +151,9 @@
   deduplication, which is already exact. In v1 an inserted signed zero was kept
   or discarded depending on whether an unrelated sibling key changed in the same
   insertion; it is now always kept.
+- Identical search subtrees now share serialized nodes, reducing database size
+  without changing insertion or lookup behavior. Repeated writes reuse the
+  finalized numbering.
 
 ## 1.2.0 (2026-01-14)
 

@@ -2077,7 +2077,9 @@ func TestTreeInsertAndGet(t *testing.T) {
 						assert.Equal(t, get.expectedGetValue, value, "value for %s", get.ip)
 					}
 
-					assert.Equal(t, test.expectedNodeCount, tree.nodeCount)
+					assert.Equal(t, test.expectedNodeCount, subtreeReachableCount(tree, tree.root))
+					distinct, _ := referenceSubtreeCount(tree)
+					assert.Equal(t, distinct, tree.nodeCount)
 
 					buf := &bytes.Buffer{}
 					numBytes, err := tree.WriteTo(buf)
