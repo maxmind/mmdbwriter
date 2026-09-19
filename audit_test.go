@@ -509,6 +509,34 @@ func TestValueStoreAuditRejectsCorruptStores(t *testing.T) {
 			},
 			want: "on the freelist",
 		},
+		{
+			name: "map shape ref to a slice",
+			corrupt: func(t *testing.T, tree *Tree) {
+				t.Helper()
+				ref, err := tree.valueStore.intern(
+					mmdbtype.Slice{mmdbtype.String("a"), mmdbtype.String("b")},
+				)
+				require.NoError(t, err)
+				tree.valueStore.mapShapes[1].ref = ref
+			},
+			want: "invalid map shape ref",
+		},
+		{
+			name: "map shape ref with the wrong arity",
+			corrupt: func(t *testing.T, tree *Tree) {
+				t.Helper()
+				tree.valueStore.mapShapes[2].ref = requireDataRef(t, tree)
+			},
+			want: "invalid map shape ref",
+		},
+		{
+			name: "map shape ref past the node arena",
+			corrupt: func(t *testing.T, tree *Tree) {
+				t.Helper()
+				tree.valueStore.mapShapes[1].ref = outOfRangeRef(tree.valueStore)
+			},
+			want: "invalid map shape ref",
+		},
 	}
 
 	for _, test := range tests {

@@ -205,13 +205,31 @@ type valueStore struct {
 	// and returns it when done.
 	pairScratch  [][]mapEntry
 	childScratch [][]valueRef
+	// mapShapes borrows the most recently interned map of each small arity.
+	// release invalidates these non-owning entries before recycling refs.
+	mapShapes [maxCachedMapArity + 1]mapShape
 }
 
-// mapEntry carries one key and value of a map being interned, so the map is
-// iterated once and sorted without further lookups.
+const (
+	// maxCachedMapArity is the largest map arity that mapShapes caches.
+	maxCachedMapArity = 64
+	// mapShapeSkipAfterMiss is how many maps of an arity skip the cache after
+	// a mismatch.
+	mapShapeSkipAfterMiss = 7
+)
+
+// mapEntry carries one value and, unless a cached map supplies it, its key.
+// Keep it small: internMap sorts these entries on every cache miss.
 type mapEntry struct {
 	key   string
 	child mmdbtype.DataType
+}
+
+type mapShape struct {
+	ref valueRef
+	// Retry periodically after a mismatch instead of scanning a different
+	// layout on every insert. A hit immediately resumes normal reuse.
+	skip uint8
 }
 
 func newValueStore() *valueStore {
@@ -397,6 +415,12 @@ func (s *valueStore) release(ref valueRef) {
 		if node.hasIdentity {
 			delete(s.materializedByIdentity, node.identity)
 		}
+		if node.kind == valueKindMap {
+			arity := int(node.childrenLen) / 2
+			if arity < len(s.mapShapes) && s.mapShapes[arity].ref == current {
+				s.mapShapes[arity].ref = nilValueRef
+			}
+		}
 		worklist = append(worklist, s.childRefs(node)...)
 		s.payloads.release(node.payloadOffset, node.payloadLen)
 		s.children.release(node.childrenOffset, node.childrenLen)
@@ -566,12 +590,22 @@ func (s *valueStore) putChildScratch(children []valueRef) {
 func (s *valueStore) internMap(value mmdbtype.Map) (valueRef, error) {
 	pairs := s.takePairScratch()
 	defer func() { s.putPairScratch(pairs) }()
-	for key, child := range value {
-		pairs = append(pairs, mapEntry{key: string(key), child: child})
+	// shape borrows the child refs of a cached map. That map stays live
+	// while internMap runs, so its child extent is not freed or reused. If
+	// the arena grows, shape still reads the old array, which has the same
+	// refs.
+	var shape []valueRef
+	if len(value) < len(s.mapShapes) {
+		shape, pairs = s.matchMapShape(value, pairs)
 	}
-	slices.SortFunc(pairs, func(left, right mapEntry) int {
-		return strings.Compare(left.key, right.key)
-	})
+	if shape == nil {
+		for key, child := range value {
+			pairs = append(pairs, mapEntry{key: string(key), child: child})
+		}
+		slices.SortFunc(pairs, func(left, right mapEntry) int {
+			return strings.Compare(left.key, right.key)
+		})
+	}
 
 	children := s.takeChildScratch()
 	defer func() { s.putChildScratch(children) }()
@@ -580,25 +614,73 @@ func (s *valueStore) internMap(value mmdbtype.Map) (valueRef, error) {
 			s.release(child)
 		}
 	}
-	for _, pair := range pairs {
-		keyRef, err := s.internScalar(mmdbtype.String(pair.key))
-		if err != nil {
-			releaseChildren()
-			return nilValueRef, err
+	for index, pair := range pairs {
+		var keyRef valueRef
+		if shape != nil {
+			keyRef = shape[index*2]
+			s.retain(keyRef)
+		} else {
+			var err error
+			keyRef, err = s.internScalar(mmdbtype.String(pair.key))
+			if err != nil {
+				releaseChildren()
+				return nilValueRef, err
+			}
 		}
 		children = append(children, keyRef)
 		if pair.child == nil {
+			key := s.keyString(keyRef)
 			releaseChildren()
-			return nilValueRef, fmt.Errorf("map key %q has a nil value", pair.key)
+			return nilValueRef, fmt.Errorf("map key %q has a nil value", key)
 		}
 		childRef, err := s.intern(pair.child)
 		if err != nil {
+			key := s.keyString(keyRef)
 			releaseChildren()
-			return nilValueRef, fmt.Errorf("interning value for map key %q: %w", pair.key, err)
+			return nilValueRef, fmt.Errorf("interning value for map key %q: %w", key, err)
 		}
 		children = append(children, childRef)
 	}
 	return s.internOwnedChildren(valueKindMap, children)
+}
+
+// matchMapShape returns the child refs of the cached map with the same arity
+// if it has the same keys as value, and fills pairs with the values in that
+// key order. It returns nil if no cached map matches.
+func (s *valueStore) matchMapShape(
+	value mmdbtype.Map,
+	pairs []mapEntry,
+) ([]valueRef, []mapEntry) {
+	shape := &s.mapShapes[len(value)]
+	if shape.skip != 0 {
+		shape.skip--
+		return nil, pairs
+	}
+	if shape.ref == nilValueRef {
+		return nil, pairs
+	}
+	children := s.childRefs(s.node(shape.ref))
+	for index := 0; index < len(children); index += 2 {
+		key := s.keyBytes(children[index])
+		child, exists := value[mmdbtype.String(key)]
+		if !exists {
+			shape.skip = mapShapeSkipAfterMiss
+			return nil, pairs[:0]
+		}
+		pairs = append(pairs, mapEntry{child: child})
+	}
+	return children, pairs
+}
+
+// keyBytes returns the bytes of the string that a map key ref holds.
+func (s *valueStore) keyBytes(keyRef valueRef) []byte {
+	return scalarPayload(s.payload(s.node(keyRef)))
+}
+
+// keyString returns the string that a map key ref holds, for an error
+// message. It does not cache a materialized value on the shared key node.
+func (s *valueStore) keyString(keyRef valueRef) string {
+	return string(s.keyBytes(keyRef))
 }
 
 func (s *valueStore) internSlice(value mmdbtype.Slice) (valueRef, error) {
@@ -643,6 +725,9 @@ func (s *valueStore) internOwnedChildren(
 		for _, child := range children {
 			s.release(child)
 		}
+	}
+	if kind == valueKindMap && len(children)/2 < len(s.mapShapes) {
+		s.mapShapes[len(children)/2].ref = ref
 	}
 	return ref, nil
 }
