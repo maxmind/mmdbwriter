@@ -226,13 +226,24 @@ type valueStore struct {
 	// and returns it when done.
 	pairScratch  [][]mapEntry
 	childScratch [][]valueRef
+	// mapShapes borrows the most recently interned map of each small arity.
+	// release invalidates these non-owning entries before recycling refs.
+	// Allocate lazily: metadata and other tiny stores do not benefit from it.
+	mapShapes   *[65]mapShape
+	shapeWarmup uint8
 }
 
-// mapEntry carries one key and value of a map being interned, so the map is
-// iterated once and sorted without further lookups.
+// mapEntry carries one value and, unless a cached shape supplies it, its key.
 type mapEntry struct {
 	key   string
 	child mmdbtype.DataType
+}
+
+type mapShape struct {
+	ref valueRef
+	// Retry periodically after a mismatch instead of scanning a different
+	// layout on every insert. A hit immediately resumes normal reuse.
+	skip uint8
 }
 
 func newValueStore() *valueStore {
@@ -431,6 +442,12 @@ func (s *valueStore) release(ref valueRef) {
 		if node.hasIdentity {
 			delete(s.materializedByIdentity, node.identity)
 		}
+		if node.kind == valueKindMap && s.mapShapes != nil {
+			arity := int(node.childrenLen) / 2
+			if arity < len(s.mapShapes) && s.mapShapes[arity].ref == current {
+				s.mapShapes[arity].ref = nilValueRef
+			}
+		}
 		worklist = append(worklist, s.childRefs(node)...)
 		s.payloads.release(node.payloadOffset, node.payloadLen)
 		s.children.release(node.childrenOffset, node.childrenLen)
@@ -606,12 +623,34 @@ func (s *valueStore) putChildScratch(children []valueRef) {
 func (s *valueStore) internMap(value mmdbtype.Map) (valueRef, error) {
 	pairs := s.takePairScratch()
 	defer func() { s.putPairScratch(pairs) }()
-	for key, child := range value {
-		pairs = append(pairs, mapEntry{key: string(key), child: child})
+	var shape []valueRef
+	if s.mapShapes != nil && len(value) < len(s.mapShapes) {
+		entry := &s.mapShapes[len(value)]
+		if entry.skip != 0 {
+			entry.skip--
+		} else if entry.ref != nilValueRef {
+			shape = s.childRefs(s.node(entry.ref))
+			for index := 0; index < len(shape); index += 2 {
+				key := scalarPayload(s.payload(s.node(shape[index])))
+				child, exists := value[mmdbtype.String(key)]
+				if !exists {
+					entry.skip = 7
+					shape = nil
+					pairs = pairs[:0]
+					break
+				}
+				pairs = append(pairs, mapEntry{child: child})
+			}
+		}
 	}
-	slices.SortFunc(pairs, func(left, right mapEntry) int {
-		return strings.Compare(left.key, right.key)
-	})
+	if shape == nil {
+		for key, child := range value {
+			pairs = append(pairs, mapEntry{key: string(key), child: child})
+		}
+		slices.SortFunc(pairs, func(left, right mapEntry) int {
+			return strings.Compare(left.key, right.key)
+		})
+	}
 
 	children := s.takeChildScratch()
 	defer func() { s.putChildScratch(children) }()
@@ -620,21 +659,30 @@ func (s *valueStore) internMap(value mmdbtype.Map) (valueRef, error) {
 			s.release(child)
 		}
 	}
-	for _, pair := range pairs {
-		keyRef, err := s.internScalar(mmdbtype.String(pair.key))
-		if err != nil {
-			releaseChildren()
-			return nilValueRef, err
+	for index, pair := range pairs {
+		var keyRef valueRef
+		if shape != nil {
+			keyRef = shape[index*2]
+			s.retain(keyRef)
+		} else {
+			var err error
+			keyRef, err = s.internScalar(mmdbtype.String(pair.key))
+			if err != nil {
+				releaseChildren()
+				return nilValueRef, err
+			}
 		}
 		children = append(children, keyRef)
 		if pair.child == nil {
+			key := s.materialize(keyRef).(mmdbtype.String)
 			releaseChildren()
-			return nilValueRef, fmt.Errorf("map key %q has a nil value", pair.key)
+			return nilValueRef, fmt.Errorf("map key %q has a nil value", key)
 		}
 		childRef, err := s.intern(pair.child)
 		if err != nil {
+			key := s.materialize(keyRef).(mmdbtype.String)
 			releaseChildren()
-			return nilValueRef, fmt.Errorf("interning value for map key %q: %w", pair.key, err)
+			return nilValueRef, fmt.Errorf("interning value for map key %q: %w", key, err)
 		}
 		children = append(children, childRef)
 	}
@@ -682,6 +730,17 @@ func (s *valueStore) internOwnedChildren(
 	if !created {
 		for _, child := range children {
 			s.release(child)
+		}
+	}
+	if kind == valueKindMap {
+		if s.mapShapes == nil {
+			s.shapeWarmup++
+			if s.shapeWarmup == 8 {
+				s.mapShapes = new([65]mapShape)
+			}
+		}
+		if s.mapShapes != nil && len(children)/2 < len(s.mapShapes) {
+			s.mapShapes[len(children)/2].ref = ref
 		}
 	}
 	return ref, nil

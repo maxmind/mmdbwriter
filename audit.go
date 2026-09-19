@@ -178,6 +178,9 @@ func (s *valueStore) audit(external map[valueRef]uint64) error {
 	if err := s.auditMaterializedIdentities(); err != nil {
 		return err
 	}
+	if err := s.auditMapShapes(); err != nil {
+		return err
+	}
 	if err := s.auditArenas(); err != nil {
 		return err
 	}
@@ -251,6 +254,27 @@ func (s *valueStore) audit(external map[valueRef]uint64) error {
 				index,
 				node.refCount,
 				expected[index],
+			)
+		}
+	}
+	return nil
+}
+
+func (s *valueStore) auditMapShapes() error {
+	if s.mapShapes == nil {
+		return nil
+	}
+	for arity, shape := range s.mapShapes {
+		ref := shape.ref
+		if ref == nilValueRef {
+			continue
+		}
+		if uint64(ref) >= uint64(len(s.nodes)) ||
+			s.nodes[ref].kind != valueKindMap || int(s.nodes[ref].childrenLen) != arity*2 {
+			return fmt.Errorf(
+				"refcount audit found invalid map shape ref %d for arity %d",
+				ref,
+				arity,
 			)
 		}
 	}
