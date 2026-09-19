@@ -300,12 +300,19 @@ func Load(path string, opts Options) (*Tree, error) {
 			return nil, fmt.Errorf("loading network %s from %s: %w", prefix, path, err)
 		}
 
-		if err := res.Decode(decoder); err != nil {
-			return nil, fmt.Errorf(
-				"unmarshaling record for network %s from %s: %w", prefix, path, err,
-			)
+		value, cached := decoder.cache[uint(res.Offset())]
+		if cached {
+			// A top-level result needs no successor cursor. Reusing its
+			// reference here avoids rescanning an inline container in Skip.
+			tree.valueStore.retain(value)
+		} else {
+			if err := res.Decode(decoder); err != nil {
+				return nil, fmt.Errorf(
+					"unmarshaling record for network %s from %s: %w", prefix, path, err,
+				)
+			}
+			value = decoder.takeResult()
 		}
-		value := decoder.takeResult()
 
 		prefix, err := tree.normalizeLoadPrefix(prefix)
 		if err != nil {
