@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"slices"
 
+	"github.com/oschwald/maxminddb-golang/v2"
 	"github.com/oschwald/maxminddb-golang/v2/mmdbdata"
 
 	"github.com/maxmind/mmdbwriter/v2/mmdbtype"
@@ -17,6 +18,10 @@ type storeDecoder struct {
 	store  *valueStore
 	cache  map[uint]valueRef
 	result valueRef
+	// topLevelActive is true while decodeTopLevel decodes the record at
+	// topLevelOffset.
+	topLevelActive bool
+	topLevelOffset uint
 	// pairScratch pools the per-map working slices. Maps nest, so each
 	// decodeMap call takes a slice and returns it when done.
 	pairScratch [][]decodedPair
@@ -57,7 +62,15 @@ func newStoreDecoder(store *valueStore) *storeDecoder {
 func (d *storeDecoder) UnmarshalMaxMindDBCursor(
 	cursor mmdbdata.Cursor,
 ) (mmdbdata.Cursor, error) {
-	ref, next, err := d.decodeRef(cursor)
+	var ref valueRef
+	var next mmdbdata.Cursor
+	var err error
+	if d.topLevelActive {
+		d.topLevelActive = false
+		ref, next, err = d.decodeRecord(cursor, d.topLevelOffset)
+	} else {
+		ref, next, err = d.decodeRef(cursor)
+	}
 	if err != nil {
 		return mmdbdata.Cursor{}, err
 	}
@@ -73,6 +86,57 @@ func (d *storeDecoder) takeResult() valueRef {
 	ref := d.result
 	d.result = nilValueRef
 	return ref
+}
+
+// cachedTopLevel returns a new reference to the value decoded at offset, if
+// the cache has one. A top-level result needs no successor cursor, so this
+// skips the Skip that a cache hit in decodeRef does for an inline container.
+func (d *storeDecoder) cachedTopLevel(offset uint) (valueRef, bool) {
+	ref, ok := d.cache[offset]
+	if ok {
+		d.store.retain(ref)
+	}
+	return ref, ok
+}
+
+// decodeTopLevel decodes the record for res after cachedTopLevel missed its
+// offset, and returns a reference that the caller owns.
+func (d *storeDecoder) decodeTopLevel(res maxminddb.Result) (valueRef, error) {
+	offset := uint(res.Offset())
+	d.topLevelOffset = offset
+	d.topLevelActive = true
+	err := res.Decode(d)
+	d.topLevelActive = false
+	if err != nil {
+		return nilValueRef, fmt.Errorf("decoding record at offset %d: %w", offset, err)
+	}
+	return d.takeResult(), nil
+}
+
+// decodeRecord decodes a search-tree record at recordOffset that is not in
+// the cache.
+func (d *storeDecoder) decodeRecord(
+	cursor mmdbdata.Cursor,
+	recordOffset uint,
+) (valueRef, mmdbdata.Cursor, error) {
+	offset, err := cursor.Offset()
+	if err != nil {
+		return nilValueRef, mmdbdata.Cursor{}, fmt.Errorf("resolving offset: %w", err)
+	}
+	if offset == recordOffset {
+		// cachedTopLevel already missed this offset.
+		return d.decodeUncached(cursor, offset)
+	}
+	// The record points at a pointer, as the Perl writer can write. Cache
+	// the value under the record offset too, so the next record with this
+	// offset hits cachedTopLevel.
+	ref, next, err := d.decodeCached(cursor, offset)
+	if err != nil {
+		return nilValueRef, mmdbdata.Cursor{}, err
+	}
+	d.store.retain(ref)
+	d.cache[recordOffset] = ref
+	return ref, next, nil
 }
 
 func (d *storeDecoder) close() {
@@ -93,6 +157,14 @@ func (d *storeDecoder) decodeRef(
 	if err != nil {
 		return nilValueRef, mmdbdata.Cursor{}, fmt.Errorf("resolving offset: %w", err)
 	}
+	return d.decodeCached(cursor, offset)
+}
+
+// decodeCached returns the cached value at the resolved offset, or decodes it.
+func (d *storeDecoder) decodeCached(
+	cursor mmdbdata.Cursor,
+	offset uint,
+) (valueRef, mmdbdata.Cursor, error) {
 	if ref, ok := d.cache[offset]; ok {
 		next, skipErr := cursor.Skip()
 		if skipErr != nil {
@@ -103,7 +175,15 @@ func (d *storeDecoder) decodeRef(
 		d.store.retain(ref)
 		return ref, next, nil
 	}
+	return d.decodeUncached(cursor, offset)
+}
 
+// decodeUncached decodes the value at the resolved offset and caches it. The
+// cache must not hold offset yet.
+func (d *storeDecoder) decodeUncached(
+	cursor mmdbdata.Cursor,
+	offset uint,
+) (valueRef, mmdbdata.Cursor, error) {
 	kind, err := cursor.Kind()
 	if err != nil {
 		return nilValueRef, mmdbdata.Cursor{}, fmt.Errorf("peeking kind: %w", err)

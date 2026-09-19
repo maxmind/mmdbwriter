@@ -1243,6 +1243,67 @@ func TestStoreDecoderOwnsMapKeys(t *testing.T) {
 	assert.Zero(t, liveValueNodeCount(store))
 }
 
+// TestStoreDecoderCachesPointerRecords decodes a search-tree record that
+// points at a pointer, as the Perl writer can write. The record must share
+// the target's reference, and its own offset must hit cachedTopLevel.
+func TestStoreDecoderCachesPointerRecords(t *testing.T) {
+	const (
+		targetOffset  = 0
+		pointerOffset = 13
+	)
+	// A 12-byte string at offset 0, then a pointer to offset 0.
+	data := append([]byte{0x4c}, "shared value"...)
+	data = append(data, 0x20, 0x00)
+	require.Len(t, data, pointerOffset+2)
+
+	decodeRecord := func(t *testing.T, decoder *storeDecoder, offset uint) valueRef {
+		t.Helper()
+		_, cached := decoder.cachedTopLevel(offset)
+		require.False(t, cached)
+		// This is what decodeTopLevel does for a maxminddb.Result.
+		decoder.topLevelOffset = offset
+		decoder.topLevelActive = true
+		_, err := mmdbdata.NewDecoder(data, offset).Cursor().UnmarshalCursor(decoder)
+		require.NoError(t, err)
+		require.False(t, decoder.topLevelActive)
+		return decoder.takeResult()
+	}
+	requireCached := func(t *testing.T, decoder *storeDecoder, offset uint, want valueRef) {
+		t.Helper()
+		ref, cached := decoder.cachedTopLevel(offset)
+		require.True(t, cached, "offset %d", offset)
+		require.Equal(t, want, ref)
+		decoder.store.release(ref)
+	}
+
+	for name, firstOffset := range map[string]uint{
+		"target first":  targetOffset,
+		"pointer first": pointerOffset,
+	} {
+		t.Run(name, func(t *testing.T) {
+			store := newValueStore()
+			decoder := newStoreDecoder(store)
+
+			first := decodeRecord(t, decoder, firstOffset)
+			requireCached(t, decoder, firstOffset, first)
+			if firstOffset == targetOffset {
+				second := decodeRecord(t, decoder, pointerOffset)
+				require.Equal(t, first, second)
+				store.release(second)
+			}
+			// Either order leaves both offsets cached with one reference.
+			requireCached(t, decoder, targetOffset, first)
+			requireCached(t, decoder, pointerOffset, first)
+			assert.Equal(t, mmdbtype.String("shared value"), store.materialize(first))
+
+			store.release(first)
+			decoder.close()
+			assert.Zero(t, liveValueNodeCount(store))
+			require.NoError(t, store.audit(nil))
+		})
+	}
+}
+
 // TestStoreDecoderReleasesChildrenOnContainerErrors pins that the container
 // error paths release every partial child, so a truncated or corrupt source
 // database yields an error instead of a refcount panic on hostile input.
@@ -1497,6 +1558,72 @@ func TestLoadSharesRefsForSharedOffsets(t *testing.T) {
 	assert.EqualValues(t, 2, loaded.valueStore.node(first.value).refCount,
 		"only the two records should reference the shared value after loading")
 	assert.Equal(t, value, loaded.valueStore.materialize(first.value))
+}
+
+// TestLoadReusesNestedOffsetForRecord covers a record that the Go writer
+// points at the first nested copy of its value. The first record caches that
+// offset as a nested value, so the second record must hit cachedTopLevel.
+func TestLoadReusesNestedOffsetForRecord(t *testing.T) {
+	tree, err := New(Options{
+		DatabaseType:            "mmdbwriter-load-nested-offset",
+		Description:             map[string]string{"en": "Test database"},
+		IncludeReservedNetworks: true,
+		IPVersion:               4,
+		RecordSize:              24,
+	})
+	require.NoError(t, err)
+
+	shared := mmdbtype.Map{"k": mmdbtype.String("shared value")}
+	outer := mmdbtype.Map{"nested": shared}
+	require.NoError(t, tree.Insert(netip.MustParsePrefix("1.1.1.0/24"), outer))
+	require.NoError(t, tree.Insert(netip.MustParsePrefix("2.2.2.0/24"), shared))
+
+	var buf bytes.Buffer
+	_, err = tree.WriteTo(&buf)
+	require.NoError(t, err)
+
+	reader, err := maxminddb.OpenBytes(buf.Bytes())
+	require.NoError(t, err)
+	defer func() { require.NoError(t, reader.Close()) }()
+	store := newValueStore()
+	decoder := newStoreDecoder(store)
+	var refs []valueRef
+	for res := range reader.Networks() {
+		require.NoError(t, res.Err())
+		offset := uint(res.Offset())
+		ref, cached := decoder.cachedTopLevel(offset)
+		if len(refs) == 0 {
+			require.False(t, cached, "the first record must decode")
+			ref, err = decoder.decodeTopLevel(res)
+			require.NoError(t, err)
+		} else {
+			require.True(t, cached, "the second record must reuse the nested offset")
+		}
+		refs = append(refs, ref)
+	}
+	require.Len(t, refs, 2)
+	require.Equal(t, refs[1], store.childRefs(store.node(refs[0]))[1])
+	for _, ref := range refs {
+		store.release(ref)
+	}
+	decoder.close()
+	require.Zero(t, liveValueNodeCount(store))
+	require.NoError(t, store.audit(nil))
+
+	loaded, err := Load(writeTempFile(t, buf.Bytes()), Options{
+		IPVersion:               4,
+		IncludeReservedNetworks: true,
+	})
+	require.NoError(t, err)
+	_, first := loaded.getNode(loaded.root, [16]byte{1, 1, 1}, 0)
+	_, second := loaded.getNode(loaded.root, [16]byte{2, 2, 2}, 0)
+	require.Equal(t, recordTypeData, first.recordType)
+	require.Equal(t, recordTypeData, second.recordType)
+	assert.Equal(t, outer, loaded.valueStore.materialize(first.value))
+	assert.Equal(t, shared, loaded.valueStore.materialize(second.value))
+	nested := loaded.valueStore.childRefs(loaded.valueStore.node(first.value))[1]
+	assert.Equal(t, second.value, nested)
+	require.NoError(t, loaded.auditValueStore())
 }
 
 func TestTreeInsertAndGet(t *testing.T) {
