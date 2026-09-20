@@ -8,9 +8,10 @@ import (
 	"github.com/maxmind/mmdbwriter/v2/mmdbtype"
 )
 
+// Keep size first so offset entries occupy 16 bytes on 64-bit platforms.
 type writtenType struct {
-	pointer mmdbtype.Pointer
 	size    int64
+	pointer mmdbtype.Pointer
 	written bool
 }
 
