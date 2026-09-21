@@ -152,9 +152,9 @@
   or discarded depending on whether an unrelated sibling key changed in the same
   insertion; it is now always kept.
 - Identical search subtrees now share serialized nodes, reducing database size
-  without changing insertion or lookup behavior. Custom tree walkers must
-  support shared nodes and backward references, including in IPv4-only trees and
-  trees with IPv4 aliasing disabled.
+  without changing insertion or lookup behavior. Tools that traverse the written
+  search tree must support shared nodes and backward references, including in
+  IPv4-only trees and trees with IPv4 aliasing disabled.
 
 ## 1.2.0 (2026-01-14)
 

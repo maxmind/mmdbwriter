@@ -905,8 +905,8 @@ func (t *Tree) finalize() {
 // share serialized nodes without changing mutable-tree ownership or lookup
 // behavior. Finalization expands compressed paths in the mutable tree.
 // Finalization uses temporary memory and caches numbering until the next
-// insertion. Custom tree walkers must support multiple parents and backward
-// references.
+// insertion. Tools that traverse the written search tree must support shared
+// nodes and backward references.
 func (t *Tree) WriteTo(w io.Writer) (int64, error) {
 	if t.nodeCount == 0 {
 		t.finalize()
