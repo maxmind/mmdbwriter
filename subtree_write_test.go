@@ -272,20 +272,22 @@ func TestSubtreeUniqueSharedTransitions(t *testing.T) {
 							require.NoError(t, control.Insert(netip.MustParsePrefix(prefix), value))
 							require.NoError(t, tree.Insert(netip.MustParsePrefix(prefix), value))
 							finalizeUnsharedTree(control)
-							left, openErr := maxminddb.OpenBytes(writeTreeBytes(t, control))
-							require.NoError(t, openErr)
-							output := writeTreeBytes(t, tree)
-							require.Equal(
-								t,
-								output,
-								writeTreeBytes(t, tree),
-								"cached writes must be stable",
-							)
-							right, openErr := maxminddb.OpenBytes(output)
-							require.NoError(t, openErr)
-							verifySubtreeReaders(t, left, right)
-							left.Close()
-							right.Close()
+							func() {
+								left, openErr := maxminddb.OpenBytes(writeTreeBytes(t, control))
+								require.NoError(t, openErr)
+								defer left.Close()
+								output := writeTreeBytes(t, tree)
+								require.Equal(
+									t,
+									output,
+									writeTreeBytes(t, tree),
+									"cached writes must be stable",
+								)
+								right, openErr := maxminddb.OpenBytes(output)
+								require.NoError(t, openErr)
+								defer right.Close()
+								verifySubtreeReaders(t, left, right)
+							}()
 							require.NoError(t, tree.auditValueStore())
 						}
 					},
