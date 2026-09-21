@@ -40,163 +40,20 @@ type subtreeTable struct {
 	protected nodeIndex
 }
 
-// subtreeIPv4Root finds the reader's IPv4 entry point even when aliasing is
-// disabled and the entry record is not a FixedNode. Sharing this node with an
-// unrelated subtree would cause alias-skipping iterators to omit that subtree.
-// Call this after path expansion.
-func subtreeIPv4Root(tree *Tree) nodeIndex {
-	if tree.ipVersion != 6 {
-		return noNodeIndex
-	}
-	index := tree.root
-	for range 96 {
-		r := tree.nodeAt(index).children[0]
-		if !r.isOwningNode() {
-			return noNodeIndex
-		}
-		index = r.nodeIndex
-	}
-	return index
-}
-
-// key reconstructs a visited representative's key. visit builds the same key
-// while recursing so newly visited nodes do not need a second scan.
-func (s *subtreeTable) key(index nodeIndex) subtreeKey {
-	n := s.tree.nodeAt(index)
-	var key subtreeKey
-	for i := range 2 {
-		r := &n.children[i]
-		key[2] |= uint32(r.recordType) << (8 * i)
-		switch r.recordType {
-		case recordTypeData:
-			key[i] = uint32(r.value)
-		case recordTypeNode, recordTypeFixedNode:
-			key[i] = s.ids[r.nodeIndex]
-		case recordTypeAlias:
-			key[i] = uint32(r.nodeIndex)
-		case recordTypeEmpty, recordTypeReserved:
-		default:
-			panicUnexpectedSubtreeRecord(index, r.recordType)
+func (t *Tree) finalizeSubtrees() {
+	// Use an arena-sized side table for canonical IDs first, then
+	// replace them with final numbers. Before renumbering, zero marks
+	// unreachable/retired slots. Afterward, zero is also the root's number.
+	t.nodeNumbers = make([]uint32, t.nodeCountAllocated)
+	// The interning table is unreachable before the numbering array is made.
+	distinct := t.canonicalizeSubtrees()
+	numbers := make([]uint32, distinct)
+	t.nodeCount = int(t.numberSubtree(t.root, numbers, 0))
+	for i, id := range t.nodeNumbers {
+		if id != 0 {
+			t.nodeNumbers[i] = numbers[id-1] - 1
 		}
 	}
-	return key
-}
-
-// Keep formatting and its arguments out of the successful traversal path.
-func panicUnexpectedSubtreeRecord(index nodeIndex, kind recordType) {
-	if kind == recordTypePath {
-		panic(fmt.Sprintf(
-			"mmdbwriter: compressed path found after expandPaths at node %d during subtree canonicalization",
-			index,
-		))
-	}
-	panic(fmt.Sprintf(
-		"mmdbwriter: unexpected record type %d at node %d during subtree canonicalization",
-		kind,
-		index,
-	))
-}
-
-func (s *subtreeTable) hash(key subtreeKey) uint32 {
-	// Seed randomization changes probe placement, not first-encounter IDs or
-	// output order. Equality is always checked, including on hash collisions.
-	//nolint:gosec // Truncating a hash is intentional.
-	return uint32(maphash.Comparable(s.seed, key))
-}
-
-func (s *subtreeTable) grow() {
-	old := s.slots
-	s.slots = make([]subtreeSlot, 2*len(old))
-	//nolint:gosec // The mask addresses the power-of-two table's uint32 indexes.
-	mask := uint32(len(s.slots) - 1)
-	for _, entry := range old {
-		if entry.indexPlusOne == 0 {
-			continue
-		}
-		bucket := entry.hash & mask
-		for s.slots[bucket].indexPlusOne != 0 {
-			bucket = (bucket + 1) & mask
-		}
-		s.slots[bucket] = entry
-	}
-}
-
-func (s *subtreeTable) intern(index nodeIndex, key subtreeKey, hash uint32) uint32 {
-	//nolint:gosec // The mask addresses the power-of-two table's uint32 indexes.
-	mask := uint32(len(s.slots) - 1)
-	bucket := hash & mask
-	for entry := s.slots[bucket]; entry.indexPlusOne != 0; entry = s.slots[bucket] {
-		if entry.hash == hash && s.key(nodeIndex(entry.indexPlusOne-1)) == key {
-			id := s.ids[entry.indexPlusOne-1]
-			// Prefer the latest matching node: its records and child IDs are
-			// more likely to remain in cache than the first occurrence.
-			s.slots[bucket].indexPlusOne = uint32(index) + 1
-			return id
-		}
-		bucket = (bucket + 1) & mask
-	}
-	// Grow only on a miss, so repeated subtrees don't cause needless growth.
-	if s.used >= len(s.slots)*3/4 {
-		s.grow()
-		return s.intern(index, key, hash)
-	}
-	s.slots[bucket] = subtreeSlot{indexPlusOne: uint32(index) + 1, hash: hash}
-	s.used++
-	s.distinct++
-	return s.distinct
-}
-
-// visit propagates proof of uniqueness from data records with a sole owner.
-// Container and caller-cache references can only prevent this shortcut from
-// firing. Children are handled explicitly to avoid loop and key-packing overhead
-// on every node, including those for which the shortcut does not apply.
-func (s *subtreeTable) visit(index nodeIndex) (uint32, bool) {
-	n := s.tree.nodeAt(index)
-	var key subtreeKey
-	unique := false
-	key[2] = uint32(n.children[0].recordType) | uint32(n.children[1].recordType)<<8
-
-	left := &n.children[0]
-	switch left.recordType {
-	case recordTypeData:
-		key[0] = uint32(left.value)
-		unique = s.tree.valueStore.nodes[left.value].refCount == 1
-	case recordTypeNode, recordTypeFixedNode:
-		key[0], unique = s.visit(left.nodeIndex)
-	case recordTypeAlias:
-		key[0] = uint32(left.nodeIndex)
-	case recordTypeEmpty, recordTypeReserved:
-	default:
-		panicUnexpectedSubtreeRecord(index, left.recordType)
-	}
-
-	right := &n.children[1]
-	switch right.recordType {
-	case recordTypeData:
-		key[1] = uint32(right.value)
-		unique = unique || s.tree.valueStore.nodes[right.value].refCount == 1
-	case recordTypeNode, recordTypeFixedNode:
-		var rightUnique bool
-		key[1], rightUnique = s.visit(right.nodeIndex)
-		unique = unique || rightUnique
-	case recordTypeAlias:
-		key[1] = uint32(right.nodeIndex)
-	case recordTypeEmpty, recordTypeReserved:
-	default:
-		panicUnexpectedSubtreeRecord(index, right.recordType)
-	}
-	var id uint32
-	if unique || index == s.protected {
-		// Unique subtrees cannot match another owning subtree. The IPv4 entry
-		// must also remain distinct, but protection alone is not a uniqueness
-		// proof. Descendants have already been canonicalized in either case.
-		s.distinct++
-		id = s.distinct
-	} else {
-		id = s.intern(index, key, s.hash(key))
-	}
-	s.ids[index] = id
-	return id, unique
 }
 
 // canonicalizeSubtrees uses bottom-up hash-consing: children receive canonical
@@ -220,22 +77,6 @@ func (t *Tree) canonicalizeSubtrees() int {
 	}
 	table.visit(t.root)
 	return int(table.distinct)
-}
-
-func (t *Tree) finalizeSubtrees() {
-	// Use an arena-sized side table for canonical IDs first, then
-	// replace them with final numbers. Before renumbering, zero marks
-	// unreachable/retired slots. Afterward, zero is also the root's number.
-	t.nodeNumbers = make([]uint32, t.nodeCountAllocated)
-	// The interning table is unreachable before the numbering array is made.
-	distinct := t.canonicalizeSubtrees()
-	numbers := make([]uint32, distinct)
-	t.nodeCount = int(t.numberSubtree(t.root, numbers, 0))
-	for i, id := range t.nodeNumbers {
-		if id != 0 {
-			t.nodeNumbers[i] = numbers[id-1] - 1
-		}
-	}
 }
 
 // MMDB nodes implicitly consume the next address bit. A parent with two equal
@@ -306,4 +147,163 @@ func (t *Tree) writeSubtree(
 		}
 	}
 	return numBytes, nil
+}
+
+// subtreeIPv4Root finds the reader's IPv4 entry point even when aliasing is
+// disabled and the entry record is not a FixedNode. Sharing this node with an
+// unrelated subtree would cause alias-skipping iterators to omit that subtree.
+// Call this after path expansion.
+func subtreeIPv4Root(tree *Tree) nodeIndex {
+	if tree.ipVersion != 6 {
+		return noNodeIndex
+	}
+	index := tree.root
+	for range 96 {
+		r := tree.nodeAt(index).children[0]
+		if !r.isOwningNode() {
+			return noNodeIndex
+		}
+		index = r.nodeIndex
+	}
+	return index
+}
+
+// visit propagates proof of uniqueness from data records with a sole owner.
+// Container and caller-cache references can only prevent this shortcut from
+// firing. Children are handled explicitly to avoid loop and key-packing overhead
+// on every node, including those for which the shortcut does not apply.
+func (s *subtreeTable) visit(index nodeIndex) (uint32, bool) {
+	n := s.tree.nodeAt(index)
+	var key subtreeKey
+	unique := false
+	key[2] = uint32(n.children[0].recordType) | uint32(n.children[1].recordType)<<8
+
+	left := &n.children[0]
+	switch left.recordType {
+	case recordTypeData:
+		key[0] = uint32(left.value)
+		unique = s.tree.valueStore.nodes[left.value].refCount == 1
+	case recordTypeNode, recordTypeFixedNode:
+		key[0], unique = s.visit(left.nodeIndex)
+	case recordTypeAlias:
+		key[0] = uint32(left.nodeIndex)
+	case recordTypeEmpty, recordTypeReserved:
+	default:
+		panicUnexpectedSubtreeRecord(index, left.recordType)
+	}
+
+	right := &n.children[1]
+	switch right.recordType {
+	case recordTypeData:
+		key[1] = uint32(right.value)
+		unique = unique || s.tree.valueStore.nodes[right.value].refCount == 1
+	case recordTypeNode, recordTypeFixedNode:
+		var rightUnique bool
+		key[1], rightUnique = s.visit(right.nodeIndex)
+		unique = unique || rightUnique
+	case recordTypeAlias:
+		key[1] = uint32(right.nodeIndex)
+	case recordTypeEmpty, recordTypeReserved:
+	default:
+		panicUnexpectedSubtreeRecord(index, right.recordType)
+	}
+	var id uint32
+	if unique || index == s.protected {
+		// Unique subtrees cannot match another owning subtree. The IPv4 entry
+		// must also remain distinct, but protection alone is not a uniqueness
+		// proof. Descendants have already been canonicalized in either case.
+		s.distinct++
+		id = s.distinct
+	} else {
+		id = s.intern(index, key, s.hash(key))
+	}
+	s.ids[index] = id
+	return id, unique
+}
+
+func (s *subtreeTable) intern(index nodeIndex, key subtreeKey, hash uint32) uint32 {
+	//nolint:gosec // The mask addresses the power-of-two table's uint32 indexes.
+	mask := uint32(len(s.slots) - 1)
+	bucket := hash & mask
+	for entry := s.slots[bucket]; entry.indexPlusOne != 0; entry = s.slots[bucket] {
+		if entry.hash == hash && s.key(nodeIndex(entry.indexPlusOne-1)) == key {
+			id := s.ids[entry.indexPlusOne-1]
+			// Prefer the latest matching node: its records and child IDs are
+			// more likely to remain in cache than the first occurrence.
+			s.slots[bucket].indexPlusOne = uint32(index) + 1
+			return id
+		}
+		bucket = (bucket + 1) & mask
+	}
+	// Grow only on a miss, so repeated subtrees don't cause needless growth.
+	if s.used >= len(s.slots)*3/4 {
+		s.grow()
+		return s.intern(index, key, hash)
+	}
+	s.slots[bucket] = subtreeSlot{indexPlusOne: uint32(index) + 1, hash: hash}
+	s.used++
+	s.distinct++
+	return s.distinct
+}
+
+// key reconstructs a visited representative's key. visit builds the same key
+// while recursing so newly visited nodes do not need a second scan.
+func (s *subtreeTable) key(index nodeIndex) subtreeKey {
+	n := s.tree.nodeAt(index)
+	var key subtreeKey
+	for i := range 2 {
+		r := &n.children[i]
+		key[2] |= uint32(r.recordType) << (8 * i)
+		switch r.recordType {
+		case recordTypeData:
+			key[i] = uint32(r.value)
+		case recordTypeNode, recordTypeFixedNode:
+			key[i] = s.ids[r.nodeIndex]
+		case recordTypeAlias:
+			key[i] = uint32(r.nodeIndex)
+		case recordTypeEmpty, recordTypeReserved:
+		default:
+			panicUnexpectedSubtreeRecord(index, r.recordType)
+		}
+	}
+	return key
+}
+
+func (s *subtreeTable) hash(key subtreeKey) uint32 {
+	// Seed randomization changes probe placement, not first-encounter IDs or
+	// output order. Equality is always checked, including on hash collisions.
+	//nolint:gosec // Truncating a hash is intentional.
+	return uint32(maphash.Comparable(s.seed, key))
+}
+
+func (s *subtreeTable) grow() {
+	old := s.slots
+	s.slots = make([]subtreeSlot, 2*len(old))
+	//nolint:gosec // The mask addresses the power-of-two table's uint32 indexes.
+	mask := uint32(len(s.slots) - 1)
+	for _, entry := range old {
+		if entry.indexPlusOne == 0 {
+			continue
+		}
+		bucket := entry.hash & mask
+		for s.slots[bucket].indexPlusOne != 0 {
+			bucket = (bucket + 1) & mask
+		}
+		s.slots[bucket] = entry
+	}
+}
+
+// Keep formatting and its arguments out of the successful traversal path.
+func panicUnexpectedSubtreeRecord(index nodeIndex, kind recordType) {
+	if kind == recordTypePath {
+		panic(fmt.Sprintf(
+			"mmdbwriter: compressed path found after expandPaths at node %d during subtree canonicalization",
+			index,
+		))
+	}
+	panic(fmt.Sprintf(
+		"mmdbwriter: unexpected record type %d at node %d during subtree canonicalization",
+		kind,
+		index,
+	))
 }
