@@ -897,7 +897,6 @@ func (t *Tree) expandTree() {
 // finalize prepares the tree for writing. It is not threadsafe.
 func (t *Tree) finalize() {
 	t.expandTree()
-	t.nodeNumbers = make([]uint32, t.nodeCountAllocated)
 	t.finalizeSubtrees()
 }
 

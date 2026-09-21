@@ -217,9 +217,10 @@ func (t *Tree) canonicalizeSubtrees() int {
 }
 
 func (t *Tree) finalizeSubtrees() {
-	// Use the existing arena-sized side table for canonical IDs first, then
+	// Use an arena-sized side table for canonical IDs first, then
 	// replace them with final numbers. Before renumbering, zero marks
 	// unreachable/retired slots. Afterward, zero is also the root's number.
+	t.nodeNumbers = make([]uint32, t.nodeCountAllocated)
 	// The interning table is unreachable before the numbering array is made.
 	distinct := t.canonicalizeSubtrees()
 	numbers := make([]uint32, distinct)
