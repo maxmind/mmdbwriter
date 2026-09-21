@@ -31,6 +31,11 @@ type record struct {
 	recordType recordType
 }
 
+// isOwningNode reports whether the record directly owns a tree node.
+func (r *record) isOwningNode() bool {
+	return r.recordType == recordTypeNode || r.recordType == recordTypeFixedNode
+}
+
 // each node contains two records.
 type node struct {
 	children [2]record

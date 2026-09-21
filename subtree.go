@@ -51,7 +51,7 @@ func subtreeIPv4Root(tree *Tree) nodeIndex {
 	index := tree.root
 	for range 96 {
 		r := tree.nodeAt(index).children[0]
-		if r.recordType != recordTypeNode && r.recordType != recordTypeFixedNode {
+		if !r.isOwningNode() {
 			return noNodeIndex
 		}
 		index = r.nodeIndex
@@ -247,7 +247,7 @@ func (t *Tree) numberSubtree(index nodeIndex, numbers []uint32, next uint32) uin
 	n := t.nodeAt(index)
 	for i := range 2 {
 		r := &n.children[i]
-		if r.recordType == recordTypeNode || r.recordType == recordTypeFixedNode {
+		if r.isOwningNode() {
 			next = t.numberSubtree(r.nodeIndex, numbers, next)
 		}
 	}
@@ -289,12 +289,12 @@ func (t *Tree) writeSubtree(
 		}
 		*next++
 		right := &n.children[1]
-		if right.recordType == recordTypeNode || right.recordType == recordTypeFixedNode {
+		if right.isOwningNode() {
 			pending[depth] = right.nodeIndex
 			depth++
 		}
 		left := &n.children[0]
-		if left.recordType == recordTypeNode || left.recordType == recordTypeFixedNode {
+		if left.isOwningNode() {
 			pending[depth] = left.nodeIndex
 			depth++
 		}
