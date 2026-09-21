@@ -35,7 +35,7 @@ func TestCanonicalizeSubtreesRejectsCompressedPath(t *testing.T) {
 
 	require.PanicsWithValue(
 		t,
-		"mmdbwriter: unexpected record type 6 at node 0 during subtree canonicalization",
+		"mmdbwriter: compressed path found after expandPaths at node 0 during subtree canonicalization",
 		func() {
 			tree.canonicalizeSubtrees()
 		},

@@ -84,6 +84,12 @@ func (s *subtreeTable) key(index nodeIndex) subtreeKey {
 
 // Keep formatting and its arguments out of the successful traversal path.
 func panicUnexpectedSubtreeRecord(index nodeIndex, kind recordType) {
+	if kind == recordTypePath {
+		panic(fmt.Sprintf(
+			"mmdbwriter: compressed path found after expandPaths at node %d during subtree canonicalization",
+			index,
+		))
+	}
 	panic(fmt.Sprintf(
 		"mmdbwriter: unexpected record type %d at node %d during subtree canonicalization",
 		kind,
