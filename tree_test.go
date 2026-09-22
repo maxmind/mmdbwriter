@@ -61,6 +61,42 @@ func TestTreeInsert(t *testing.T) {
 	assert.Equal(t, value, got)
 }
 
+// Equal fresh inputs must deduplicate without retaining a reference for each
+// caller object. Replacing or removing the last record must release its value.
+func TestDirectInsertReleasesReplacedValues(t *testing.T) {
+	for _, method := range []string{"Insert", "InsertRange"} {
+		t.Run(method, func(t *testing.T) {
+			tree, err := New(Options{IPVersion: 4, IncludeReservedNetworks: true})
+			require.NoError(t, err)
+			prefix := netip.MustParsePrefix("1.2.3.4/32")
+			insert := func(value mmdbtype.DataType) {
+				t.Helper()
+				if method == "InsertRange" {
+					require.NoError(t, tree.InsertRange(prefix.Addr(), prefix.Addr(), value))
+				} else {
+					require.NoError(t, tree.Insert(prefix, value))
+				}
+			}
+			for generation := range 3 {
+				for range 16 {
+					insert(
+						mmdbtype.Map{"nested": mmdbtype.Map{"value": mmdbtype.Uint32(generation)}},
+					)
+				}
+				_, dataRecord := tree.getNode(tree.root, [16]byte{1, 2, 3, 4}, 0)
+				require.EqualValues(t, 1, tree.valueStore.node(dataRecord.value).refCount,
+					"only the tree record should retain the input value")
+				// Two maps, two keys, and one integer remain live.
+				require.Equal(t, 5, liveValueNodeCount(tree.valueStore))
+				require.NoError(t, tree.auditValueStore())
+			}
+			insert(nil)
+			require.Zero(t, liveValueNodeCount(tree.valueStore))
+			require.NoError(t, tree.auditValueStore())
+		})
+	}
+}
+
 func TestTreeInsertSplittingDataRecordMaintainsRefCounts(t *testing.T) {
 	tree, err := New(Options{
 		IPVersion:               4,
@@ -88,11 +124,9 @@ func TestTreeInsertSplittingDataRecordMaintainsRefCounts(t *testing.T) {
 	assert.Equal(t, valueKindInvalid, tree.valueStore.nodes[initialRef].kind)
 }
 
-// TestFailedInsertDoesNotCacheCallerIdentity pins that the caller-identity
-// cache registers a value only after its insert succeeds. A registration that
-// survived a failed insert would serve the pre-mutation data if the caller
-// mutated and retried the same object.
-func TestFailedInsertDoesNotCacheCallerIdentity(t *testing.T) {
+// TestFailedInsertCanRetryChangedValue verifies that a rejected value can
+// be changed and retried without reusing stale data.
+func TestFailedInsertCanRetryChangedValue(t *testing.T) {
 	tree, err := New(Options{IPVersion: 4})
 	require.NoError(t, err)
 
@@ -126,24 +160,6 @@ func TestWriteToDoesNotGrowValueStore(t *testing.T) {
 
 	assert.Len(t, tree.valueStore.nodes, nodesBefore)
 	assert.Len(t, tree.valueStore.freeRefs, freeBefore)
-}
-
-// TestSuccessfulInsertCachesCallerIdentity pins the documented cache
-// semantics: after a successful insert, an in-place mutation of the same
-// object is invisible to a later insert of that object, which reuses the
-// data from before the mutation.
-func TestSuccessfulInsertCachesCallerIdentity(t *testing.T) {
-	tree := newTestTree(t, "mmdbwriter-success-cache")
-
-	value := mmdbtype.Map{"name": mmdbtype.String("before")}
-	require.NoError(t, tree.Insert(netip.MustParsePrefix("1.2.3.0/24"), value))
-
-	// The contract forbids this mutation. The cache serves the old data.
-	value["name"] = mmdbtype.String("after")
-	require.NoError(t, tree.Insert(netip.MustParsePrefix("2.2.2.0/24"), value))
-
-	_, got := tree.Get(netip.MustParseAddr("2.2.2.4"))
-	assert.Equal(t, mmdbtype.Map{"name": mmdbtype.String("before")}, got)
 }
 
 // TestPanickingInserterReleasesItsReferences pins that a panic from a
@@ -220,10 +236,9 @@ func TestPanickingRangeInserterReleasesItsReferences(t *testing.T) {
 		"the panicking range insert leaked references")
 }
 
-// TestFailedInsertRangeDoesNotCacheCallerIdentity is the InsertRange variant
-// of the failed-insert regression: a range that partially succeeds before a
-// reserved subnet fails must not leave the caller's object registered.
-func TestFailedInsertRangeDoesNotCacheCallerIdentity(t *testing.T) {
+// TestFailedInsertRangeCanRetryChangedValue covers a range that partially
+// succeeds before a reserved subnet fails. A retry must use the changed data.
+func TestFailedInsertRangeCanRetryChangedValue(t *testing.T) {
 	tree, err := New(Options{IPVersion: 4})
 	require.NoError(t, err)
 
@@ -2624,9 +2639,8 @@ func TestNewAcceptsSupportedRecordSizes(t *testing.T) {
 	}
 }
 
-// TestInsertNilValueRemovesRecord covers the direct-value removal path. The
-// inserter path has its own removal implementation in replaceDataRecord, so
-// this one is only reached by a plain Insert of a nil value.
+// TestInsertNilValueRemovesRecord verifies that the default inserter removes
+// the record and releases its value when given nil.
 func TestInsertNilValueRemovesRecord(t *testing.T) {
 	tree := newTestTree(t, "mmdbwriter-insert-nil")
 
@@ -2714,9 +2728,7 @@ func TestInsertReportsNilNestedValueError(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), `interning value for map key "u"`)
 	assert.Contains(t, err.Error(), "cannot intern a nil *mmdbtype.Uint128")
-	// A Map has an identity key, so the failure happens after the identity
-	// lookup and must not leave anything cached or retained.
-	assert.Empty(t, tree.valueStore.callerByIdentity)
+	// The failed insertion must not retain a partially interned value.
 	assert.Zero(t, liveValueNodeCount(tree.valueStore))
 }
 

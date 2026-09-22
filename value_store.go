@@ -156,34 +156,17 @@ const (
 	dataIdentityUint128
 )
 
-// dataIdentityKey identifies a caller's Go object. All three fields are
+// dataIdentityKey identifies a materialized Go object. All three fields are
 // load-bearing. kind separates empty values, since every empty Bytes, Map,
 // and Slice carries ptr zero and there is exactly one canonical node per
 // empty value. size separates reslices such as s[:3] and s[:5], which share
-// a data pointer. ptr is valid only while something pins the object: the
-// caller-identity cache pins entry.value, and materializedByIdentity is
-// pinned by the node's materialized view.
+// a data pointer. The node's materialized view pins the object while its
+// identity is registered, preventing pointer-address reuse.
 type dataIdentityKey struct {
 	ptr  uintptr
 	kind dataIdentityKind
 	size int
 }
-
-type callerIdentityEntry struct {
-	key   dataIdentityKey
-	value mmdbtype.DataType // strong reference; prevents pointer-address reuse
-	ref   valueRef          // separately retained while the entry is present
-	prev  int
-	next  int
-}
-
-// callerIdentityCacheSize bounds the caller-identity cache. The cache serves
-// direct inserts that present the same object repeatedly, such as callers
-// that cache decoded records. Each entry pins the caller's value and the
-// interned node it maps to. The bound therefore trades retained memory for
-// repeat-insert speed. It must comfortably exceed the distinct values a
-// build presents repeatedly.
-const callerIdentityCacheSize = 1 << 20
 
 // valueStore hash-conses all nodes in an MMDB value tree. Buckets are keyed
 // by a seeded maphash, but candidates are always compared exactly, so
@@ -197,12 +180,10 @@ type valueStore struct {
 	payloads byteArena
 	children refArena
 
+	// Cache only store-owned views, which merges reuse for unchanged values.
+	// Caching caller objects would pin fresh input graphs after interning.
+	// Load already reuses interned references by source offset.
 	materializedByIdentity map[dataIdentityKey]valueRef
-	callerByIdentity       map[dataIdentityKey]int
-	callerIdentity         []callerIdentityEntry
-	callerIdentityHead     int
-	callerIdentityTail     int
-	callerIdentityLimit    int
 
 	// poisonFreedRefs skips free-slot recycling, so a stale ref hits the
 	// invalid-reference panic instead of silently reading whatever value
@@ -252,10 +233,6 @@ func newValueStoreWithHash(hashFunc func([]byte) uint64) *valueStore {
 		nodes:                  make([]valueNode, 1), // ref zero is nil
 		buckets:                map[uint64]valueRef{},
 		materializedByIdentity: map[dataIdentityKey]valueRef{},
-		callerByIdentity:       map[dataIdentityKey]int{},
-		callerIdentityHead:     -1,
-		callerIdentityTail:     -1,
-		callerIdentityLimit:    callerIdentityCacheSize,
 		hashFunc:               hashFunc,
 	}
 }
@@ -458,14 +435,6 @@ func (s *valueStore) intern(value mmdbtype.DataType) (valueRef, error) {
 		if ref, ok := s.materializedByIdentity[identity]; ok {
 			s.retain(ref)
 			return ref, nil
-		}
-		// Stored entries always carry a non-nil value and ref;
-		// rememberCallerIdentity refuses anything else.
-		if index, ok := s.callerByIdentity[identity]; ok {
-			s.touchCallerIdentity(index)
-			entry := &s.callerIdentity[index]
-			s.retain(entry.ref)
-			return entry.ref, nil
 		}
 	}
 
@@ -769,75 +738,6 @@ func (s *valueStore) hashNode(kind valueKind, payload []byte, children []valueRe
 		offset += 8
 	}
 	return s.hashFunc(s.hashScratch)
-}
-
-func (s *valueStore) rememberCallerIdentity(value mmdbtype.DataType, ref valueRef) {
-	identity, ok := dataIdentity(value)
-	if !ok || ref == nilValueRef {
-		return
-	}
-	if _, storeOwned := s.materializedByIdentity[identity]; storeOwned {
-		return
-	}
-	if _, exists := s.callerByIdentity[identity]; exists {
-		return
-	}
-	if s.callerIdentityLimit <= 0 {
-		return
-	}
-	entry := callerIdentityEntry{key: identity, value: value, ref: ref, prev: -1, next: -1}
-	s.retain(ref)
-	if len(s.callerIdentity) < s.callerIdentityLimit {
-		index := len(s.callerIdentity)
-		s.callerIdentity = append(s.callerIdentity, entry)
-		s.callerByIdentity[identity] = index
-		s.linkCallerIdentityHead(index)
-		return
-	}
-	index := s.callerIdentityTail
-	old := s.callerIdentity[index]
-	delete(s.callerByIdentity, old.key)
-	s.unlinkCallerIdentity(index)
-	s.callerIdentity[index] = entry
-	s.callerByIdentity[identity] = index
-	s.linkCallerIdentityHead(index)
-	s.release(old.ref)
-}
-
-func (s *valueStore) touchCallerIdentity(index int) {
-	if index == s.callerIdentityHead {
-		return
-	}
-	s.unlinkCallerIdentity(index)
-	s.linkCallerIdentityHead(index)
-}
-
-func (s *valueStore) unlinkCallerIdentity(index int) {
-	entry := &s.callerIdentity[index]
-	if entry.prev >= 0 {
-		s.callerIdentity[entry.prev].next = entry.next
-	} else {
-		s.callerIdentityHead = entry.next
-	}
-	if entry.next >= 0 {
-		s.callerIdentity[entry.next].prev = entry.prev
-	} else {
-		s.callerIdentityTail = entry.prev
-	}
-	entry.prev = -1
-	entry.next = -1
-}
-
-func (s *valueStore) linkCallerIdentityHead(index int) {
-	entry := &s.callerIdentity[index]
-	entry.prev = -1
-	entry.next = s.callerIdentityHead
-	if s.callerIdentityHead >= 0 {
-		s.callerIdentity[s.callerIdentityHead].prev = index
-	} else {
-		s.callerIdentityTail = index
-	}
-	s.callerIdentityHead = index
 }
 
 func kindOf(value mmdbtype.DataType) (valueKind, error) {

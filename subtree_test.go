@@ -268,36 +268,22 @@ func TestSubtreeUniqueAncestorStillSharesDescendants(t *testing.T) {
 }
 
 func TestSubtreeUniquenessIsConservative(t *testing.T) {
-	for _, owner := range []string{"caller cache", "container"} {
-		t.Run(owner, func(t *testing.T) {
-			tree, err := New(Options{IPVersion: 4, IncludeReservedNetworks: true})
-			require.NoError(t, err)
-			var value mmdbtype.DataType = mmdbtype.String("value")
-			if owner == "caller cache" {
-				value = mmdbtype.Map{"key": value}
-			}
-			ref, err := tree.valueStore.intern(value)
-			require.NoError(t, err)
-			leaf := tree.newNode([2]record{{recordType: recordTypeData, value: ref}, {}})
-			tree.nodeAt(tree.root).children[0] = record{recordType: recordTypeNode, nodeIndex: leaf}
-			if owner == "caller cache" {
-				tree.valueStore.rememberCallerIdentity(value, ref)
-			} else {
-				container, internErr := tree.valueStore.intern(mmdbtype.Map{"key": value})
-				require.NoError(t, internErr)
-				tree.nodeAt(tree.root).children[1] = record{
-					recordType: recordTypeData,
-					value:      container,
-				}
-			}
-			require.EqualValues(t, 2, tree.valueStore.node(ref).refCount)
-			table := newSubtreeTestTable(tree, 256)
-			_, unique := table.visit(leaf)
-			require.False(t, unique, "non-tree ownership may prevent the shortcut")
-			require.Equal(t, 1, table.used)
-			require.NoError(t, tree.auditValueStore())
-		})
-	}
+	tree, err := New(Options{IPVersion: 4, IncludeReservedNetworks: true})
+	require.NoError(t, err)
+	value := mmdbtype.String("value")
+	ref, err := tree.valueStore.intern(value)
+	require.NoError(t, err)
+	leaf := tree.newNode([2]record{{recordType: recordTypeData, value: ref}, {}})
+	tree.nodeAt(tree.root).children[0] = record{recordType: recordTypeNode, nodeIndex: leaf}
+	container, err := tree.valueStore.intern(mmdbtype.Map{"key": value})
+	require.NoError(t, err)
+	tree.nodeAt(tree.root).children[1] = record{recordType: recordTypeData, value: container}
+	require.EqualValues(t, 2, tree.valueStore.node(ref).refCount)
+	table := newSubtreeTestTable(tree, 256)
+	_, unique := table.visit(leaf)
+	require.False(t, unique, "non-tree ownership may prevent the shortcut")
+	require.Equal(t, 1, table.used)
+	require.NoError(t, tree.auditValueStore())
 }
 
 func TestSubtreeProtectionDoesNotProveUniqueness(t *testing.T) {

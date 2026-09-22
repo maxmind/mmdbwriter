@@ -75,12 +75,6 @@
   containers hold canonical child references. The store otherwise releases
   inserted Go value graphs instead of retaining them, which substantially
   reduces peak memory for large builds with repeated or overlapping data.
-- Two store caches trade some retention for speed. A bounded cache keeps up to
-  about one million caller values from direct inserts of maps, slices, byte
-  slices, and `*Uint128` values, evicted least recently used, so repeated
-  inserts of the same object are cheap. Values that an inserter or `Tree.Get`
-  reads are materialized once and kept on their store nodes for later lookups
-  and merges.
 - Values returned by `Tree.Get`, and existing values passed to inserter
   functions, are shared, read-only views. They are equal to the inserted values
   but are not necessarily the same Go objects. The new value an inserter

@@ -87,12 +87,10 @@ type Options struct {
 	// tree in the process.
 	RefcountAudit bool
 
-	// Inserter is the pure function used by Insert, InsertRange, and Load.
-	// Leaving it nil is equivalent to inserter.Replace, which replaces any
-	// conflicting old value entirely with the new, and allows Insert and
-	// InsertRange to use the default direct-value fast path. Passing
-	// inserter.Replace explicitly has the same behavior but skips that
-	// optimization.
+	// Inserter is the default pure function for Insert, InsertRange, and Load.
+	// Nil replaces the old value with the new value, as inserter.Replace does,
+	// without invoking a callback. Methods that take an inserter function
+	// ignore this option.
 	//
 	// inserter.PureFunc documents the rules an Inserter must follow: purity,
 	// which values it may modify, and which unvalidated inputs it can receive.
@@ -349,10 +347,7 @@ func (t *Tree) normalizeLoadPrefix(prefix netip.Prefix) (netip.Prefix, error) {
 // (defaults to inserter.Replace).
 //
 // You must never modify the value after insertion. Values may be shared with
-// other records, and direct inserts of maps, slices, byte slices, and
-// *Uint128 values are cached by object identity: if you mutate an inserted
-// object in place, a later insert of that object can reuse the data from
-// before the mutation.
+// other records.
 //
 // This is not safe to call from multiple threads.
 func (t *Tree) Insert(prefix netip.Prefix, value mmdbtype.DataType) error {
@@ -542,9 +537,7 @@ func (t *Tree) newInsertRecord(
 			return nil, err
 		}
 	}
-	iRec := t.newInsertRecordRef(recordType, resolver, node, ref)
-	iRec.callerValue = value
-	return iRec, nil
+	return t.newInsertRecordRef(recordType, resolver, node, ref), nil
 }
 
 // newInsertRecordRef builds an insertRecord that owns the given reference,
@@ -566,17 +559,9 @@ func (t *Tree) newInsertRecordRef(
 	}
 }
 
-// finishInsert completes an insertion. It registers the caller identity only
-// once the tree references the value: a registration that survived a failed
-// insert would serve stale data if the caller mutated and retried the same
-// object. The audit only balances once the memo and value references are
-// gone, so the release runs explicitly before it. The audit also runs after
-// a failed insert, since the error paths are exactly where ownership
-// mistakes hide; an audit failure joins any insert error.
+// finishInsert releases the memo and value references before the audit.
+// It also audits failed inserts, where ownership mistakes can hide.
 func (t *Tree) finishInsert(iRec *insertRecord, err error) error {
-	if err == nil {
-		t.valueStore.rememberCallerIdentity(iRec.callerValue, iRec.value)
-	}
 	iRec.releaseResolved()
 	return t.finishInsertAudit(err)
 }

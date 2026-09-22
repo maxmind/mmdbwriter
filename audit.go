@@ -1,7 +1,6 @@
 package mmdbwriter
 
 import (
-	"errors"
 	"fmt"
 )
 
@@ -172,16 +171,10 @@ func (s *valueStore) audit(external map[valueRef]uint64) error {
 		}
 		expected[ref] += count
 	}
-	if err := s.auditCallerIdentity(); err != nil {
-		return err
-	}
 	if err := s.auditMaterializedIdentities(); err != nil {
 		return err
 	}
 	if err := s.auditArenas(); err != nil {
-		return err
-	}
-	if err := s.addCallerIdentityRefs(expected); err != nil {
 		return err
 	}
 	bucketCounts, err := s.auditBuckets()
@@ -253,22 +246,6 @@ func (s *valueStore) audit(external map[valueRef]uint64) error {
 				expected[index],
 			)
 		}
-	}
-	return nil
-}
-
-// addCallerIdentityRefs adds the caller-identity cache's owned references to
-// the expected counts. A ref outside the node arena is reported instead of
-// indexed, so a corrupt entry produces a diagnostic rather than a panic.
-func (s *valueStore) addCallerIdentityRefs(expected []uint64) error {
-	for _, entry := range s.callerIdentity {
-		if entry.ref == nilValueRef {
-			continue
-		}
-		if uint64(entry.ref) >= uint64(len(s.nodes)) {
-			return fmt.Errorf("refcount audit found invalid caller identity ref %d", entry.ref)
-		}
-		expected[entry.ref]++
 	}
 	return nil
 }
@@ -409,42 +386,6 @@ func (s *valueStore) auditMaterializedIdentities() error {
 				"identity audit found ref %d under an identity it does not carry", ref,
 			)
 		}
-	}
-	return nil
-}
-
-func (s *valueStore) auditCallerIdentity() error {
-	if len(s.callerIdentity) != len(s.callerByIdentity) {
-		return fmt.Errorf(
-			"caller identity audit has %d entries but %d indexes",
-			len(s.callerIdentity),
-			len(s.callerByIdentity),
-		)
-	}
-	if len(s.callerIdentity) == 0 {
-		if s.callerIdentityHead != -1 || s.callerIdentityTail != -1 {
-			return errors.New("caller identity audit found a head or tail in an empty cache")
-		}
-		return nil
-	}
-	seen := make([]bool, len(s.callerIdentity))
-	previous := -1
-	count := 0
-	for index := s.callerIdentityHead; index >= 0; index = s.callerIdentity[index].next {
-		if index >= len(s.callerIdentity) || seen[index] {
-			return fmt.Errorf("caller identity audit found an invalid LRU link at %d", index)
-		}
-		entry := s.callerIdentity[index]
-		mappedIndex, ok := s.callerByIdentity[entry.key]
-		if entry.prev != previous || !ok || mappedIndex != index {
-			return fmt.Errorf("caller identity audit found an inconsistent entry at %d", index)
-		}
-		seen[index] = true
-		previous = index
-		count++
-	}
-	if count != len(s.callerIdentity) || previous != s.callerIdentityTail {
-		return errors.New("caller identity audit found an incomplete LRU chain")
 	}
 	return nil
 }

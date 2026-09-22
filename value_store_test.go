@@ -404,9 +404,6 @@ func TestValueStoreMaterializedBytesDoNotAliasReusedArena(t *testing.T) {
 // stale entry would silently substitute unrelated data.
 func TestReleaseUnregistersMaterializedIdentity(t *testing.T) {
 	store := newValueStore()
-	// Keep the caller-identity cache out of the way so release fully frees
-	// the node.
-	store.callerIdentityLimit = 0
 	ref, err := store.intern(mmdbtype.Map{"en": mmdbtype.String("one")})
 	require.NoError(t, err)
 	view := store.materialize(ref)
@@ -462,31 +459,6 @@ func TestReleaseUnlinksMidChainNode(t *testing.T) {
 	store.release(thirdAgain)
 }
 
-// TestCallerIdentityEvictionReleasesReference pins that evicting the
-// least-recently-used entry releases the reference the cache held.
-func TestCallerIdentityEvictionReleasesReference(t *testing.T) {
-	store := newValueStore()
-	store.callerIdentityLimit = 1
-	first := mmdbtype.Map{"value": mmdbtype.String("first")}
-	firstRef, err := store.intern(first)
-	require.NoError(t, err)
-	store.rememberCallerIdentity(first, firstRef)
-	// The cache now holds the only reference.
-	store.release(firstRef)
-
-	second := mmdbtype.Map{"value": mmdbtype.String("second")}
-	secondRef, err := store.intern(second)
-	require.NoError(t, err)
-	store.rememberCallerIdentity(second, secondRef)
-
-	assert.Equal(t, valueKindInvalid, store.nodes[firstRef].kind,
-		"the evicted entry did not release its reference")
-	firstIdentity, ok := dataIdentity(first)
-	require.True(t, ok)
-	assert.NotContains(t, store.callerByIdentity, firstIdentity)
-	store.release(secondRef)
-}
-
 // TestValueStorePreservesFloatEncodings pins the wire-exact identity of the
 // store: values that differ only in a float sign bit are distinct.
 func TestValueStorePreservesFloatEncodings(t *testing.T) {
@@ -521,26 +493,6 @@ func TestValueStorePreservesFloatEncodings(t *testing.T) {
 			store.release(negativeRef)
 		})
 	}
-}
-
-func TestValueStoreCachesUint128PointerIdentity(t *testing.T) {
-	value := mmdbtype.Uint128(*big.NewInt(12345))
-	valuePointer := &value
-	identity, ok := dataIdentity(valuePointer)
-	require.True(t, ok)
-
-	store := newValueStore()
-	ref, err := store.intern(valuePointer)
-	require.NoError(t, err)
-	store.rememberCallerIdentity(valuePointer, ref)
-
-	sameRef, err := store.intern(valuePointer)
-	require.NoError(t, err)
-
-	assert.Equal(t, ref, sameRef)
-	assert.Contains(t, store.callerByIdentity, identity)
-	store.release(ref)
-	store.release(sameRef)
 }
 
 func TestSliceIdentityPointerDoesNotAllocate(t *testing.T) {
@@ -613,50 +565,6 @@ func TestStoreCrashGuards(t *testing.T) {
 			"mmdbwriter: invalid value reference 42",
 			func() { store.node(valueRef(42)) })
 	})
-}
-
-// TestCallerIdentityCacheUnlinksMidChainEntries pins the hand-rolled LRU
-// list's middle unlink, which production hits constantly but the small-limit
-// tests never reached. A broken middle unlink corrupts eviction order, which
-// releases a reference the cache still maps.
-func TestCallerIdentityCacheUnlinksMidChainEntries(t *testing.T) {
-	store := newValueStore()
-	store.callerIdentityLimit = 3
-
-	remember := func(value mmdbtype.DataType) {
-		ref, err := store.intern(value)
-		require.NoError(t, err)
-		store.rememberCallerIdentity(value, ref)
-		store.release(ref)
-	}
-	oldest := mmdbtype.Map{"name": mmdbtype.String("oldest")}
-	middle := mmdbtype.Map{"name": mmdbtype.String("middle")}
-	newest := mmdbtype.Map{"name": mmdbtype.String("newest")}
-	remember(oldest)
-	remember(middle)
-	remember(newest)
-
-	// A cache hit on the middle entry unlinks it from the middle of the
-	// chain and relinks it at the head.
-	ref, err := store.intern(middle)
-	require.NoError(t, err)
-	store.release(ref)
-	require.NoError(t, store.auditCallerIdentity(),
-		"the middle unlink corrupted the LRU chain")
-
-	// The next eviction must drop the untouched oldest entry.
-	remember(mmdbtype.Map{"name": mmdbtype.String("evictor")})
-	identityOf := func(value mmdbtype.DataType) dataIdentityKey {
-		identity, ok := dataIdentity(value)
-		require.True(t, ok)
-		return identity
-	}
-	assert.NotContains(t, store.callerByIdentity, identityOf(oldest),
-		"the eviction kept the oldest entry")
-	assert.Contains(t, store.callerByIdentity, identityOf(middle),
-		"the eviction dropped the touched entry")
-	assert.Contains(t, store.callerByIdentity, identityOf(newest))
-	require.NoError(t, store.audit(map[valueRef]uint64{}))
 }
 
 // TestEmptyContainersInternToDistinctRefs pins that kind alone separates two
@@ -833,37 +741,4 @@ func TestDataIdentityDistinguishesKindsAndRejectsNilUint128(t *testing.T) {
 	var uint128 *mmdbtype.Uint128
 	_, ok = dataIdentity(uint128)
 	assert.False(t, ok)
-}
-
-func TestValueStoreCallerIdentityCacheIsLRU(t *testing.T) {
-	store := newValueStore()
-	store.callerIdentityLimit = 2
-	first := mmdbtype.Map{"value": mmdbtype.String("first")}
-	second := mmdbtype.Map{"value": mmdbtype.String("second")}
-	third := mmdbtype.Map{"value": mmdbtype.String("third")}
-
-	firstRef, err := store.intern(first)
-	require.NoError(t, err)
-	store.rememberCallerIdentity(first, firstRef)
-	store.release(firstRef)
-	secondRef, err := store.intern(second)
-	require.NoError(t, err)
-	store.rememberCallerIdentity(second, secondRef)
-	store.release(secondRef)
-
-	// Refresh first so second becomes the least-recently-used entry.
-	firstRef, err = store.intern(first)
-	require.NoError(t, err)
-	store.release(firstRef)
-	thirdRef, err := store.intern(third)
-	require.NoError(t, err)
-	store.rememberCallerIdentity(third, thirdRef)
-	store.release(thirdRef)
-
-	firstIdentity, _ := dataIdentity(first)
-	secondIdentity, _ := dataIdentity(second)
-	thirdIdentity, _ := dataIdentity(third)
-	assert.Contains(t, store.callerByIdentity, firstIdentity)
-	assert.NotContains(t, store.callerByIdentity, secondIdentity)
-	assert.Contains(t, store.callerByIdentity, thirdIdentity)
 }
