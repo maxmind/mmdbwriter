@@ -31,6 +31,11 @@ type record struct {
 	recordType recordType
 }
 
+// isOwningNode reports whether the record directly owns a tree node.
+func (r *record) isOwningNode() bool {
+	return r.recordType == recordTypeNode || r.recordType == recordTypeFixedNode
+}
+
 // each node contains two records.
 type node struct {
 	children [2]record
@@ -694,28 +699,6 @@ func (t *Tree) expandPaths(index nodeIndex, currentDepth int) {
 		case recordTypeEmpty, recordTypeData, recordTypeAlias, recordTypeReserved:
 		}
 	}
-}
-
-// finalizeNode assigns node numbers depth-first. expandPaths must run before
-// this so compressed paths cannot be confused with node indexes.
-func (t *Tree) finalizeNode(index nodeIndex, currentNum int) int {
-	n := t.nodeAt(index)
-	// Allocation bounds every index below the uint32 sentinel.
-	t.nodeNumbers[index] = uint32(newNodeIndex(currentNum))
-	currentNum++
-
-	for i := range 2 {
-		switch n.children[i].recordType {
-		case recordTypeFixedNode,
-			recordTypeNode:
-			currentNum = t.finalizeNode(n.children[i].nodeIndex, currentNum)
-		case recordTypePath:
-			panic("compressed path found after expandPaths")
-		default:
-		}
-	}
-
-	return currentNum
 }
 
 func bitAt(ip [16]byte, depth int) byte {

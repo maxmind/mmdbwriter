@@ -25,7 +25,7 @@ func TestRecordValueRejectsCompressedPath(t *testing.T) {
 	require.EqualError(t, err, "compressed path record cannot be written before finalization")
 }
 
-func TestFinalizeNodeRejectsCompressedPath(t *testing.T) {
+func TestCanonicalizeSubtreesRejectsCompressedPath(t *testing.T) {
 	tree := &Tree{
 		nodeBlocks:         [][]node{make([]node, nodeBlockSize)},
 		nodeCountAllocated: 1,
@@ -33,9 +33,13 @@ func TestFinalizeNodeRejectsCompressedPath(t *testing.T) {
 	}
 	tree.nodeAt(rootNodeIndex).children[0] = record{recordType: recordTypePath}
 
-	require.PanicsWithValue(t, "compressed path found after expandPaths", func() {
-		tree.finalizeNode(rootNodeIndex, 0)
-	})
+	require.PanicsWithValue(
+		t,
+		"mmdbwriter: compressed path found after expandPaths at node 0 during subtree canonicalization",
+		func() {
+			tree.canonicalizeSubtrees()
+		},
+	)
 }
 
 // TestMaybeMergeChildren covers the reference-equality merge check. Sibling
