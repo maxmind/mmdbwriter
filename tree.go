@@ -347,8 +347,7 @@ func (t *Tree) normalizeLoadPrefix(prefix netip.Prefix) (netip.Prefix, error) {
 // Insert inserts a data value into the tree using the Tree's inserter function
 // (defaults to inserter.Replace).
 //
-// You must never modify the value after insertion. Values may be shared with
-// other records.
+// The API requires inserted values to remain immutable.
 //
 // This is not safe to call from multiple threads.
 func (t *Tree) Insert(prefix netip.Prefix, value mmdbtype.DataType) error {
