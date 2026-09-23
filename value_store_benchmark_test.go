@@ -47,27 +47,6 @@ func BenchmarkEnterpriseKeyPipeline(b *testing.B) {
 func BenchmarkValueStoreEnterpriseValue(b *testing.B) {
 	value := benchmarkEnterpriseValue()
 
-	b.Run("equal-shared-nested", func(b *testing.B) {
-		values := benchmarkShallowCopies(value, 8_192)
-		store := newValueStore()
-		canonical, err := store.intern(value)
-		if err != nil {
-			b.Fatal(err)
-		}
-		b.Cleanup(func() { store.release(canonical) })
-		b.ReportAllocs()
-		i := 0
-		for b.Loop() {
-			value := values[i%len(values)]
-			ref, err := store.intern(value)
-			if err != nil {
-				b.Fatal(err)
-			}
-			store.release(ref)
-			i++
-		}
-	})
-
 	b.Run("equal-deep-copy", func(b *testing.B) {
 		const valueCount = 512
 		values := make([]mmdbtype.DataType, valueCount)
