@@ -88,8 +88,9 @@ type Options struct {
 	RefcountAudit bool
 
 	// Inserter is the default pure function for Insert, InsertRange, and Load.
-	// Nil replaces the old value with the new value, as inserter.Replace does,
-	// without invoking a callback. Methods that take an inserter function
+	// Nil uses the direct-value path: it replaces the old value without callback
+	// or memoization overhead. Explicit inserter.Replace gives the same result
+	// but skips this optimization. Methods that take an inserter function
 	// ignore this option.
 	//
 	// inserter.PureFunc documents the rules an Inserter must follow: purity,
