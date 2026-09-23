@@ -1384,10 +1384,9 @@ func TestInserterResultWithPointerIsRejected(t *testing.T) {
 	require.ErrorContains(t, err, "unsupported MMDB data type mmdbtype.Pointer")
 }
 
-// TestReinsertingGetViewsPassesTheAudit pins the store-owned identity branch:
-// re-inserting a view obtained from Get, top-level or nested, is the obvious
-// real-world pattern and must keep the store balanced.
-func TestReinsertingGetViewsPassesTheAudit(t *testing.T) {
+// Reinserting store-owned views must reuse their references without hashing
+// their contents, while keeping reference counts balanced.
+func TestReinsertingGetViewsUsesIdentityCache(t *testing.T) {
 	tree, err := New(Options{
 		IPVersion:               4,
 		IncludeReservedNetworks: true,
@@ -1399,12 +1398,21 @@ func TestReinsertingGetViewsPassesTheAudit(t *testing.T) {
 	}))
 
 	_, topLevel := tree.Get(netip.MustParseAddr("1.2.3.4"))
+	hashCalls := 0
+	hash := tree.valueStore.hashFunc
+	tree.valueStore.hashFunc = func(data []byte) uint64 {
+		hashCalls++
+		return hash(data)
+	}
 	require.NoError(t, tree.Insert(netip.MustParsePrefix("2.2.2.0/24"), topLevel),
 		"re-inserting a top-level Get view failed")
+	assert.Zero(t, hashCalls, "a top-level Get view should bypass hashing")
 
+	hashCalls = 0
 	nested := topLevel.(mmdbtype.Map)["names"]
 	require.NoError(t, tree.Insert(netip.MustParsePrefix("3.3.3.0/24"), nested),
 		"re-inserting a nested Get view failed")
+	assert.Zero(t, hashCalls, "a nested Get view should bypass hashing")
 
 	_, got := tree.Get(netip.MustParseAddr("3.3.3.4"))
 	assert.Equal(t, mmdbtype.Map{"en": mmdbtype.String("shared")}, got)
