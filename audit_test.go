@@ -256,9 +256,9 @@ func TestFailedInsertsPassTheAudit(t *testing.T) {
 	}
 }
 
-// TestDirectValueFailureRunsAudit pins that validation failures after direct
-// value interning begins still surface an existing audit failure.
-func TestDirectValueFailureRunsAudit(t *testing.T) {
+// TestDefaultInserterFailureRunsAudit verifies that value validation failures
+// still surface an existing audit failure.
+func TestDefaultInserterFailureRunsAudit(t *testing.T) {
 	tests := []struct {
 		name   string
 		insert func(tree *Tree, value mmdbtype.DataType) error
@@ -302,7 +302,7 @@ func TestDirectValueFailureRunsAudit(t *testing.T) {
 			require.ErrorContains(t, err, "unsupported MMDB data type mmdbtype.Pointer")
 			var auditErr *RefcountAuditError
 			require.ErrorAs(t, err, &auditErr,
-				"the direct-value failure skipped the audit")
+				"the default inserter failure skipped the audit")
 		})
 	}
 }
@@ -390,36 +390,6 @@ func TestValueStoreAuditRejectsCorruptStores(t *testing.T) {
 				tree.valueStore.materializedByIdentity[identity] = outOfRangeRef(tree.valueStore)
 			},
 			want: "dead materialized ref",
-		},
-		{
-			name: "caller identity ref out of range",
-			corrupt: func(t *testing.T, tree *Tree) {
-				t.Helper()
-				value := mmdbtype.Map{"pinned": mmdbtype.String("x")}
-				require.NoError(t, tree.Insert(netip.MustParsePrefix("1.2.4.0/24"), value))
-				identity, ok := dataIdentity(value)
-				require.True(t, ok)
-				index, ok := tree.valueStore.callerByIdentity[identity]
-				require.True(t, ok, "the insert did not register the caller identity")
-				tree.valueStore.callerIdentity[index].ref = outOfRangeRef(tree.valueStore)
-			},
-			want: "invalid caller identity ref",
-		},
-		{
-			name: "high-bit caller identity ref",
-			corrupt: func(t *testing.T, tree *Tree) {
-				t.Helper()
-				value := mmdbtype.Map{"pinned": mmdbtype.String("x")}
-				require.NoError(t, tree.Insert(netip.MustParsePrefix("1.2.4.0/24"), value))
-				identity, ok := dataIdentity(value)
-				require.True(t, ok)
-				index, ok := tree.valueStore.callerByIdentity[identity]
-				require.True(t, ok, "the insert did not register the caller identity")
-				// The high bit makes the int conversion negative on 386, so a
-				// signed bounds check would pass and the audit would panic.
-				tree.valueStore.callerIdentity[index].ref = valueRef(1 << 31)
-			},
-			want: "invalid caller identity ref",
 		},
 		{
 			name: "high-bit materialized identity ref",
@@ -522,53 +492,6 @@ func TestValueStoreAuditRejectsCorruptStores(t *testing.T) {
 			want: "record holding value ref",
 		},
 		{
-			name: "caller identity index mismatch",
-			corrupt: func(t *testing.T, tree *Tree) {
-				t.Helper()
-				identity, ok := dataIdentity(mmdbtype.Map{"phantom": mmdbtype.String("x")})
-				require.True(t, ok)
-				tree.valueStore.callerByIdentity[identity] = 0
-			},
-			want: "entries but",
-		},
-		{
-			name: "invalid LRU link",
-			corrupt: func(t *testing.T, tree *Tree) {
-				t.Helper()
-				requireCallerIdentityEntry(t, tree)
-				tree.valueStore.callerIdentity[0].next = 7
-			},
-			want: "invalid LRU link at 7",
-		},
-		{
-			name: "inconsistent LRU entry",
-			corrupt: func(t *testing.T, tree *Tree) {
-				t.Helper()
-				requireCallerIdentityEntry(t, tree)
-				tree.valueStore.callerIdentity[0].prev = 3
-			},
-			want: "inconsistent entry at 0",
-		},
-		{
-			name: "incomplete LRU chain",
-			corrupt: func(t *testing.T, tree *Tree) {
-				t.Helper()
-				requireCallerIdentityEntry(t, tree)
-				tree.valueStore.callerIdentityTail = 5
-			},
-			want: "incomplete LRU chain",
-		},
-		{
-			name: "head left in an emptied cache",
-			corrupt: func(t *testing.T, tree *Tree) {
-				t.Helper()
-				requireCallerIdentityEntry(t, tree)
-				tree.valueStore.callerIdentity = nil
-				clear(tree.valueStore.callerByIdentity)
-			},
-			want: "head or tail in an empty cache",
-		},
-		{
 			name: "ref in the wrong hash bucket",
 			corrupt: func(t *testing.T, tree *Tree) {
 				t.Helper()
@@ -608,14 +531,6 @@ func TestValueStoreAuditRejectsCorruptStores(t *testing.T) {
 // subtest stays valid if the fixture grows.
 func outOfRangeRef(store *valueStore) valueRef {
 	return valueRef(uint32(len(store.nodes))) // #nosec G115 -- test stores stay tiny.
-}
-
-// requireCallerIdentityEntry asserts that the fixture insert registered a
-// caller-identity entry, so corruptions of entry zero test what they intend.
-func requireCallerIdentityEntry(t *testing.T, tree *Tree) {
-	t.Helper()
-	require.NotEmpty(t, tree.valueStore.callerIdentity,
-		"the fixture insert did not register a caller identity")
 }
 
 func requireDataRef(t *testing.T, tree *Tree) valueRef {

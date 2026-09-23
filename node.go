@@ -88,11 +88,7 @@ type insertRecord struct {
 	// store-materialized view when the insert began from an interned
 	// reference, as when loading.
 	valueView mmdbtype.DataType
-	// callerValue is the caller's object for a direct insert. Its identity is
-	// registered only after the insert succeeds, so a failed insert cannot
-	// serve stale data if the caller mutates and retries the object.
-	callerValue mmdbtype.DataType
-	memo        map[valueRef]valueRef
+	memo      map[valueRef]valueRef
 
 	prefixLen int
 	ip        [16]byte

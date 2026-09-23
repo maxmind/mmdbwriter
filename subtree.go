@@ -169,7 +169,7 @@ func subtreeIPv4Root(tree *Tree) nodeIndex {
 }
 
 // visit propagates proof of uniqueness from data records with a sole owner.
-// Container and caller-cache references can only prevent this shortcut from
+// Container references can only prevent this shortcut from
 // firing. Children are handled explicitly to avoid loop and key-packing overhead
 // on every node, including those for which the shortcut does not apply.
 func (s *subtreeTable) visit(index nodeIndex) (uint32, bool) {

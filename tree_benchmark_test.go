@@ -218,11 +218,9 @@ func BenchmarkTreeLoadExternalMMDB(b *testing.B) {
 
 // BenchmarkEnterpriseLoadThenOverlay models the production Enterprise build:
 // load a City-scale source database and rewrite every record through several
-// merge overlay passes. Overlay values are copied per insert because the
-// production passes decode a fresh value for every source network; presenting
-// one long-lived value per layer would overstate identity-cache hits. The
-// network count must stay large enough to exercise the caches at realistic
-// occupancy.
+// merge overlay passes. Copies inside the timed loop model the fresh input
+// allocations made by production passes for each source network. The timings
+// include that allocation cost as well as loading and insertion.
 func BenchmarkEnterpriseLoadThenOverlay(b *testing.B) {
 	base, overlays := enterpriseBenchmarkLayers(8_192)
 	source := newBenchmarkTree(b)

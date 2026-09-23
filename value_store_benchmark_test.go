@@ -47,42 +47,6 @@ func BenchmarkEnterpriseKeyPipeline(b *testing.B) {
 func BenchmarkValueStoreEnterpriseValue(b *testing.B) {
 	value := benchmarkEnterpriseValue()
 
-	// The caller-identity cache serves the repeated shallow copies; the other
-	// cases disable it to measure the content-dedup and full-intern paths.
-	b.Run("equal-shared-nested", func(b *testing.B) {
-		values := benchmarkShallowCopies(value, 8_192)
-		store := newValueStore()
-		canonical, err := store.intern(value)
-		if err != nil {
-			b.Fatal(err)
-		}
-		store.rememberCallerIdentity(value, canonical)
-		b.Cleanup(func() { store.release(canonical) })
-		// Warm the caller-identity cache with every copy, so every timed
-		// iteration measures a cache hit instead of a mix of insertions and
-		// hits.
-		for _, warm := range values {
-			ref, err := store.intern(warm)
-			if err != nil {
-				b.Fatal(err)
-			}
-			store.rememberCallerIdentity(warm, ref)
-			store.release(ref)
-		}
-		b.ReportAllocs()
-		i := 0
-		for b.Loop() {
-			value := values[i%len(values)]
-			ref, err := store.intern(value)
-			if err != nil {
-				b.Fatal(err)
-			}
-			store.rememberCallerIdentity(value, ref)
-			store.release(ref)
-			i++
-		}
-	})
-
 	b.Run("equal-deep-copy", func(b *testing.B) {
 		const valueCount = 512
 		values := make([]mmdbtype.DataType, valueCount)
@@ -90,12 +54,10 @@ func BenchmarkValueStoreEnterpriseValue(b *testing.B) {
 			values[index] = value.Copy()
 		}
 		store := newValueStore()
-		store.callerIdentityLimit = 0
 		canonical, err := store.intern(value)
 		if err != nil {
 			b.Fatal(err)
 		}
-		store.rememberCallerIdentity(value, canonical)
 		b.Cleanup(func() { store.release(canonical) })
 		b.ReportAllocs()
 		i := 0
@@ -105,7 +67,6 @@ func BenchmarkValueStoreEnterpriseValue(b *testing.B) {
 			if err != nil {
 				b.Fatal(err)
 			}
-			store.rememberCallerIdentity(value, ref)
 			store.release(ref)
 			i++
 		}
@@ -114,7 +75,6 @@ func BenchmarkValueStoreEnterpriseValue(b *testing.B) {
 	b.Run("unique-miss", func(b *testing.B) {
 		values := benchmarkUniqueValues(value, 8_192)
 		store := newValueStore()
-		store.callerIdentityLimit = 0
 		b.ReportAllocs()
 		i := 0
 		for b.Loop() {
@@ -123,7 +83,6 @@ func BenchmarkValueStoreEnterpriseValue(b *testing.B) {
 			if err != nil {
 				b.Fatal(err)
 			}
-			store.rememberCallerIdentity(value, ref)
 			store.release(ref)
 			i++
 		}
