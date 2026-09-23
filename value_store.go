@@ -18,7 +18,7 @@ import (
 
 // valueRef is a stable handle into a valueStore. Zero is the nil value. A
 // handle can be reused after its reference count reaches zero. Identity-cache
-// entries therefore own their reference or live no longer than the node.
+// entries therefore live no longer than the node.
 type valueRef uint32
 
 const nilValueRef valueRef = 0
@@ -180,7 +180,7 @@ type valueStore struct {
 	payloads byteArena
 	children refArena
 
-	// Cache only store-owned views, which merges reuse for unchanged values.
+	// Cache only store-owned views. Merges reuse them for unchanged values.
 	// Caching caller objects would pin fresh input graphs after interning.
 	// Load already reuses interned references by source offset.
 	materializedByIdentity map[dataIdentityKey]valueRef
