@@ -603,13 +603,13 @@ func TestTreeInsertFuncErrorLeavesExistingRecordUnchanged(t *testing.T) {
 func TestTreeInsertFuncReturnsErrorForNilUint128Result(t *testing.T) {
 	tests := []struct {
 		name          string
-		existing      func(*mmdbtype.Uint128) mmdbtype.DataType
+		existing      func(mmdbtype.Uint128) mmdbtype.DataType
 		result        func(*mmdbtype.Uint128) mmdbtype.DataType
 		expectedError string
 	}{
 		{
 			name: "direct",
-			existing: func(value *mmdbtype.Uint128) mmdbtype.DataType {
+			existing: func(value mmdbtype.Uint128) mmdbtype.DataType {
 				return value
 			},
 			result: func(value *mmdbtype.Uint128) mmdbtype.DataType {
@@ -619,7 +619,7 @@ func TestTreeInsertFuncReturnsErrorForNilUint128Result(t *testing.T) {
 		},
 		{
 			name: "nested",
-			existing: func(value *mmdbtype.Uint128) mmdbtype.DataType {
+			existing: func(value mmdbtype.Uint128) mmdbtype.DataType {
 				return mmdbtype.Map{"value": value}
 			},
 			result: func(value *mmdbtype.Uint128) mmdbtype.DataType {
@@ -634,8 +634,8 @@ func TestTreeInsertFuncReturnsErrorForNilUint128Result(t *testing.T) {
 			tree, err := New(Options{IPVersion: 4, IncludeReservedNetworks: true})
 			require.NoError(t, err)
 
-			value := mmdbtype.Uint128(*big.NewInt(42))
-			existing := test.existing(&value)
+			value := mmdbtype.Uint128{Low: 42}
+			existing := test.existing(value)
 			prefix := netip.MustParsePrefix("1.2.3.0/24")
 			require.NoError(t, tree.Insert(prefix, existing))
 
@@ -1322,8 +1322,6 @@ func TestStoreDecoderReleasesChildrenOnContainerErrors(t *testing.T) {
 // direct inserts validate the value and a failed insert leaves no live nodes
 // behind.
 func TestInsertRejectsUnsupportedValues(t *testing.T) {
-	negative := mmdbtype.Uint128(*big.NewInt(-1))
-	wide := mmdbtype.Uint128(*new(big.Int).Lsh(big.NewInt(1), 129))
 	tests := []struct {
 		name  string
 		value mmdbtype.DataType
@@ -1338,16 +1336,6 @@ func TestInsertRejectsUnsupportedValues(t *testing.T) {
 			name:  "nested pointer",
 			value: mmdbtype.Map{"p": mmdbtype.Pointer(7)},
 			want:  `interning value for map key "p"`,
-		},
-		{
-			name:  "negative Uint128",
-			value: &negative,
-			want:  "cannot intern a negative *mmdbtype.Uint128",
-		},
-		{
-			name:  "oversized Uint128",
-			value: &wide,
-			want:  "cannot intern a *mmdbtype.Uint128 wider than 128 bits",
 		},
 		{
 			name:  "nil Uint128",
@@ -1421,6 +1409,39 @@ func TestReinsertingGetViewsUsesIdentityCache(t *testing.T) {
 // TestEmptyContainersRoundTrip pins empty values through serialization and
 // load, the one case where node kind is the only discriminator between
 // identical empty payloads.
+func TestUint128TreeRoundTrip(t *testing.T) {
+	tree, err := New(Options{IPVersion: 4, IncludeReservedNetworks: true, BuildEpoch: 1})
+	require.NoError(t, err)
+	values := []mmdbtype.Uint128{
+		{},
+		{Low: math.MaxUint64},
+		{High: 1},
+		{High: 0x0102030405060708, Low: 0x090a0b0c0d0e0f10},
+		{High: math.MaxUint64, Low: math.MaxUint64},
+	}
+	for i, value := range values {
+		prefix := netip.PrefixFrom(netip.AddrFrom4([4]byte{1, 2, 3, byte(i)}), 32)
+		require.NoError(t, tree.Insert(prefix, mmdbtype.Map{"value": &value}))
+	}
+	var original bytes.Buffer
+	_, err = tree.WriteTo(&original)
+	require.NoError(t, err)
+	loaded, err := Load(
+		writeTempFile(t, original.Bytes()),
+		Options{IncludeReservedNetworks: true, BuildEpoch: 1},
+	)
+	require.NoError(t, err)
+	for i, expected := range values {
+		addr := netip.AddrFrom4([4]byte{1, 2, 3, byte(i)})
+		_, value := loaded.Get(addr)
+		assert.Equal(t, mmdbtype.Map{"value": expected}, value)
+	}
+	var rewritten bytes.Buffer
+	_, err = loaded.WriteTo(&rewritten)
+	require.NoError(t, err)
+	assert.Equal(t, original.Bytes(), rewritten.Bytes())
+}
+
 func TestEmptyContainersRoundTrip(t *testing.T) {
 	tree := newTestTree(t, "mmdbwriter-empty-containers")
 	value := mmdbtype.Map{
@@ -1481,7 +1502,8 @@ func TestLoadSharesRefsForSharedOffsets(t *testing.T) {
 func TestTreeInsertAndGet(t *testing.T) {
 	bigInt := big.Int{}
 	bigInt.SetString("1329227995784915872903807060280344576", 10)
-	uint128 := mmdbtype.Uint128(bigInt)
+	uint128, err := mmdbtype.Uint128FromBig(&bigInt)
+	require.NoError(t, err)
 	var allTypesGetSubmap mmdbtype.DataType = mmdbtype.Map{
 		"mapX": mmdbtype.Map{
 			"arrayX": mmdbtype.Slice{
@@ -1509,7 +1531,7 @@ func TestTreeInsertAndGet(t *testing.T) {
 		"float":       mmdbtype.Float32(1.1),
 		"int32":       mmdbtype.Int32(-268435456),
 		"map":         allTypesGetSubmap,
-		"uint128":     &uint128,
+		"uint128":     uint128,
 		"uint16":      mmdbtype.Uint64(0x64),
 		"uint32":      mmdbtype.Uint64(0x10000000),
 		"uint64":      mmdbtype.Uint64(0x1000000000000000),

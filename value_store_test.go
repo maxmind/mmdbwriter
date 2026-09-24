@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"math"
-	"math/big"
 	"reflect"
 	"strconv"
 	"testing"
@@ -156,7 +155,7 @@ func TestValueStoreInternUint32(t *testing.T) {
 }
 
 func TestValueStoreCanonicalizesAndMaterializesValues(t *testing.T) {
-	uint128 := mmdbtype.Uint128(*big.NewInt(1 << 20))
+	uint128 := mmdbtype.Uint128{Low: 1 << 20}
 	value := mmdbtype.Map{
 		"bool":    mmdbtype.Bool(true),
 		"bytes":   mmdbtype.Bytes{1, 2, 3},
@@ -168,7 +167,7 @@ func TestValueStoreCanonicalizesAndMaterializesValues(t *testing.T) {
 			mmdbtype.Uint16(16),
 			mmdbtype.Uint32(32),
 			mmdbtype.Uint64(64),
-			&uint128,
+			uint128,
 		},
 	}
 
@@ -215,6 +214,7 @@ func TestValueStoreNormalizesPointerBackedValues(t *testing.T) {
 	uint16Value := mmdbtype.Uint16(16)
 	uint32Value := mmdbtype.Uint32(32)
 	uint64Value := mmdbtype.Uint64(64)
+	uint128Value := mmdbtype.Uint128{High: 1, Low: 42}
 
 	tests := []struct {
 		name    string
@@ -232,6 +232,7 @@ func TestValueStoreNormalizesPointerBackedValues(t *testing.T) {
 		{name: "Uint16", value: uint16Value, pointer: &uint16Value},
 		{name: "Uint32", value: uint32Value, pointer: &uint32Value},
 		{name: "Uint64", value: uint64Value, pointer: &uint64Value},
+		{name: "Uint128", value: uint128Value, pointer: &uint128Value},
 	}
 
 	for _, test := range tests {
@@ -250,29 +251,18 @@ func TestValueStoreNormalizesPointerBackedValues(t *testing.T) {
 	}
 }
 
-func TestValueStoreRejectsInvalidUint128(t *testing.T) {
+func TestValueStoreUint128(t *testing.T) {
 	store := newValueStore()
-
-	negative := mmdbtype.Uint128(*big.NewInt(-1))
-	_, err := store.intern(&negative)
-	require.EqualError(t, err, "cannot intern a negative *mmdbtype.Uint128")
-
-	wide := mmdbtype.Uint128(*new(big.Int).Lsh(big.NewInt(1), 128))
-	_, err = store.intern(&wide)
-	require.EqualError(t, err, "cannot intern a *mmdbtype.Uint128 wider than 128 bits")
-
-	// A nested rejection must leave no live nodes behind.
-	_, err = store.intern(mmdbtype.Map{"value": &negative})
-	require.ErrorContains(t, err, "cannot intern a negative *mmdbtype.Uint128")
-	assert.Zero(t, liveValueNodeCount(store))
-
-	maxValue := mmdbtype.Uint128(
-		*new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 128), big.NewInt(1)),
-	)
-	ref, err := store.intern(&maxValue)
+	maxValue := mmdbtype.Uint128{High: math.MaxUint64, Low: math.MaxUint64}
+	ref, err := store.intern(maxValue)
 	require.NoError(t, err)
-	assert.True(t, maxValue.Equal(store.materialize(ref)))
+	pointerRef, err := store.intern(&maxValue)
+	require.NoError(t, err)
+	assert.Equal(t, ref, pointerRef)
+	assert.Equal(t, maxValue, store.materialize(ref))
 	store.release(ref)
+	store.release(pointerRef)
+	assert.Zero(t, liveValueNodeCount(store))
 }
 
 func TestValueStoreRejectsInvalidSliceChildren(t *testing.T) {
@@ -731,14 +721,15 @@ func liveValueNodeCount(store *valueStore) int {
 	return live
 }
 
-func TestDataIdentityDistinguishesKindsAndRejectsNilUint128(t *testing.T) {
+func TestDataIdentityDistinguishesKindsAndRejectsScalars(t *testing.T) {
 	bytesIdentity, ok := dataIdentity(mmdbtype.Bytes{})
 	require.True(t, ok)
 	sliceIdentity, ok := dataIdentity(mmdbtype.Slice{})
 	require.True(t, ok)
 	assert.NotEqual(t, bytesIdentity, sliceIdentity)
 
-	var uint128 *mmdbtype.Uint128
-	_, ok = dataIdentity(uint128)
-	assert.False(t, ok)
+	for _, value := range []mmdbtype.DataType{mmdbtype.Uint128{}, &mmdbtype.Uint128{}, (*mmdbtype.Uint128)(nil)} {
+		_, ok = dataIdentity(value)
+		assert.False(t, ok)
+	}
 }
