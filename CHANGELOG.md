@@ -108,10 +108,11 @@
   they are discarded.
 - Inserting a raw `mmdbtype.Pointer` value now returns an error. The previous
   writer emitted it as a literal, dangling pointer that no reader could resolve.
-- Inserting a negative or wider-than-128-bit `mmdbtype.Uint128` now returns an
-  error. The wire encoding holds only the magnitude, so a negative value
-  previously encoded as its absolute value and produced incorrect data.
-- The two validations above apply to direct inserts and to inserter results. A
+- `mmdbtype.Uint128` now uses `High` and `Low` uint64 fields instead of
+  `big.Int`. Use `Uint128FromBig` and `BigInt` for conversion. Decoding now
+  returns values instead of pointers. Thanks to Luiz Ferraz (@Fryuni) for the
+  suggestion. GitHub #39.
+- Raw-pointer validation applies to direct inserts and to inserter results. A
   custom inserter can receive an unsupported input value and must replace or
   discard it.
 - Reworked tree storage to use indexed arenas with stable node addresses. Merged
@@ -138,8 +139,6 @@
 - `New` now returns an error for a negative `Options.BuildEpoch`. It was
   previously written to the metadata as a very large `build_epoch`, producing a
   database that readers accept but that carries a nonsense build time.
-- `mmdbtype.Uint128.Equal` now returns false when either value is a nil
-  `*Uint128`. Previously a nil argument caused a panic.
 - `mmdbtype.Float32.Equal` and `mmdbtype.Float64.Equal` now compare the wire
   encoding rather than the Go value. `+0.0` and `-0.0` are no longer equal, and
   two NaNs with the same bit pattern now are. This makes equality agree with

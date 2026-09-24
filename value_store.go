@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"hash/maphash"
 	"math"
-	"math/big"
 	"reflect"
 	"slices"
 	"strings"
@@ -153,7 +152,6 @@ const (
 	dataIdentityBytes dataIdentityKind = iota
 	dataIdentityMap
 	dataIdentitySlice
-	dataIdentityUint128
 )
 
 // dataIdentityKey identifies a materialized Go object. All three fields are
@@ -238,11 +236,7 @@ func newValueStoreWithHash(hashFunc func([]byte) uint64) *valueStore {
 }
 
 // dereferenceDataType normalizes pointers to MMDB types whose DataType methods
-// have value receivers. The bool reports whether the pointer, if any, was
-// non-nil. Uint128 is intentionally left as a pointer because only its pointer
-// form implements DataType. *Uint128 is therefore exempt: it is returned
-// unchanged with a true result even when it is nil, so callers must nil-check
-// it themselves.
+// have value receivers. The bool reports whether the pointer, if any, was non-nil.
 func dereferenceDataType(value mmdbtype.DataType) (mmdbtype.DataType, bool) {
 	switch value := value.(type) {
 	case *mmdbtype.Bool:
@@ -268,6 +262,8 @@ func dereferenceDataType(value mmdbtype.DataType) (mmdbtype.DataType, bool) {
 	case *mmdbtype.Uint32:
 		return dereference(value)
 	case *mmdbtype.Uint64:
+		return dereference(value)
+	case *mmdbtype.Uint128:
 		return dereference(value)
 	default:
 		return value, true
@@ -314,13 +310,6 @@ func dataIdentity(value mmdbtype.DataType) (dataIdentityKey, bool) {
 		}
 		return dataIdentityKey{
 			ptr: sliceIdentityPointer(value), kind: dataIdentitySlice, size: len(value),
-		}, true
-	case *mmdbtype.Uint128:
-		if value == nil {
-			return dataIdentityKey{}, false
-		}
-		return dataIdentityKey{
-			ptr: reflect.ValueOf(value).Pointer(), kind: dataIdentityUint128,
 		}, true
 	default:
 		return dataIdentityKey{}, false
@@ -760,24 +749,7 @@ func kindOf(value mmdbtype.DataType) (valueKind, error) {
 		return valueKindUint32, nil
 	case mmdbtype.Uint64:
 		return valueKindUint64, nil
-	case *mmdbtype.Uint128:
-		// dereferenceDataType leaves *Uint128 alone, since only its pointer
-		// form implements DataType, so the nil check happens here.
-		if value == nil {
-			return valueKindInvalid, errors.New("cannot intern a nil *mmdbtype.Uint128")
-		}
-		// The wire encoding holds only the magnitude. A negative value would
-		// intern to the same node as its absolute value, and a wider value
-		// would produce output that readers reject.
-		integer := (*big.Int)(value)
-		if integer.Sign() < 0 {
-			return valueKindInvalid, errors.New("cannot intern a negative *mmdbtype.Uint128")
-		}
-		if integer.BitLen() > 128 {
-			return valueKindInvalid, errors.New(
-				"cannot intern a *mmdbtype.Uint128 wider than 128 bits",
-			)
-		}
+	case mmdbtype.Uint128:
 		return valueKindUint128, nil
 	default:
 		return valueKindInvalid, fmt.Errorf("unsupported MMDB data type %T", value)
@@ -865,9 +837,12 @@ func materializeScalar(kind valueKind, encoded []byte) mmdbtype.DataType {
 		}
 		return mmdbtype.Uint64(raw)
 	case valueKindUint128:
-		integer := new(big.Int).SetBytes(payload)
-		value := mmdbtype.Uint128(*integer)
-		return &value
+		var value mmdbtype.Uint128
+		for _, b := range payload {
+			value.High = value.High<<8 | value.Low>>56
+			value.Low = value.Low<<8 | uint64(b)
+		}
+		return value
 	default:
 		panic(fmt.Sprintf("cannot materialize scalar kind %d", kind))
 	}

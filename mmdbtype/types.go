@@ -3,6 +3,8 @@ package mmdbtype
 
 import (
 	"bytes"
+	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -934,37 +936,60 @@ func (t Uint64) WriteTo(w writer) (int64, error) {
 	return numBytes + int64(size), nil
 }
 
-// Uint128 is the MaxMind DB unsigned 128-bit integer type. A value stored in
-// a Tree must be in the range [0, 2^128-1]. Inserting a value outside the
-// range, or a nil *Uint128, returns an error. A custom inserter can still receive such a value
-// in its input, since only direct inserts and inserter results are
-// validated.
-type Uint128 big.Int
-
-var _ DataType = (*Uint128)(nil)
-
-// Copy make a deep copy of the Uint128.
-func (t *Uint128) Copy() DataType {
-	nv := big.Int{}
-	nv.Set((*big.Int)(t))
-	uv := Uint128(nv)
-	return &uv
+// Uint128 is the MaxMind DB unsigned 128-bit integer type.
+// Its value is High*2^64 + Low. The zero value is zero.
+type Uint128 struct {
+	High uint64
+	Low  uint64
 }
 
-// Equal reports whether other is a non-nil *Uint128 with the same value. A nil
-// *Uint128 is not equal to any value, including another nil *Uint128.
-func (t *Uint128) Equal(other DataType) bool {
-	otherT, ok := other.(*Uint128)
-	return ok && t != nil && otherT != nil && (*big.Int)(t).Cmp((*big.Int)(otherT)) == 0
+var _ DataType = Uint128{}
+
+// Uint128FromBig converts v without modifying it. Nil, negative, and values
+// wider than 128 bits return an error.
+func Uint128FromBig(v *big.Int) (Uint128, error) {
+	if v == nil {
+		return Uint128{}, errors.New("cannot convert a nil *big.Int to Uint128")
+	}
+	if v.Sign() < 0 {
+		return Uint128{}, errors.New("cannot convert a negative *big.Int to Uint128")
+	}
+	if v.BitLen() > 128 {
+		return Uint128{}, errors.New("cannot convert a *big.Int wider than 128 bits to Uint128")
+	}
+	var buf [16]byte
+	v.FillBytes(buf[:])
+	return Uint128{
+		High: binary.BigEndian.Uint64(buf[:8]),
+		Low:  binary.BigEndian.Uint64(buf[8:]),
+	}, nil
 }
 
-func (t *Uint128) size() int {
-	// We add 7 here as we want the ceiling of the division operation rather
-	// than the floor.
-	return ((*big.Int)(t).BitLen() + 7) / 8
+// BigInt returns an independent integer with the same value as t.
+func (t Uint128) BigInt() *big.Int {
+	var buf [16]byte
+	binary.BigEndian.PutUint64(buf[:8], t.High)
+	binary.BigEndian.PutUint64(buf[8:], t.Low)
+	return new(big.Int).SetBytes(buf[:])
 }
 
-func (t *Uint128) typeNum() typeNum {
+// Copy the value.
+func (t Uint128) Copy() DataType { return t }
+
+// Equal checks for equality.
+func (t Uint128) Equal(other DataType) bool {
+	otherT, ok := other.(Uint128)
+	return ok && t == otherT
+}
+
+func (t Uint128) size() int {
+	if t.High != 0 {
+		return 16 - bits.LeadingZeros64(t.High)/8
+	}
+	return 8 - bits.LeadingZeros64(t.Low)/8
+}
+
+func (t Uint128) typeNum() typeNum {
 	return typeNumUint128
 }
 
@@ -978,27 +1003,30 @@ func (t *Uint128) UnmarshalMaxMindDBCursor(
 			"reading Uint128: %w", mmdbdata.NormalizeUnmarshalError[Uint128](err),
 		)
 	}
-	v := new(big.Int)
-	v.SetUint64(hi)
-	v.Lsh(v, 64)
-	v.Add(v, new(big.Int).SetUint64(lo))
-	*t = Uint128(*v)
+	*t = Uint128{High: hi, Low: lo}
 	return next, nil
 }
 
 // WriteTo writes the value to w.
-func (t *Uint128) WriteTo(w writer) (int64, error) {
-	numBytes, err := writeCtrlByte(w, t.size(), t.typeNum())
+func (t Uint128) WriteTo(w writer) (int64, error) {
+	size := t.size()
+	numBytes, err := writeCtrlByte(w, size, t.typeNum())
 	if err != nil {
 		return numBytes, err
 	}
-
-	written, err := w.Write((*big.Int)(t).Bytes())
-	numBytes += int64(written)
-	if err != nil {
-		return numBytes, fmt.Errorf("writing uint128: %w", err)
+	// Match the other unsigned types: omit leading zero bytes.
+	for i := size; i > 0; i-- {
+		word := t.Low
+		shift := 8 * (i - 1)
+		if i > 8 {
+			word = t.High
+			shift -= 64
+		}
+		if err := w.WriteByte(byte((word >> shift) & 0xff)); err != nil {
+			return numBytes + int64(size-i), fmt.Errorf("writing uint128: %w", err)
+		}
 	}
-	return numBytes, nil
+	return numBytes + int64(size), nil
 }
 
 const (
@@ -1160,7 +1188,7 @@ func decodeDataTypeValue(
 	case mmdbdata.KindUint128:
 		var v Uint128
 		next, err = v.UnmarshalMaxMindDBCursor(cursor)
-		value = &v
+		value = v
 	case mmdbdata.KindBool:
 		var v Bool
 		next, err = v.UnmarshalMaxMindDBCursor(cursor)

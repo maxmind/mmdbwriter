@@ -3,7 +3,6 @@ package mmdbwriter
 import (
 	"bytes"
 	"fmt"
-	"math/big"
 	"slices"
 
 	"github.com/oschwald/maxminddb-golang/v2/mmdbdata"
@@ -165,11 +164,7 @@ func (d *storeDecoder) decodeRef(
 		var hi, lo uint64
 		hi, lo, next, err = cursor.ReadUint128()
 		if err == nil {
-			integer := new(big.Int).SetUint64(hi)
-			integer.Lsh(integer, 64)
-			integer.Add(integer, new(big.Int).SetUint64(lo))
-			value := mmdbtype.Uint128(*integer)
-			ref, err = d.store.internUncached(&value)
+			ref, err = d.store.internUncached(mmdbtype.Uint128{High: hi, Low: lo})
 		}
 	case mmdbdata.KindBool:
 		var value bool
