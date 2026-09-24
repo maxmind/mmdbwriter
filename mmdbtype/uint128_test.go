@@ -103,6 +103,7 @@ func TestUint128DecodePreservesReceiverOnError(t *testing.T) {
 
 type uint128FailingWriter struct {
 	*dataWriter
+
 	remaining int
 	failure   error
 }
