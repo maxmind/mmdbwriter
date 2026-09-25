@@ -136,6 +136,11 @@ type Tree struct {
 	root      nodeIndex
 	treeDepth int
 
+	// inserting protects traversal and temporary references from reentrant
+	// mutation by a caller-supplied insertion callback. Each insertion entry
+	// point must check and set it before preparing values or retaining references.
+	inserting bool
+
 	nodeCount int
 	inserter  inserter.PureFunc
 	// refcountAudit runs the full ownership audit after every insert that
@@ -370,6 +375,10 @@ func (t *Tree) Insert(prefix netip.Prefix, value mmdbtype.DataType) error {
 // values it may modify. The tree does not copy a value before the call, as not
 // every function needs a copy and copying costs real time.
 //
+// The function must not insert into, remove from, or call WriteTo on this tree.
+// Those calls return an error before making changes. The error's identity and
+// message are not API guarantees. Get and operations on other trees are allowed.
+//
 // The function is called separately for every covered record, except that a
 // reserved or aliased network inside the inserted network is skipped silently.
 // A nil insertFunc returns an error. If the function returns an error partway through the
@@ -405,8 +414,8 @@ func (t *Tree) InsertFunc(
 // must depend only on its arguments. It must not depend on invocation count,
 // order, or external mutable state. Repeated argument pairs may be memoized
 // during the insert, and a non-nil result may be shared by multiple records. A
-// nil pureFunc returns an error. The value ownership and partial-error rules
-// are the same as for InsertFunc.
+// nil pureFunc returns an error. The value ownership, callback restrictions,
+// and partial-error rules are the same as for InsertFunc.
 //
 // This is not safe to call from multiple threads.
 func (t *Tree) InsertPureFunc(
@@ -446,6 +455,12 @@ func (t *Tree) insert(
 	node nodeIndex,
 	value mmdbtype.DataType,
 ) error {
+	if t.inserting {
+		return errNestedInsert
+	}
+	t.inserting = true
+	defer func() { t.inserting = false }()
+
 	var err error
 	if recordType == recordTypeData {
 		prefix, err = t.normalizeInsertPrefix(prefix)
@@ -475,11 +490,19 @@ func (t *Tree) insert(
 
 // insertNormalizedRef inserts an already interned value. It borrows the
 // caller's reference, taking one of its own for the insert.
+// Load currently keeps the tree private until it returns. The insertion guard
+// also protects future callers that may already hold a reference to the tree.
 func (t *Tree) insertNormalizedRef(
 	prefix netip.Prefix,
 	pureFunc inserter.PureFunc,
 	value valueRef,
 ) error {
+	if t.inserting {
+		return errNestedInsert
+	}
+	t.inserting = true
+	defer func() { t.inserting = false }()
+
 	if t.treeDepth == 32 && !prefix.Addr().Is4() {
 		return errors.New("IPv6 prefixes cannot be inserted into an IPv4 tree")
 	}
@@ -705,7 +728,8 @@ func (t *Tree) InsertRange(
 // InsertedNetwork is the individual subnet being inserted, not the whole
 // range. Subnets are inserted sequentially, so metadata for a later subnet
 // reflects changes made by earlier subnets in the same call. A nil insertFunc
-// returns an error.
+// returns an error. The callback restrictions documented on InsertFunc apply
+// throughout the range.
 func (t *Tree) InsertRangeFunc(
 	start netip.Addr,
 	end netip.Addr,
@@ -728,7 +752,8 @@ func (t *Tree) InsertRangeFunc(
 // InsertRangePureFunc is like InsertPureFunc, except it inserts all subnets
 // within the range of IPs specified by `[start,end]`. Repeated argument pairs
 // may be memoized across the entire range, not just within one of its subnets.
-// A nil pureFunc returns an error.
+// A nil pureFunc returns an error. The callback restrictions documented on
+// InsertFunc apply throughout the range.
 func (t *Tree) InsertRangePureFunc(
 	start netip.Addr,
 	end netip.Addr,
@@ -756,6 +781,12 @@ func (t *Tree) insertRange(
 	node nodeIndex,
 	value mmdbtype.DataType,
 ) error {
+	if t.inserting {
+		return errNestedInsert
+	}
+	t.inserting = true
+	defer func() { t.inserting = false }()
+
 	if !start.IsValid() {
 		return errors.New("start IP is invalid")
 	}
@@ -891,7 +922,14 @@ func (t *Tree) finalize() {
 // Finalization uses temporary memory and caches numbering until the next
 // insertion. Tools that traverse the written search tree must support shared
 // nodes and backward references.
+//
+// WriteTo must not be called from an insertion callback on this tree. Such a
+// call returns an error without changing the tree or writing to w. The error's
+// identity and message are not API guarantees.
 func (t *Tree) WriteTo(w io.Writer) (int64, error) {
+	if t.inserting {
+		return 0, errWriteDuringInsert
+	}
 	if t.nodeCount == 0 {
 		t.finalize()
 	}
