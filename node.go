@@ -482,14 +482,8 @@ func (iRec *insertRecord) insertRecord(
 	newDepth int,
 ) error {
 	switch r.recordType {
-	case recordTypeNode:
-		err := iRec.insertNode(r.nodeIndex, newDepth)
-		if err != nil {
-			return iRec.mergeChildrenAfterError(r, err)
-		}
-		return iRec.maybeMergeChildren(r)
-	case recordTypeFixedNode:
-		return iRec.insertNode(r.nodeIndex, newDepth)
+	case recordTypeNode, recordTypeFixedNode:
+		return iRec.mergeChildrenAfterInsert(r, iRec.insertNode(r.nodeIndex, newDepth))
 	case recordTypePath:
 		index := r.nodeIndex
 		path := iRec.tree.pathAt(index)
@@ -555,11 +549,7 @@ func (iRec *insertRecord) insertRecord(
 		r.nodeIndex = iRec.tree.newNode([2]record{*r, *r})
 		r.value = nilValueRef
 		r.recordType = recordTypeNode
-		err := iRec.insertNode(r.nodeIndex, newDepth)
-		if err != nil {
-			return iRec.mergeChildrenAfterError(r, err)
-		}
-		return iRec.maybeMergeChildren(r)
+		return iRec.mergeChildrenAfterInsert(r, iRec.insertNode(r.nodeIndex, newDepth))
 	case recordTypeReserved:
 		if iRec.prefixLen >= newDepth {
 			return newReservedNetworkError(iRec.ip, newDepth, iRec.prefixLen, iRec.tree.treeDepth)
@@ -580,8 +570,17 @@ func (iRec *insertRecord) insertRecord(
 	}
 }
 
-func (iRec *insertRecord) mergeChildrenAfterError(r *record, insertErr error) error {
+// mergeChildrenAfterInsert restores record boundaries as either traversal
+// unwinds, including after a partial failure. Fixed nodes keep their identity
+// because aliases may refer to them.
+func (iRec *insertRecord) mergeChildrenAfterInsert(r *record, insertErr error) error {
+	if r.recordType == recordTypeFixedNode {
+		return insertErr
+	}
 	mergeErr := iRec.maybeMergeChildren(r)
+	if insertErr == nil {
+		return mergeErr
+	}
 	if mergeErr == nil {
 		return insertErr
 	}

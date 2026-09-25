@@ -141,6 +141,10 @@ type Tree struct {
 	// point must check and set it before preparing values or retaining references.
 	inserting bool
 
+	insertCursor insertCursor
+	// Tests retain the recursive root walk as an oracle for cursor insertion.
+	disableInsertCursor bool
+
 	nodeCount int
 	inserter  inserter.PureFunc
 	// refcountAudit runs the full ownership audit after every insert that
@@ -534,7 +538,7 @@ func (t *Tree) insertPrepared(
 	iRec.prefixLen = prefixLen
 	iRec.splitDepth = 0
 	iRec.insertedAs4 = prefix.Addr().Is4()
-	return iRec.insertNode(t.root, 0)
+	return t.insertWithCursor(iRec)
 }
 
 func (t *Tree) newInsertRecord(
