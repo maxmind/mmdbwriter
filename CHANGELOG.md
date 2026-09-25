@@ -71,6 +71,8 @@
 - Insertion callbacks can no longer insert into, remove from, or call `WriteTo`
   on the same tree. These calls return an error before making changes, including
   inserts into disjoint subtrees, to prevent traversal corruption.
+- Improved insertion performance, especially for networks inserted in address
+  order and databases loaded with `Load`.
 - Reworked value storage to intern every value node once in a content-addressed
   store: scalars, strings, and each nested map and slice. A seeded structural
   hash keys the store, and an exact comparison resolves each collision. Scalars

@@ -1,6 +1,8 @@
 package mmdbwriter
 
 import (
+	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -8,6 +10,81 @@ import (
 
 	"github.com/maxmind/mmdbwriter/v2/mmdbtype"
 )
+
+func TestMergeChildrenAfterInsertFixedNode(t *testing.T) {
+	for _, insertErr := range []error{nil, errors.New("insert failed")} {
+		t.Run(fmt.Sprintf("failure=%t", insertErr != nil), func(t *testing.T) {
+			tree, err := New(Options{IPVersion: 4, IncludeReservedNetworks: true})
+			require.NoError(t, err)
+			ref, err := tree.valueStore.intern(mmdbtype.String("equal"))
+			require.NoError(t, err)
+			tree.valueStore.retain(ref)
+			child := record{recordType: recordTypeData, value: ref}
+			index := tree.newNode([2]record{child, child})
+			parent := &tree.nodeAt(tree.root).children[0]
+			*parent = record{recordType: recordTypeFixedNode, nodeIndex: index}
+			// An alias needs this exact node even when both children are equal.
+			tree.nodeAt(tree.root).children[1] = record{
+				recordType: recordTypeAlias,
+				nodeIndex:  index,
+			}
+			iRec := insertRecord{tree: tree, store: tree.valueStore}
+			require.ErrorIs(t, iRec.mergeChildrenAfterInsert(parent, insertErr), insertErr)
+			require.Equal(t, recordTypeFixedNode, parent.recordType)
+			require.Equal(t, index, parent.nodeIndex)
+			require.Equal(t, [2]record{child, child}, tree.nodeAt(index).children)
+			require.NoError(t, tree.auditValueStore())
+		})
+	}
+}
+
+func TestMergeChildrenAfterInsertErrors(t *testing.T) {
+	for _, mergeFails := range []bool{false, true} {
+		for _, insertErr := range []error{nil, errors.New("insert failed")} {
+			t.Run(
+				fmt.Sprintf("mergeFailure=%t/insertFailure=%t", mergeFails, insertErr != nil),
+				func(t *testing.T) {
+					tree, err := New(Options{IPVersion: 4, IncludeReservedNetworks: true})
+					require.NoError(t, err)
+					child := record{recordType: recordTypeEmpty}
+					if mergeFails {
+						// Alias children are valid ownership edges, but cannot be merged.
+						child = record{recordType: recordTypeAlias, nodeIndex: tree.root}
+					}
+					parent := &tree.nodeAt(tree.root).children[0]
+					*parent = record{
+						recordType: recordTypeNode,
+						nodeIndex:  tree.newNode([2]record{child, child}),
+					}
+					iRec := insertRecord{tree: tree, store: tree.valueStore}
+					err = iRec.mergeChildrenAfterInsert(parent, insertErr)
+					if mergeFails {
+						const mergeMessage = "merging record type 3 is not implemented"
+						if insertErr == nil {
+							require.EqualError(t, err, mergeMessage)
+						} else {
+							require.ErrorIs(t, err, insertErr)
+							require.ErrorContains(
+								t,
+								err,
+								"restoring record boundaries after insert failure: "+mergeMessage,
+							)
+							var joined interface{ Unwrap() []error }
+							require.ErrorAs(t, err, &joined)
+							require.Len(t, joined.Unwrap(), 2)
+							require.EqualError(t, errors.Unwrap(joined.Unwrap()[1]), mergeMessage)
+						}
+						require.Equal(t, recordTypeNode, parent.recordType)
+					} else {
+						require.ErrorIs(t, err, insertErr)
+						require.Equal(t, recordTypeEmpty, parent.recordType)
+					}
+					require.NoError(t, tree.auditValueStore())
+				},
+			)
+		}
+	}
+}
 
 func TestNewNodeIndexRejectsSentinel(t *testing.T) {
 	// On 32-bit platforms the sentinel wraps to a negative int, which the

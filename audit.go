@@ -4,10 +4,9 @@ import (
 	"fmt"
 )
 
-// RefcountAuditError reports that the reference-count audit found the tree's
-// internal invariants violated. It signals a bug in this library or memory
-// corruption, not a problem with the caller's input, so retrying the failed
-// call cannot help.
+// RefcountAuditError reports that the audit found invalid tree structure or
+// value references. It signals a bug in this library or memory corruption, not
+// a problem with the caller's input, so retrying the failed call cannot help.
 type RefcountAuditError struct {
 	err error
 }
@@ -31,10 +30,10 @@ func (t *Tree) maybeAuditValueStore() error {
 	return nil
 }
 
-// auditValueStore checks every ownership edge in the tree and value DAG. It
-// is intentionally expensive. Production code reaches it through
-// maybeAuditValueStore after inserts that reach the store and successful
-// loads. Tests call it directly.
+// auditValueStore checks tree ownership, arena slots, the insertion cursor,
+// and references in the value DAG. It is intentionally expensive. Production
+// code reaches it through maybeAuditValueStore after inserts that reach the
+// store and successful loads. Tests call it directly.
 func (t *Tree) auditValueStore() error {
 	external := map[valueRef]uint64{}
 	seenNodes := map[nodeIndex]bool{}
@@ -128,7 +127,42 @@ func (t *Tree) auditValueStore() error {
 	); err != nil {
 		return err
 	}
+	if err := t.auditInsertCursor(); err != nil {
+		return err
+	}
 	return t.valueStore.audit(external)
+}
+
+// auditInsertCursor checks borrowed indexes against the owning path, not just
+// reachability: a retired slot reused elsewhere must not validate a stale cursor.
+// The caller has already checked that the owning tree itself is valid.
+func (t *Tree) auditInsertCursor() error {
+	c := &t.insertCursor
+	if !c.valid {
+		return nil
+	}
+	if c.length < 1 || c.length > t.treeDepth {
+		return fmt.Errorf(
+			"insertion cursor audit found invalid length %d (expected 1..%d)",
+			c.length,
+			t.treeDepth,
+		)
+	}
+	if c.nodes[0] != t.root {
+		return fmt.Errorf(
+			"insertion cursor audit found invalid root %d (expected %d)",
+			c.nodes[0],
+			t.root,
+		)
+	}
+	for depth := 1; depth < c.length; depth++ {
+		n := t.nodeAt(c.nodes[depth-1])
+		r := n.children[bitAt(c.last, depth-1)]
+		if !r.isOwningNode() || r.nodeIndex != c.nodes[depth] {
+			return fmt.Errorf("insertion cursor audit found stale path at depth %d", depth)
+		}
+	}
+	return nil
 }
 
 // auditTreeSlots accounts for every allocated slot, including retired slots
