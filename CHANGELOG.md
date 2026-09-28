@@ -150,6 +150,9 @@
   without changing insertion or lookup behavior. Tools that traverse the written
   search tree must support shared nodes and backward references, including in
   IPv4-only trees and trees with IPv4 aliasing disabled.
+- `WriteTo` now writes the most reused record values first, so they get shorter
+  pointers. A rewritten GeoIP Enterprise database is about 8% smaller. Lookup
+  results do not change.
 
 ## 1.2.0 (2026-01-14)
 

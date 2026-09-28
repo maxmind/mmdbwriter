@@ -71,16 +71,12 @@ func (dw *dataWriter) maybeWrite(ref valueRef) (int, error) {
 func (dw *dataWriter) writeValue(ref valueRef) (int64, error) {
 	node := dw.store.node(ref)
 	start := dw.Len()
-	if node.kind != valueKindMap && node.kind != valueKindSlice {
+	if !isContainer(node) {
 		written, err := dw.Write(dw.store.payload(node))
 		return int64(written), err
 	}
 
-	size := int(node.childrenLen)
-	if node.kind == valueKindMap {
-		size /= 2
-	}
-	if err := writeContainerHeader(dw, node.kind, size); err != nil {
+	if err := writeContainerHeader(dw, node.kind, containerEntries(node)); err != nil {
 		return int64(dw.Len() - start), err
 	}
 	for _, child := range dw.store.childRefs(node) {
@@ -140,6 +136,52 @@ func (dw *dataWriter) WriteOrWritePointerString(value mmdbtype.String) (int64, e
 	return value.WriteTo(dw)
 }
 
+func isContainer(node *valueNode) bool {
+	return node.kind == valueKindMap || node.kind == valueKindSlice
+}
+
+// containerEntries returns the number of entries in a map or slice. A map
+// stores each key and value as two children.
+func containerEntries(node *valueNode) int {
+	entries := int(node.childrenLen)
+	if node.kind == valueKindMap {
+		entries /= 2
+	}
+	return entries
+}
+
+// containerHeaderSize returns the number of bytes that writeContainerHeader
+// writes for a container with size entries. For a size that
+// writeContainerHeader rejects, it returns the size of the largest header.
+func containerHeaderSize(kind valueKind, size int) uint64 {
+	header := uint64(1)
+	if kind == valueKindSlice {
+		// A slice uses the extended type byte.
+		header++
+	}
+	_, _, sizeBytes := containerSize(size)
+	return header + uint64(sizeBytes) //nolint:gosec // sizeBytes is 0 to 3.
+}
+
+// maxContainerEntries is the largest entry count that 3 size bytes encode.
+const maxContainerEntries = 65821 + 1<<24 - 1
+
+// containerSize returns how a container's entry count is encoded: the value
+// for the control byte's size bits, the value of the size bytes that follow,
+// and how many size bytes follow.
+func containerSize(size int) (control byte, extra, sizeBytes int) {
+	switch {
+	case size < 29:
+		return byte(size), 0, 0 //nolint:gosec // this branch bounds size below 29
+	case size < 285:
+		return 29, size - 29, 1
+	case size < 65821:
+		return 30, size - 285, 2
+	default:
+		return 31, size - 65821, 3
+	}
+}
+
 func writeContainerHeader(
 	writer interface{ WriteByte(byte) error },
 	kind valueKind,
@@ -158,26 +200,11 @@ func writeContainerHeader(
 		first = typeNumber << 5
 	}
 
-	remaining := 0
-	remainingSize := 0
-	switch {
-	case size < 29:
-		first |= byte(size) //nolint:gosec // this branch bounds size below 29
-	case size < 285:
-		first |= 29
-		remaining = size - 29
-		remainingSize = 1
-	case size < 65821:
-		first |= 30
-		remaining = size - 285
-		remainingSize = 2
-	case size < 16843037:
-		first |= 31
-		remaining = size - 65821
-		remainingSize = 3
-	default:
+	if size > maxContainerEntries {
 		return fmt.Errorf("cannot store %d container entries", size)
 	}
+	control, remaining, remainingSize := containerSize(size)
+	first |= control
 	if err := writer.WriteByte(first); err != nil {
 		return fmt.Errorf("writing container control byte: %w", err)
 	}

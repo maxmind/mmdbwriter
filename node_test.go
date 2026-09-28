@@ -107,6 +107,7 @@ func TestCanonicalizeSubtreesRejectsCompressedPath(t *testing.T) {
 		nodeBlocks:         [][]node{make([]node, nodeBlockSize)},
 		nodeCountAllocated: 1,
 		nodeNumbers:        make([]uint32, 1),
+		valueStore:         newValueStore(),
 	}
 	tree.nodeAt(rootNodeIndex).children[0] = record{recordType: recordTypePath}
 

@@ -19,6 +19,7 @@ func newSubtreeTestTable(tree *Tree, capacity int) *subtreeTable {
 		slots:     make([]subtreeSlot, capacity),
 		seed:      maphash.MakeSeed(),
 		protected: noNodeIndex,
+		treeRefs:  make([]uint32, len(tree.valueStore.nodes)),
 	}
 }
 
@@ -83,7 +84,7 @@ func TestSubtreeCounter(t *testing.T) {
 				tree.expandPaths(tree.root, 0)
 				wantDistinct, wantTotal := referenceSubtreeCount(tree)
 				tree.nodeNumbers = make([]uint32, tree.nodeCountAllocated)
-				distinct := tree.canonicalizeSubtrees()
+				distinct, _, _ := tree.canonicalizeSubtrees()
 				require.Equal(t, wantDistinct, distinct)
 				require.Equal(t, wantTotal, subtreeReachableCount(tree, tree.root))
 				require.Less(t, distinct, wantTotal)

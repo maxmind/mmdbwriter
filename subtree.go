@@ -24,10 +24,12 @@ type subtreeSlot struct {
 	hash uint32
 }
 
-// subtreeTable retains only representative indexes and hash tags. Exact keys
-// are reconstructed from the resident tree on a hash match. It owns no nodes
-// or values and lives only for the canonicalization pass.
-// Reconstructing keys keeps each slot at eight bytes.
+// subtreeTable's hash slots retain only representative indexes and hash tags.
+// Exact keys are reconstructed from the resident tree on a hash match. It owns
+// no nodes or values and lives only for the canonicalization pass.
+// Reconstructing keys keeps each slot at eight bytes. The pass also counts the
+// records that hold each value and lists the record values. That list becomes
+// the tree's data order.
 // Unlike the paper's long-lived weak table, this table cannot keep otherwise
 // dead nodes alive: the tree already owns every node visited during the pass.
 type subtreeTable struct {
@@ -38,6 +40,10 @@ type subtreeTable struct {
 	used      int
 	distinct  uint32
 	protected nodeIndex
+	// treeRefs counts the resident data records that hold each value.
+	// records lists each distinct record value once, in first-seen order.
+	treeRefs []uint32
+	records  []valueRef
 }
 
 func (t *Tree) finalizeSubtrees() {
@@ -46,7 +52,9 @@ func (t *Tree) finalizeSubtrees() {
 	// unreachable/retired slots. Afterward, zero is also the root's number.
 	t.nodeNumbers = make([]uint32, t.nodeCountAllocated)
 	// The interning table is unreachable before the numbering array is made.
-	distinct := t.canonicalizeSubtrees()
+	distinct, records, treeRefs := t.canonicalizeSubtrees()
+	orderRecordValues(t.valueStore, records, treeRefs)
+	t.dataOrder = records
 	numbers := make([]uint32, distinct)
 	t.nodeCount = int(t.numberSubtree(t.root, numbers, 0))
 	for i, id := range t.nodeNumbers {
@@ -67,16 +75,23 @@ func (t *Tree) finalizeSubtrees() {
 // numbering replaces them, and insertion invalidates the cached numbering.
 //
 // See Sections 1-2 and 4 of the paper linked at the top of this file.
-func (t *Tree) canonicalizeSubtrees() int {
+//
+// The pass visits every data record, so it also returns the distinct record
+// values in first-seen order and the number of records that hold each value.
+func (t *Tree) canonicalizeSubtrees() (int, []valueRef, []uint32) {
 	table := subtreeTable{
 		tree:      t,
 		ids:       t.nodeNumbers,
 		slots:     make([]subtreeSlot, 256),
 		seed:      maphash.MakeSeed(),
 		protected: subtreeIPv4Root(t),
+		treeRefs:  make([]uint32, len(t.valueStore.nodes)),
+		// Every record value holds a value slot, so the number of used slots
+		// bounds the list.
+		records: make([]valueRef, 0, len(t.valueStore.nodes)-len(t.valueStore.freeRefs)),
 	}
 	table.visit(t.root)
-	return int(table.distinct)
+	return int(table.distinct), table.records, table.treeRefs
 }
 
 // MMDB nodes implicitly consume the next address bit. A parent with two equal
@@ -183,6 +198,7 @@ func (s *subtreeTable) visit(index nodeIndex) (uint32, bool) {
 	case recordTypeData:
 		key[0] = uint32(left.value)
 		unique = s.tree.valueStore.nodes[left.value].refCount == 1
+		s.countRecord(left.value)
 	case recordTypeNode, recordTypeFixedNode:
 		key[0], unique = s.visit(left.nodeIndex)
 	case recordTypeAlias:
@@ -197,6 +213,7 @@ func (s *subtreeTable) visit(index nodeIndex) (uint32, bool) {
 	case recordTypeData:
 		key[1] = uint32(right.value)
 		unique = unique || s.tree.valueStore.nodes[right.value].refCount == 1
+		s.countRecord(right.value)
 	case recordTypeNode, recordTypeFixedNode:
 		var rightUnique bool
 		key[1], rightUnique = s.visit(right.nodeIndex)
@@ -219,6 +236,13 @@ func (s *subtreeTable) visit(index nodeIndex) (uint32, bool) {
 	}
 	s.ids[index] = id
 	return id, unique
+}
+
+func (s *subtreeTable) countRecord(ref valueRef) {
+	if s.treeRefs[ref] == 0 {
+		s.records = append(s.records, ref)
+	}
+	s.treeRefs[ref]++
 }
 
 func (s *subtreeTable) intern(index nodeIndex, key subtreeKey, hash uint32) uint32 {

@@ -132,6 +132,9 @@ type Tree struct {
 	// nodeNumbers and nodeCount are invalidated by mutation and rebuilt lazily
 	// by finalize before writing.
 	nodeNumbers []uint32
+	// dataOrder lists the record values in the order that WriteTo writes
+	// them. finalize builds it, and mutation clears it with nodeNumbers.
+	dataOrder []valueRef
 	// freeNodes and freePaths hold retired slot indexes ready for reuse.
 	freeNodes []nodeIndex
 	freePaths []nodeIndex
@@ -923,6 +926,7 @@ func (t *Tree) expandTree() {
 func (t *Tree) invalidateFinalization() {
 	t.nodeCount = 0
 	t.nodeNumbers = nil
+	t.dataOrder = nil
 }
 
 // finalize prepares the tree for writing.
@@ -934,9 +938,9 @@ func (t *Tree) finalize() {
 // WriteTo writes the tree to the provided Writer. Identical search subtrees
 // share serialized nodes without changing mutable-tree ownership or lookup
 // behavior. Finalization expands compressed paths in the mutable tree.
-// Finalization uses temporary memory and caches numbering until the next
-// insertion. Tools that traverse the written search tree must support shared
-// nodes and backward references.
+// Finalization uses temporary memory. It caches the node numbering and the
+// order of the record values until the next insertion. Tools that traverse
+// the written search tree must support shared nodes and backward references.
 //
 // Neither an insertion callback nor w may call WriteTo on this tree. The writer
 // must also not insert into or remove from this tree. Such calls return an error
@@ -965,6 +969,14 @@ func (t *Tree) WriteTo(w io.Writer) (int64, error) {
 
 	usePointers := true
 	dataWriter := newDataWriter(t.valueStore, usePointers)
+
+	// Write the record values first, in the order finalize chose. The tree
+	// walk then only looks up their offsets.
+	for _, ref := range t.dataOrder {
+		if _, err := dataWriter.maybeWrite(ref); err != nil {
+			return 0, fmt.Errorf("writing record values: %w", err)
+		}
+	}
 
 	nextNumber := uint32(0)
 	numBytes, err := t.writeSubtree(buf, t.root, dataWriter, recordBuf, &nextNumber)

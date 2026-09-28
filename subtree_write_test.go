@@ -51,23 +51,33 @@ func subtreeTestTree(t *testing.T, opts Options) *Tree {
 // regular serializer can produce a trie for comparison with its directed
 // acyclic graph (DAG) output.
 // This test-only oracle bypasses canonicalization, but shares no hashing or
-// subtree-equivalence logic with it. Mutation or clearing nodeCount restores
-// normal finalization on the next write.
+// subtree-equivalence logic with it. It lists the record values in the same
+// first-seen order, so its data order matches normal finalization. Mutation or
+// clearing nodeCount restores normal finalization on the next write.
 func finalizeUnsharedTree(tree *Tree) {
 	tree.expandTree()
 	tree.nodeNumbers = make([]uint32, tree.nodeCountAllocated)
 	tree.nodeCount = 0
+	// The table only counts records. It does no hashing or interning.
+	table := subtreeTable{treeRefs: make([]uint32, len(tree.valueStore.nodes))}
 	var visit func(nodeIndex)
 	visit = func(index nodeIndex) {
 		tree.nodeNumbers[index] = uint32(newNodeIndex(tree.nodeCount))
 		tree.nodeCount++
 		for _, child := range tree.nodeAt(index).children {
-			if child.recordType == recordTypeNode || child.recordType == recordTypeFixedNode {
+			switch child.recordType {
+			case recordTypeData:
+				table.countRecord(child.value)
+			case recordTypeNode, recordTypeFixedNode:
 				visit(child.nodeIndex)
+			case recordTypeEmpty, recordTypeAlias, recordTypeReserved, recordTypePath,
+				recordTypeRetired:
 			}
 		}
 	}
 	visit(tree.root)
+	orderRecordValues(tree.valueStore, table.records, table.treeRefs)
+	tree.dataOrder = table.records
 }
 
 // compareSubtreeReaders keeps only one result per reader, so the same full
