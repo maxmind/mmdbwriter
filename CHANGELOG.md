@@ -21,13 +21,10 @@
     memo across the entire range, as does `Tree.InsertRange` when
     `Options.Inserter` is set. With the default nil inserter, `Tree.InsertRange`
     takes the direct-value path and there is no memo.
-  - **This change does not fail to compile.** `Options.Inserter` keeps the
-    two-argument shape it had in v1, so an existing inserter still compiles, but
-    it is now memoized: it runs once per distinct existing value instead of once
-    per covered record. An inserter that counts calls, allocates identifiers, or
-    reads mutable state changes behavior with no compile error. Pass such a
-    function to `Tree.InsertFunc` or `Tree.InsertRangeFunc` instead, which never
-    memoize.
+  - `Options.Inserter` callbacks are now memoized. Existing callbacks still
+    compile, but those that count calls, allocate identifiers, or depend on
+    mutable state must instead use `Tree.InsertFunc` or `Tree.InsertRangeFunc`,
+    which run for every covered record.
   - `Func` also receives an `inserter.Metadata` describing the insertion and the
     existing tree record: `InsertedNetwork`, `ExistingDepth`, `ExistingAddr`,
     `TreeDepth`, and the derived `InsertedDepth()` and `ExistingNetwork()`. Only
@@ -68,9 +65,8 @@
     more error kinds can fire mid-walk.
 - Reduced allocations on the tree insert and serialization hot paths, lowering
   memory pressure and GC overhead during large builds.
-- Insertion callbacks can no longer insert into, remove from, or call `WriteTo`
-  on the same tree. These calls return an error before making changes, including
-  inserts into disjoint subtrees, to prevent traversal corruption.
+- Inserting into or writing the same tree from an insertion callback or custom
+  writer now returns an error, preventing tree corruption.
 - Improved insertion performance, especially for networks inserted in address
   order and databases loaded with `Load`.
 - Reworked value storage to intern every value node once in a content-addressed

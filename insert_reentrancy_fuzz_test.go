@@ -66,12 +66,10 @@ func FuzzRejectReentrantMutation(f *testing.F) {
 			case handle:
 				require.NoError(t, err)
 				require.NoError(t, control.Insert(outer, value))
-			case operation%11 == 10:
-				require.ErrorIs(t, err, errWriteDuringInsert)
 			default:
-				require.ErrorIs(t, err, errNestedInsert)
+				require.ErrorIs(t, err, errReentrantMutation)
 			}
-			require.False(t, tree.inserting)
+			require.False(t, tree.mutating)
 			require.NoError(t, tree.auditValueStore())
 			for _, addr := range addresses {
 				expectedPrefix, expectedValue := control.Get(addr)

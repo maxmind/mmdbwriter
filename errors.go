@@ -13,9 +13,8 @@ import (
 // it is equivalent to inserter.Replace.
 var errNilInserterFunc = errors.New("inserter function must not be nil")
 
-var (
-	errNestedInsert      = errors.New("cannot insert into a tree from an insert callback")
-	errWriteDuringInsert = errors.New("cannot write a tree from an insert callback")
+var errReentrantMutation = errors.New(
+	"cannot insert into or write a tree during an active insert or write",
 )
 
 // AliasedNetworkError is returned when inserting a aliased network into

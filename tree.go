@@ -112,6 +112,11 @@ type Options struct {
 // A Tree is not safe for concurrent use. Callers sharing a Tree between
 // goroutines must serialize calls to its methods, including Get. Lookups can
 // update internal caches even when no inserts are running.
+//
+// Insertion callbacks and writers passed to WriteTo must not insert into,
+// remove from, or call WriteTo on the same tree. Those calls return an error
+// before making changes. Defer such operations until the outer call returns.
+// Synchronous Get calls and operations on other trees are allowed.
 type Tree struct {
 	buildEpoch              int64
 	databaseType            string
@@ -138,10 +143,11 @@ type Tree struct {
 	root      nodeIndex
 	treeDepth int
 
-	// inserting protects traversal and temporary references from reentrant
-	// mutation by a caller-supplied insertion callback. Each insertion entry
-	// point must check and set it before preparing values or retaining references.
-	inserting bool
+	// mutating protects traversal and temporary references from reentrant
+	// mutation by insertion callbacks and writers. Each entry point must check
+	// and set it before preparing values, retaining references, or finalizing
+	// the tree. It does not synchronize concurrent access.
+	mutating bool
 
 	insertCursor insertCursor
 	// Tests retain the recursive root walk as an oracle for cursor insertion.
@@ -459,11 +465,11 @@ func (t *Tree) insert(
 	node nodeIndex,
 	value mmdbtype.DataType,
 ) error {
-	if t.inserting {
-		return errNestedInsert
+	if t.mutating {
+		return errReentrantMutation
 	}
-	t.inserting = true
-	defer func() { t.inserting = false }()
+	t.mutating = true
+	defer func() { t.mutating = false }()
 
 	var err error
 	if recordType == recordTypeData {
@@ -501,11 +507,11 @@ func (t *Tree) insertNormalizedRef(
 	pureFunc inserter.PureFunc,
 	value valueRef,
 ) error {
-	if t.inserting {
-		return errNestedInsert
+	if t.mutating {
+		return errReentrantMutation
 	}
-	t.inserting = true
-	defer func() { t.inserting = false }()
+	t.mutating = true
+	defer func() { t.mutating = false }()
 
 	if t.treeDepth == 32 && !prefix.Addr().Is4() {
 		return errors.New("IPv6 prefixes cannot be inserted into an IPv4 tree")
@@ -785,11 +791,11 @@ func (t *Tree) insertRange(
 	node nodeIndex,
 	value mmdbtype.DataType,
 ) error {
-	if t.inserting {
-		return errNestedInsert
+	if t.mutating {
+		return errReentrantMutation
 	}
-	t.inserting = true
-	defer func() { t.inserting = false }()
+	t.mutating = true
+	defer func() { t.mutating = false }()
 
 	if !start.IsValid() {
 		return errors.New("start IP is invalid")
@@ -924,13 +930,18 @@ func (t *Tree) finalize() {
 // insertion. Tools that traverse the written search tree must support shared
 // nodes and backward references.
 //
-// WriteTo must not be called from an insertion callback on this tree. Such a
-// call returns an error without changing the tree or writing to w. The error's
-// identity and message are not API guarantees.
+// Neither an insertion callback nor w may call WriteTo on this tree. The writer
+// must also not insert into or remove from this tree. Such calls return an error
+// without making changes or writing output. The error's identity and message
+// are not API guarantees. The writer may call Get synchronously or operate on
+// other trees.
 func (t *Tree) WriteTo(w io.Writer) (int64, error) {
-	if t.inserting {
-		return 0, errWriteDuringInsert
+	if t.mutating {
+		return 0, errReentrantMutation
 	}
+	t.mutating = true
+	// Register this first so deferred buffer flushing also stays guarded.
+	defer func() { t.mutating = false }()
 	if t.nodeCount == 0 {
 		t.finalize()
 	}

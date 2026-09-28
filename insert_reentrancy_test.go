@@ -101,7 +101,7 @@ func TestInsertReentrancyCallbackRestoresInserter(t *testing.T) {
 				default:
 					require.NoError(t, insert())
 				}
-				require.False(t, tree.inserting)
+				require.False(t, tree.mutating)
 				require.NoError(t, tree.Insert(prefix, mmdbtype.Uint32(7)))
 				_, value := tree.Get(prefix.Addr())
 				require.Equal(t, mmdbtype.Uint32(99), value)
@@ -175,7 +175,6 @@ func rejectReentrantMutation(t *testing.T, tree *Tree, prefix netip.Prefix, oper
 		return mmdbtype.Uint32(6), nil
 	}
 	var err error
-	want := errNestedInsert
 	switch operation % 11 {
 	case 0:
 		err = tree.Insert(prefix, mmdbtype.Uint32(6))
@@ -204,10 +203,14 @@ func rejectReentrantMutation(t *testing.T, tree *Tree, prefix netip.Prefix, oper
 		n, err = tree.WriteTo(writer)
 		require.Zero(t, n)
 		require.Zero(t, writer.calls)
-		want = errWriteDuringInsert
 	}
-	require.ErrorIs(t, err, want)
-	require.Equal(t, want, err, "a nested call must not audit the unfinished outer insert")
+	require.ErrorIs(t, err, errReentrantMutation)
+	require.Equal(
+		t,
+		errReentrantMutation,
+		err,
+		"a nested call must not audit an unfinished mutation",
+	)
 	require.Zero(t, calls)
 	return err
 }
@@ -229,7 +232,7 @@ func TestRejectReentrantMutationEntryPoints(t *testing.T) {
 			err := insertReentrancyCallback(t, tree, netip.PrefixFrom(start, 32), method,
 				func(_, _ mmdbtype.DataType, _ inserter.Metadata) (mmdbtype.DataType, error) {
 					calls++
-					require.True(t, tree.inserting)
+					require.True(t, tree.mutating)
 					_, expectedValue := tree.Get(start.Next())
 					nodes := slices.Clone(tree.valueStore.nodes)
 					count := tree.nodeCountAllocated
@@ -247,7 +250,7 @@ func TestRejectReentrantMutationEntryPoints(t *testing.T) {
 					require.ErrorIs(
 						t,
 						tree.Insert(netip.PrefixFrom(start, 32), mmdbtype.Pointer(1)),
-						errNestedInsert,
+						errReentrantMutation,
 					)
 					require.Equal(t, nodes, tree.valueStore.nodes)
 					require.Equal(t, count, tree.nodeCountAllocated)
@@ -263,7 +266,7 @@ func TestRejectReentrantMutationEntryPoints(t *testing.T) {
 				method == "InsertRangePureFunc" {
 				require.Equal(t, 3, calls, "guard must span every decomposed range prefix")
 			}
-			require.False(t, tree.inserting)
+			require.False(t, tree.mutating)
 			_, value := tree.Get(start)
 			require.Equal(t, mmdbtype.Uint32(9), value)
 			require.NoError(t, tree.auditValueStore())
@@ -358,10 +361,10 @@ func TestRejectReentrantMutationRegressions(t *testing.T) {
 											netip.PrefixFrom(addr, bits),
 											values[i],
 										)
-										require.ErrorIs(t, nestedErr, errNestedInsert)
+										require.ErrorIs(t, nestedErr, errReentrantMutation)
 									}
 								}
-								require.ErrorIs(t, nestedErr, errNestedInsert)
+								require.ErrorIs(t, nestedErr, errReentrantMutation)
 								if handle {
 									return mmdbtype.Uint32(5), nil
 								}
@@ -372,7 +375,7 @@ func TestRejectReentrantMutationRegressions(t *testing.T) {
 							require.NoError(t, err)
 							require.NoError(t, control.Insert(outer, mmdbtype.Uint32(5)))
 						} else {
-							require.ErrorIs(t, err, errNestedInsert)
+							require.ErrorIs(t, err, errReentrantMutation)
 						}
 						requireReentrancyTreesEqual(t, tree, control, start, far)
 						// The following insertion must reach its own subtree.
@@ -395,7 +398,7 @@ func TestRejectReentrantMutationRegressions(t *testing.T) {
 
 func requireReentrancyTreesEqual(t *testing.T, tree, control *Tree, addresses ...netip.Addr) {
 	t.Helper()
-	require.False(t, tree.inserting)
+	require.False(t, tree.mutating)
 	require.NoError(t, tree.auditValueStore())
 	require.NoError(t, control.auditValueStore())
 	for _, addr := range addresses {
@@ -430,14 +433,14 @@ func TestReentrantInsertPartialError(t *testing.T) {
 			}
 			return nil, tree.Insert(target, mmdbtype.Uint32(99))
 		})
-	require.ErrorIs(t, err, errNestedInsert)
+	require.ErrorIs(t, err, errReentrantMutation)
 	require.Equal(t, 2, calls)
 	for _, addr := range []netip.Addr{start, start.Next()} {
 		prefix, value := tree.Get(addr)
 		require.Equal(t, target, prefix)
 		require.Equal(t, mmdbtype.Uint32(2), value)
 	}
-	require.False(t, tree.inserting)
+	require.False(t, tree.mutating)
 	require.NoError(t, tree.auditValueStore())
 	require.NoError(t, tree.Insert(target, mmdbtype.Uint32(3)))
 }
@@ -454,7 +457,7 @@ func TestInsertionGuardClearsAfterPanic(t *testing.T) {
 						panic("callback panic")
 					}))
 			})
-			require.False(t, tree.inserting)
+			require.False(t, tree.mutating)
 			require.NoError(t, tree.Insert(prefix, mmdbtype.Uint32(1)))
 			require.NoError(t, tree.auditValueStore())
 			writeTreeBytes(t, tree)
