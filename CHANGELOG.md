@@ -21,13 +21,13 @@
     memo across the entire range, as does `Tree.InsertRange` when
     `Options.Inserter` is set. With the default nil inserter, `Tree.InsertRange`
     takes the direct-value path and there is no memo.
-  - **This is the one change that does not fail to compile.** `Options.Inserter`
-    keeps the two-argument shape it had in v1, so an existing inserter still
-    compiles, but it is now memoized: it runs once per distinct existing value
-    instead of once per covered record. An inserter that counts calls, allocates
-    identifiers, or reads mutable state changes behavior with no compile error.
-    Pass such a function to `Tree.InsertFunc` or `Tree.InsertRangeFunc` instead,
-    which never memoize.
+  - **This change does not fail to compile.** `Options.Inserter` keeps the
+    two-argument shape it had in v1, so an existing inserter still compiles, but
+    it is now memoized: it runs once per distinct existing value instead of once
+    per covered record. An inserter that counts calls, allocates identifiers, or
+    reads mutable state changes behavior with no compile error. Pass such a
+    function to `Tree.InsertFunc` or `Tree.InsertRangeFunc` instead, which never
+    memoize.
   - `Func` also receives an `inserter.Metadata` describing the insertion and the
     existing tree record: `InsertedNetwork`, `ExistingDepth`, `ExistingAddr`,
     `TreeDepth`, and the derived `InsertedDepth()` and `ExistingNetwork()`. Only
@@ -108,10 +108,10 @@
   they are discarded.
 - Inserting a raw `mmdbtype.Pointer` value now returns an error. The previous
   writer emitted it as a literal, dangling pointer that no reader could resolve.
-- `mmdbtype.Uint128` now uses `High` and `Low` uint64 fields instead of
-  `big.Int`. Use `Uint128FromBig` and `BigInt` for conversion. Decoding now
-  returns values instead of pointers. Thanks to Luiz Ferraz (@Fryuni) for the
-  suggestion. GitHub #39.
+- `mmdbtype.Uint128` now uses `High` and `Low` uint64 fields, with
+  `Uint128FromBig` and `BigInt` conversions. Returned values and existing
+  inserter arguments are now `Uint128`; update pointer type assertions
+  accordingly. Thanks to Luiz Ferraz (@Fryuni). GitHub #39.
 - Raw-pointer validation applies to direct inserts and to inserter results. A
   custom inserter can receive an unsupported input value and must replace or
   discard it.
