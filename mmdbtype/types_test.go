@@ -288,9 +288,9 @@ func TestUint128(t *testing.T) {
 	bits := 128
 
 	uints := map[string]DataType{
-		"00" + ctrlByte:          (*Uint128)(big.NewInt(0)),
-		"02" + ctrlByte + "01f4": (*Uint128)(big.NewInt(500)),
-		"02" + ctrlByte + "2a78": (*Uint128)(big.NewInt(10872)),
+		"00" + ctrlByte:          Uint128{},
+		"02" + ctrlByte + "01f4": Uint128{Low: 500},
+		"02" + ctrlByte + "2a78": Uint128{Low: 10872},
 	}
 	for i := 1; i <= bits/8; i++ {
 		expected := &big.Int{}
@@ -298,7 +298,9 @@ func TestUint128(t *testing.T) {
 		expected = expected.Sub(expected, big.NewInt(1))
 		input := hex.EncodeToString([]byte{byte(i)}) + ctrlByte + strings.Repeat("ff", i)
 
-		uints[input] = (*Uint128)(expected)
+		value, err := Uint128FromBig(expected)
+		require.NoError(t, err)
+		uints[input] = value
 	}
 
 	validateEncoding(t, uints)
@@ -473,31 +475,19 @@ func TestEqual(t *testing.T) {
 		},
 		{
 			name:   "Uint128 same",
-			a:      (*Uint128)(big.NewInt(1)),
-			b:      (*Uint128)(big.NewInt(1)),
+			a:      Uint128{Low: 1},
+			b:      Uint128{Low: 1},
 			expect: true,
 		},
 		{
 			name:   "Uint128 different",
-			a:      (*Uint128)(big.NewInt(1)),
-			b:      (*Uint128)(big.NewInt(0)),
+			a:      Uint128{Low: 1},
+			b:      Uint128{},
 			expect: false,
 		},
 		{
 			name:   "Uint128 compared to nil Uint128",
-			a:      (*Uint128)(big.NewInt(1)),
-			b:      (*Uint128)(nil),
-			expect: false,
-		},
-		{
-			name:   "nil Uint128 compared to Uint128",
-			a:      (*Uint128)(nil),
-			b:      (*Uint128)(big.NewInt(1)),
-			expect: false,
-		},
-		{
-			name:   "nil Uint128 compared to nil Uint128",
-			a:      (*Uint128)(nil),
+			a:      Uint128{Low: 1},
 			b:      (*Uint128)(nil),
 			expect: false,
 		},

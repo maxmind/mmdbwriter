@@ -164,8 +164,8 @@ func (m Metadata) ExistingNetwork() netip.Prefix {
 // return errors do not apply to a panic.
 //
 // Only direct inserts and a PureFunc's result are validated, so a PureFunc can
-// receive an unsupported input value, such as a raw mmdbtype.Pointer or an
-// out-of-range mmdbtype.Uint128, and must replace or discard it.
+// receive an unsupported input value, such as a raw mmdbtype.Pointer, and
+// must replace or discard it.
 type PureFunc func(
 	existingValue,
 	newValue mmdbtype.DataType,

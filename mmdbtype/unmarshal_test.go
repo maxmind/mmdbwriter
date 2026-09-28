@@ -3,7 +3,6 @@ package mmdbtype
 import (
 	"bytes"
 	"math"
-	"math/big"
 	"reflect"
 	"testing"
 
@@ -19,7 +18,7 @@ type cursorDataType interface {
 }
 
 func TestCursorDataTypesRoundTrip(t *testing.T) {
-	uint128 := Uint128(*new(big.Int).Lsh(big.NewInt(1), 100))
+	uint128 := Uint128{High: 1 << 36}
 	tests := []struct {
 		name        string
 		value       DataType
@@ -36,7 +35,7 @@ func TestCursorDataTypesRoundTrip(t *testing.T) {
 		{"Uint16", Uint16(42), func() cursorDataType { return new(Uint16) }},
 		{"Uint32", Uint32(1 << 20), func() cursorDataType { return new(Uint32) }},
 		{"Uint64", Uint64(1 << 40), func() cursorDataType { return new(Uint64) }},
-		{"Uint128", &uint128, func() cursorDataType { return new(Uint128) }},
+		{"Uint128", uint128, func() cursorDataType { return new(Uint128) }},
 	}
 
 	for _, test := range tests {

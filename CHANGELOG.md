@@ -21,13 +21,13 @@
     memo across the entire range, as does `Tree.InsertRange` when
     `Options.Inserter` is set. With the default nil inserter, `Tree.InsertRange`
     takes the direct-value path and there is no memo.
-  - **This is the one change that does not fail to compile.** `Options.Inserter`
-    keeps the two-argument shape it had in v1, so an existing inserter still
-    compiles, but it is now memoized: it runs once per distinct existing value
-    instead of once per covered record. An inserter that counts calls, allocates
-    identifiers, or reads mutable state changes behavior with no compile error.
-    Pass such a function to `Tree.InsertFunc` or `Tree.InsertRangeFunc` instead,
-    which never memoize.
+  - **This change does not fail to compile.** `Options.Inserter` keeps the
+    two-argument shape it had in v1, so an existing inserter still compiles, but
+    it is now memoized: it runs once per distinct existing value instead of once
+    per covered record. An inserter that counts calls, allocates identifiers, or
+    reads mutable state changes behavior with no compile error. Pass such a
+    function to `Tree.InsertFunc` or `Tree.InsertRangeFunc` instead, which never
+    memoize.
   - `Func` also receives an `inserter.Metadata` describing the insertion and the
     existing tree record: `InsertedNetwork`, `ExistingDepth`, `ExistingAddr`,
     `TreeDepth`, and the derived `InsertedDepth()` and `ExistingNetwork()`. Only
@@ -108,12 +108,13 @@
   they are discarded.
 - Inserting a raw `mmdbtype.Pointer` value now returns an error. The previous
   writer emitted it as a literal, dangling pointer that no reader could resolve.
-- Inserting a negative or wider-than-128-bit `mmdbtype.Uint128` now returns an
-  error. The wire encoding holds only the magnitude, so a negative value
-  previously encoded as its absolute value and produced incorrect data.
-- The two validations above apply to direct inserts and to inserter results. A
+  Raw-pointer validation applies to direct inserts and to inserter results. A
   custom inserter can receive an unsupported input value and must replace or
   discard it.
+- `mmdbtype.Uint128` now uses `High` and `Low` uint64 fields, with
+  `Uint128FromBig` and `BigInt` conversions. Returned values and existing
+  inserter arguments are now `Uint128`; update pointer type assertions
+  accordingly. Thanks to Luiz Ferraz (@Fryuni). GitHub #39.
 - Reworked tree storage to use indexed arenas with stable node addresses. Merged
   nodes and materialized sparse paths are recycled during mutation. Finalization
   releases the expanded path arena and uses 32-bit node numbers. Audit mode
@@ -138,8 +139,6 @@
 - `New` now returns an error for a negative `Options.BuildEpoch`. It was
   previously written to the metadata as a very large `build_epoch`, producing a
   database that readers accept but that carries a nonsense build time.
-- `mmdbtype.Uint128.Equal` now returns false when either value is a nil
-  `*Uint128`. Previously a nil argument caused a panic.
 - `mmdbtype.Float32.Equal` and `mmdbtype.Float64.Equal` now compare the wire
   encoding rather than the Go value. `+0.0` and `-0.0` are no longer equal, and
   two NaNs with the same bit pattern now are. This makes equality agree with

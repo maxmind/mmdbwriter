@@ -183,6 +183,29 @@ func BenchmarkTreeLoadOverlappingPasses(b *testing.B) {
 	b.ReportMetric(float64(len(specs)), "insertions/source")
 }
 
+func BenchmarkTreeLoadUint128(b *testing.B) {
+	const recordCount = 4_096
+	opts := Options{IPVersion: 4, IncludeReservedNetworks: true, BuildEpoch: 1}
+	tree, err := New(opts)
+	requireNoBenchmarkError(b, err)
+	for i := range recordCount {
+		addr := netip.AddrFrom4([4]byte{1, 2, byte(i >> 8), byte(i)})
+		value := mmdbtype.Map{"value": mmdbtype.Uint128{High: 1, Low: uint64(i)}}
+		requireNoBenchmarkError(b, tree.Insert(netip.PrefixFrom(addr, 32), value))
+	}
+	path := writeTempDB(b, tree)
+
+	b.ReportAllocs()
+	for b.Loop() {
+		loaded, err := Load(path, opts)
+		requireNoBenchmarkError(b, err)
+		if loaded.nodeCountAllocated == 0 {
+			b.Fatal("loaded tree has no nodes")
+		}
+	}
+	b.ReportMetric(recordCount, "records/source")
+}
+
 // BenchmarkTreeLoadExternalMMDB measures Load against a caller-provided
 // database. Set MMDBWRITER_BENCHMARK_DB to the database path to enable it.
 func BenchmarkTreeLoadExternalMMDB(b *testing.B) {
