@@ -107,9 +107,11 @@ type Options struct {
 	Inserter inserter.PureFunc
 }
 
-// Tree represents a MaxMind DB search tree. A Tree is not safe for
-// concurrent use. Lookups materialize shared views lazily, so the caller must
-// synchronize even concurrent Get calls.
+// Tree represents a MaxMind DB search tree.
+//
+// A Tree is not safe for concurrent use. Callers sharing a Tree between
+// goroutines must serialize calls to its methods, including Get. Lookups can
+// update internal caches even when no inserts are running.
 type Tree struct {
 	buildEpoch              int64
 	databaseType            string
@@ -357,8 +359,6 @@ func (t *Tree) normalizeLoadPrefix(prefix netip.Prefix) (netip.Prefix, error) {
 // (defaults to inserter.Replace).
 //
 // The API requires inserted values to remain immutable.
-//
-// This is not safe to call from multiple threads.
 func (t *Tree) Insert(prefix netip.Prefix, value mmdbtype.DataType) error {
 	return t.insert(
 		prefix,
@@ -381,8 +381,11 @@ func (t *Tree) Insert(prefix netip.Prefix, value mmdbtype.DataType) error {
 //
 // The function must not insert into, remove from, or call WriteTo on this tree.
 // Those calls return an error before making changes. The error's identity and
-// message are not API guarantees. Get and operations on other trees are allowed.
-// A Get from the function can see networks that the insert has not merged yet.
+// message are not API guarantees. Operations on other trees are allowed.
+//
+// The callback may call Get on this tree. Such a lookup sees the insertion in
+// progress. For example, it may return a /32 that becomes part of a /31 when
+// the insertion finishes merging adjacent records with equal values.
 //
 // The function is called separately for every covered record, except that a
 // reserved or aliased network inside the inserted network is skipped silently.
@@ -395,8 +398,6 @@ func (t *Tree) Insert(prefix netip.Prefix, value mmdbtype.DataType) error {
 //
 // Nodes retired while restoring record boundaries are reused by later
 // inserts. Audit mode retains retired slots to detect stale references.
-//
-// This is not safe to call from multiple threads.
 func (t *Tree) InsertFunc(
 	prefix netip.Prefix,
 	value mmdbtype.DataType,
@@ -421,8 +422,6 @@ func (t *Tree) InsertFunc(
 // during the insert, and a non-nil result may be shared by multiple records. A
 // nil pureFunc returns an error. The value ownership, callback restrictions,
 // and partial-error rules are the same as for InsertFunc.
-//
-// This is not safe to call from multiple threads.
 func (t *Tree) InsertPureFunc(
 	prefix netip.Prefix,
 	value mmdbtype.DataType,
@@ -887,9 +886,6 @@ func (t *Tree) insertReservedNetworks() error {
 // is the zero value. Returned values are shared, read-only views that are equal
 // to, but not necessarily the same objects as, the inserted values. Call Copy
 // before modifying one.
-//
-// Get is not safe to call concurrently with any other Tree method, including
-// other Get calls, because a lookup materializes its view lazily.
 func (t *Tree) Get(ip netip.Addr) (netip.Prefix, mmdbtype.DataType) {
 	lookupIP, ok := t.lookupIP(ip)
 	if !ok {
@@ -915,7 +911,7 @@ func (t *Tree) expandTree() {
 	}
 }
 
-// finalize prepares the tree for writing. It is not threadsafe.
+// finalize prepares the tree for writing.
 func (t *Tree) finalize() {
 	t.expandTree()
 	t.finalizeSubtrees()

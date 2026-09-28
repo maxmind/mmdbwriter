@@ -189,9 +189,12 @@ type PureFunc func(
 // its metadata varies per record.
 //
 // A Func must not insert into, remove from, or call WriteTo on the tree being
-// updated. Those operations return an error before making changes. Get and
-// operations on other trees are allowed.
-// A Get from the function can see networks that the insert has not merged yet.
+// updated. Those operations return an error before making changes. Operations
+// on other trees are allowed.
+//
+// The callback may call Get on this tree. Such a lookup sees the insertion in
+// progress. For example, it may return a /32 that becomes part of a /31 when
+// the insertion finishes merging adjacent records with equal values.
 type Func func(
 	existingValue,
 	newValue mmdbtype.DataType,
