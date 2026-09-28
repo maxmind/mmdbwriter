@@ -108,13 +108,13 @@
   they are discarded.
 - Inserting a raw `mmdbtype.Pointer` value now returns an error. The previous
   writer emitted it as a literal, dangling pointer that no reader could resolve.
+  Raw-pointer validation applies to direct inserts and to inserter results. A
+  custom inserter can receive an unsupported input value and must replace or
+  discard it.
 - `mmdbtype.Uint128` now uses `High` and `Low` uint64 fields, with
   `Uint128FromBig` and `BigInt` conversions. Returned values and existing
   inserter arguments are now `Uint128`; update pointer type assertions
   accordingly. Thanks to Luiz Ferraz (@Fryuni). GitHub #39.
-- Raw-pointer validation applies to direct inserts and to inserter results. A
-  custom inserter can receive an unsupported input value and must replace or
-  discard it.
 - Reworked tree storage to use indexed arenas with stable node addresses. Merged
   nodes and materialized sparse paths are recycled during mutation. Finalization
   releases the expanded path arena and uses 32-bit node numbers. Audit mode
