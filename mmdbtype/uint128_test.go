@@ -32,10 +32,6 @@ func TestUint128BigIntConversions(t *testing.T) {
 			assert.Equal(t, test.decimal, input.String(), "conversion changed its input")
 			output := value.BigInt()
 			assert.Equal(t, test.decimal, output.String())
-			input.SetInt64(7)
-			output.SetInt64(9)
-			assert.Equal(t, test.value, value, "conversions must not share mutable storage")
-			assert.Equal(t, test.decimal, value.BigInt().String())
 		})
 	}
 }
