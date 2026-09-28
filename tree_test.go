@@ -1406,9 +1406,6 @@ func TestReinsertingGetViewsUsesIdentityCache(t *testing.T) {
 	assert.Equal(t, mmdbtype.Map{"en": mmdbtype.String("shared")}, got)
 }
 
-// TestEmptyContainersRoundTrip pins empty values through serialization and
-// load, the one case where node kind is the only discriminator between
-// identical empty payloads.
 func TestUint128TreeRoundTrip(t *testing.T) {
 	tree, err := New(Options{IPVersion: 4, IncludeReservedNetworks: true, BuildEpoch: 1})
 	require.NoError(t, err)
@@ -1442,6 +1439,9 @@ func TestUint128TreeRoundTrip(t *testing.T) {
 	assert.Equal(t, original.Bytes(), rewritten.Bytes())
 }
 
+// TestEmptyContainersRoundTrip pins empty values through serialization and
+// load, the one case where node kind is the only discriminator between
+// identical empty payloads.
 func TestEmptyContainersRoundTrip(t *testing.T) {
 	tree := newTestTree(t, "mmdbwriter-empty-containers")
 	value := mmdbtype.Map{
