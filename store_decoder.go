@@ -164,7 +164,7 @@ func (d *storeDecoder) decodeRef(
 		var hi, lo uint64
 		hi, lo, next, err = cursor.ReadUint128()
 		if err == nil {
-			ref, err = d.store.internUncached(mmdbtype.Uint128{High: hi, Low: lo})
+			ref, err = d.store.internScalar(mmdbtype.Uint128{High: hi, Low: lo})
 		}
 	case mmdbdata.KindBool:
 		var value bool

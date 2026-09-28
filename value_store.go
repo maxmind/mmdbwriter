@@ -432,7 +432,7 @@ func (s *valueStore) intern(value mmdbtype.DataType) (valueRef, error) {
 
 type internScalarValue interface {
 	mmdbtype.DataType
-	mmdbtype.String | mmdbtype.Float64 | mmdbtype.Uint16 | mmdbtype.Uint32
+	mmdbtype.String | mmdbtype.Float64 | mmdbtype.Uint16 | mmdbtype.Uint32 | mmdbtype.Uint128
 }
 
 // internScalar avoids boxing scalar values into DataType while encoding them.
@@ -447,6 +447,8 @@ func (s *valueStore) internScalar[T internScalarValue](value T) (valueRef, error
 		kind = valueKindUint16
 	case mmdbtype.Uint32:
 		kind = valueKindUint32
+	case mmdbtype.Uint128:
+		kind = valueKindUint128
 	default:
 		return nilValueRef, fmt.Errorf("internScalar has no value kind for %T", value)
 	}

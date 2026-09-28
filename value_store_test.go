@@ -154,6 +154,41 @@ func TestValueStoreInternUint32(t *testing.T) {
 	}
 }
 
+func TestValueStoreInternUint128(t *testing.T) {
+	for _, value := range []mmdbtype.Uint128{
+		{},
+		{Low: 1},
+		{Low: math.MaxUint64},
+		{High: 1},
+		{High: 1, Low: 42},
+		{High: math.MaxUint64, Low: math.MaxUint64},
+	} {
+		t.Run(fmt.Sprint(value), func(t *testing.T) {
+			store := newValueStore()
+			ref, err := store.internScalar(value)
+			require.NoError(t, err)
+			other, err := store.intern(value)
+			require.NoError(t, err)
+			assert.Equal(
+				t,
+				other,
+				ref,
+				"concrete and interface inputs must share one canonical value",
+			)
+			assert.Equal(t, value, store.materialize(ref))
+			store.release(other)
+			allocations := testing.AllocsPerRun(100, func() {
+				repeated, internErr := store.internScalar(value)
+				require.NoError(t, internErr)
+				store.release(repeated)
+			})
+			assert.Zero(t, allocations, "repeated values must not allocate")
+			store.release(ref)
+			assert.Zero(t, liveValueNodeCount(store))
+		})
+	}
+}
+
 func TestValueStoreCanonicalizesAndMaterializesValues(t *testing.T) {
 	uint128 := mmdbtype.Uint128{Low: 1 << 20}
 	value := mmdbtype.Map{
