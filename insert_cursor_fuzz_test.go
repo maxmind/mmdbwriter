@@ -148,15 +148,15 @@ func FuzzInsertCursorMatchesRootWalk(f *testing.F) {
 				start := prefix.Addr()
 				end := netipx.RangeOfPrefix(prefix).To()
 				for _, addr := range []netip.Addr{start, start.Prev(), start.Next(), end, end.Next()} {
-					requireCursorLookup(t, candidate, control, addr)
+					requireTreeLookup(t, candidate, control, addr)
 				}
 			}
 			require.NoError(t, candidate.auditValueStore())
 			if i%8 == 7 {
-				requireCursorOutput(t, candidate, control)
+				requireTreeOutput(t, candidate, control)
 			}
 		}
-		requireCursorOutput(t, candidate, control)
+		requireTreeOutput(t, candidate, control)
 	})
 }
 

@@ -7,63 +7,11 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/oschwald/maxminddb-golang/v2"
 	"github.com/stretchr/testify/require"
 
 	"github.com/maxmind/mmdbwriter/v2/inserter"
 	"github.com/maxmind/mmdbwriter/v2/mmdbtype"
 )
-
-func newReentrancyTree(t *testing.T, ipVersion int) *Tree {
-	t.Helper()
-	tree, err := New(Options{
-		BuildEpoch:              123,
-		DatabaseType:            "reentrancy-test",
-		Description:             map[string]string{"en": "Reentrancy test"},
-		IPVersion:               ipVersion,
-		IncludeReservedNetworks: true,
-	})
-	require.NoError(t, err)
-	return tree
-}
-
-// Each callback entry point must keep the guard set until all its work ends.
-// The pure callbacks intentionally violate their contract to test rejection.
-func insertReentrancyCallback(
-	t *testing.T, tree *Tree, prefix netip.Prefix, method string, callback inserter.Func,
-) error {
-	t.Helper()
-	pure := func(existing, newValue mmdbtype.DataType) (mmdbtype.DataType, error) {
-		return callback(existing, newValue, inserter.Metadata{})
-	}
-	start := prefix.Addr()
-	switch method {
-	case "InsertFunc":
-		return tree.InsertFunc(prefix, nil, callback)
-	case "InsertPureFunc":
-		return tree.InsertPureFunc(prefix, nil, pure)
-	case "InsertRangeFunc":
-		return tree.InsertRangeFunc(start, start.Next().Next(), nil, callback)
-	case "InsertRangePureFunc":
-		return tree.InsertRangePureFunc(start, start.Next().Next(), nil, pure)
-	case "Insert", "InsertRange":
-		previous := tree.inserter
-		tree.inserter = pure
-		defer func() { tree.inserter = previous }()
-		if method == "Insert" {
-			return tree.Insert(prefix, nil)
-		}
-		return tree.InsertRange(start, start.Next().Next(), nil)
-	case "insertNormalizedRef":
-		ref, err := tree.valueStore.intern(mmdbtype.Uint32(99))
-		require.NoError(t, err)
-		defer tree.valueStore.release(ref)
-		return tree.insertNormalizedRef(prefix, pure, ref)
-	default:
-		t.Fatalf("unknown insertion method %s", method)
-		return nil
-	}
-}
 
 func TestInsertReentrancyCallbackRestoresInserter(t *testing.T) {
 	for _, method := range []string{"Insert", "InsertRange"} {
@@ -151,68 +99,6 @@ func TestInsertionCallbackGetBeforeMerge(t *testing.T) {
 			require.NoError(t, tree.auditValueStore())
 		})
 	}
-}
-
-type reentrancyWriter struct{ calls int }
-
-func (w *reentrancyWriter) Write(p []byte) (int, error) {
-	w.calls++
-	return len(p), nil
-}
-
-// Attempt every mutation entry point, including the reference-based Load path.
-// Callback counters and invalid inputs establish that rejection precedes
-// callback invocation, normalization, interning, and reference retention.
-func rejectReentrantMutation(t *testing.T, tree *Tree, prefix netip.Prefix, operation byte) error {
-	t.Helper()
-	calls := 0
-	pure := func(_, _ mmdbtype.DataType) (mmdbtype.DataType, error) {
-		calls++
-		return mmdbtype.Uint32(6), nil
-	}
-	callback := func(_, _ mmdbtype.DataType, _ inserter.Metadata) (mmdbtype.DataType, error) {
-		calls++
-		return mmdbtype.Uint32(6), nil
-	}
-	var err error
-	switch operation % 11 {
-	case 0:
-		err = tree.Insert(prefix, mmdbtype.Uint32(6))
-	case 1:
-		err = tree.InsertFunc(prefix, nil, callback)
-	case 2:
-		err = tree.InsertPureFunc(prefix, nil, pure)
-	case 3:
-		err = tree.InsertRange(prefix.Addr(), prefix.Addr().Next(), mmdbtype.Uint32(6))
-	case 4:
-		err = tree.InsertRangeFunc(prefix.Addr(), prefix.Addr().Next(), nil, callback)
-	case 5:
-		err = tree.InsertRangePureFunc(prefix.Addr(), prefix.Addr().Next(), nil, pure)
-	case 6:
-		err = tree.InsertPureFunc(prefix, nil, inserter.Remove)
-	case 7:
-		// An invalid handle must never reach retain.
-		err = tree.insertNormalizedRef(prefix, pure, valueRef(0x7fffffff))
-	case 8:
-		err = tree.Insert(netip.Prefix{}, mmdbtype.Pointer(1))
-	case 9:
-		err = tree.InsertRange(netip.Addr{}, netip.Addr{}, mmdbtype.Pointer(1))
-	case 10:
-		writer := &reentrancyWriter{}
-		var n int64
-		n, err = tree.WriteTo(writer)
-		require.Zero(t, n)
-		require.Zero(t, writer.calls)
-	}
-	require.ErrorIs(t, err, errReentrantMutation)
-	require.Equal(
-		t,
-		errReentrantMutation,
-		err,
-		"a nested call must not audit an unfinished mutation",
-	)
-	require.Zero(t, calls)
-	return err
 }
 
 func TestRejectReentrantMutationEntryPoints(t *testing.T) {
@@ -396,28 +282,6 @@ func TestRejectReentrantMutationRegressions(t *testing.T) {
 	}
 }
 
-func requireReentrancyTreesEqual(t *testing.T, tree, control *Tree, addresses ...netip.Addr) {
-	t.Helper()
-	require.False(t, tree.mutating)
-	require.NoError(t, tree.auditValueStore())
-	require.NoError(t, control.auditValueStore())
-	for _, addr := range addresses {
-		for range 8 {
-			expectedPrefix, expectedValue := control.Get(addr)
-			actualPrefix, actualValue := tree.Get(addr)
-			require.Equal(t, expectedPrefix, actualPrefix)
-			require.Equal(t, expectedValue, actualValue)
-			addr = addr.Next()
-		}
-	}
-	actual := writeTreeBytes(t, tree)
-	require.Equal(t, writeTreeBytes(t, control), actual)
-	reader, err := maxminddb.OpenBytes(actual)
-	require.NoError(t, err)
-	defer reader.Close()
-	require.NoError(t, reader.Verify())
-}
-
 func TestReentrantInsertPartialError(t *testing.T) {
 	tree := newReentrancyTree(t, 4)
 	start := netip.MustParseAddr("1.2.3.0")
@@ -477,4 +341,131 @@ func TestInsertionCallbackCanUseAnotherTree(t *testing.T) {
 			return value, nil
 		}))
 	requireReentrancyTreesEqual(t, tree, other, prefix.Addr())
+}
+
+func newReentrancyTree(t *testing.T, ipVersion int) *Tree {
+	t.Helper()
+	tree, err := New(Options{
+		BuildEpoch:              123,
+		DatabaseType:            "reentrancy-test",
+		Description:             map[string]string{"en": "Reentrancy test"},
+		IPVersion:               ipVersion,
+		IncludeReservedNetworks: true,
+	})
+	require.NoError(t, err)
+	return tree
+}
+
+// Each callback entry point must keep the guard set until all its work ends.
+// The pure callbacks intentionally violate their contract to test rejection.
+func insertReentrancyCallback(
+	t *testing.T, tree *Tree, prefix netip.Prefix, method string, callback inserter.Func,
+) error {
+	t.Helper()
+	pure := func(existing, newValue mmdbtype.DataType) (mmdbtype.DataType, error) {
+		return callback(existing, newValue, inserter.Metadata{})
+	}
+	start := prefix.Addr()
+	switch method {
+	case "InsertFunc":
+		return tree.InsertFunc(prefix, nil, callback)
+	case "InsertPureFunc":
+		return tree.InsertPureFunc(prefix, nil, pure)
+	case "InsertRangeFunc":
+		return tree.InsertRangeFunc(start, start.Next().Next(), nil, callback)
+	case "InsertRangePureFunc":
+		return tree.InsertRangePureFunc(start, start.Next().Next(), nil, pure)
+	case "Insert", "InsertRange":
+		previous := tree.inserter
+		tree.inserter = pure
+		defer func() { tree.inserter = previous }()
+		if method == "Insert" {
+			return tree.Insert(prefix, nil)
+		}
+		return tree.InsertRange(start, start.Next().Next(), nil)
+	case "insertNormalizedRef":
+		ref, err := tree.valueStore.intern(mmdbtype.Uint32(99))
+		require.NoError(t, err)
+		defer tree.valueStore.release(ref)
+		return tree.insertNormalizedRef(prefix, pure, ref)
+	default:
+		t.Fatalf("unknown insertion method %s", method)
+		return nil
+	}
+}
+
+// Attempt every mutation entry point, including the reference-based Load path.
+// Callback counters and invalid inputs establish that rejection precedes
+// callback invocation, normalization, interning, and reference retention.
+func rejectReentrantMutation(t *testing.T, tree *Tree, prefix netip.Prefix, operation byte) error {
+	t.Helper()
+	calls := 0
+	pure := func(_, _ mmdbtype.DataType) (mmdbtype.DataType, error) {
+		calls++
+		return mmdbtype.Uint32(6), nil
+	}
+	callback := func(_, _ mmdbtype.DataType, _ inserter.Metadata) (mmdbtype.DataType, error) {
+		calls++
+		return mmdbtype.Uint32(6), nil
+	}
+	var err error
+	switch operation % 11 {
+	case 0:
+		err = tree.Insert(prefix, mmdbtype.Uint32(6))
+	case 1:
+		err = tree.InsertFunc(prefix, nil, callback)
+	case 2:
+		err = tree.InsertPureFunc(prefix, nil, pure)
+	case 3:
+		err = tree.InsertRange(prefix.Addr(), prefix.Addr().Next(), mmdbtype.Uint32(6))
+	case 4:
+		err = tree.InsertRangeFunc(prefix.Addr(), prefix.Addr().Next(), nil, callback)
+	case 5:
+		err = tree.InsertRangePureFunc(prefix.Addr(), prefix.Addr().Next(), nil, pure)
+	case 6:
+		err = tree.InsertPureFunc(prefix, nil, inserter.Remove)
+	case 7:
+		// An invalid handle must never reach retain.
+		err = tree.insertNormalizedRef(prefix, pure, valueRef(0x7fffffff))
+	case 8:
+		err = tree.Insert(netip.Prefix{}, mmdbtype.Pointer(1))
+	case 9:
+		err = tree.InsertRange(netip.Addr{}, netip.Addr{}, mmdbtype.Pointer(1))
+	case 10:
+		writer := &reentrancyWriter{}
+		var n int64
+		n, err = tree.WriteTo(writer)
+		require.Zero(t, n)
+		require.Zero(t, writer.calls)
+	}
+	require.ErrorIs(t, err, errReentrantMutation)
+	require.Equal(
+		t,
+		errReentrantMutation,
+		err,
+		"a nested call must not audit an unfinished mutation",
+	)
+	require.Zero(t, calls)
+	return err
+}
+
+func requireReentrancyTreesEqual(t *testing.T, tree, control *Tree, addresses ...netip.Addr) {
+	t.Helper()
+	require.False(t, tree.mutating)
+	require.NoError(t, tree.auditValueStore())
+	require.NoError(t, control.auditValueStore())
+	for _, addr := range addresses {
+		for range 8 {
+			requireTreeLookup(t, tree, control, addr)
+			addr = addr.Next()
+		}
+	}
+	requireTreeOutput(t, tree, control)
+}
+
+type reentrancyWriter struct{ calls int }
+
+func (w *reentrancyWriter) Write(p []byte) (int, error) {
+	w.calls++
+	return len(p), nil
 }

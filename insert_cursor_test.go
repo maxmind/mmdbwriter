@@ -8,47 +8,11 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/oschwald/maxminddb-golang/v2"
 	"github.com/stretchr/testify/require"
 
 	"github.com/maxmind/mmdbwriter/v2/inserter"
 	"github.com/maxmind/mmdbwriter/v2/mmdbtype"
 )
-
-func newCursorTrees(t *testing.T, opts Options) (candidate, control *Tree) {
-	var err error
-	t.Helper()
-	opts.BuildEpoch = 123
-	opts.DatabaseType = "insert-cursor-test"
-	opts.Description = map[string]string{"en": "Insertion cursor test"}
-	candidate, err = New(opts)
-	require.NoError(t, err)
-	control, err = New(opts)
-	require.NoError(t, err)
-	control.disableInsertCursor = true
-	return candidate, control
-}
-
-func requireCursorLookup(t *testing.T, candidate, control *Tree, address netip.Addr) {
-	t.Helper()
-	expectedPrefix, expectedValue := control.Get(address)
-	actualPrefix, actualValue := candidate.Get(address)
-	require.Equal(t, expectedPrefix, actualPrefix, "lookup boundary for %s", address)
-	require.Equal(t, expectedValue, actualValue, "lookup value for %s", address)
-}
-
-func requireCursorOutput(t *testing.T, candidate, control *Tree) {
-	t.Helper()
-	require.NoError(t, candidate.auditValueStore())
-	require.NoError(t, control.auditValueStore())
-	expected := writeTreeBytes(t, control)
-	actual := writeTreeBytes(t, candidate)
-	require.Equal(t, expected, actual)
-	reader, err := maxminddb.OpenBytes(actual)
-	require.NoError(t, err)
-	defer reader.Close()
-	require.NoError(t, reader.Verify())
-}
 
 func TestInsertCursorMergesAndReusesSlots(t *testing.T) {
 	for _, ipVersion := range []int{4, 6} {
@@ -81,8 +45,8 @@ func TestInsertCursorMergesAndReusesSlots(t *testing.T) {
 							require.NoError(t, candidate.Insert(prefix, value))
 							require.True(t, candidate.insertCursor.valid)
 							require.NoError(t, control.Insert(prefix, value))
-							requireCursorLookup(t, candidate, control, start)
-							requireCursorLookup(t, candidate, control, addr)
+							requireTreeLookup(t, candidate, control, start)
+							requireTreeLookup(t, candidate, control, addr)
 							// Validate owning nodes before checking the borrowed cursor path.
 							require.NoError(t, candidate.auditValueStore())
 							addr = addr.Next()
@@ -104,7 +68,7 @@ func TestInsertCursorMergesAndReusesSlots(t *testing.T) {
 							require.Equal(t, expected, actual)
 							require.Len(t, actual, 1)
 						}
-						requireCursorOutput(t, candidate, control)
+						requireTreeOutput(t, candidate, control)
 					}
 					if cycle == 0 && !candidate.poisonTreeSlots {
 						require.NotEmpty(t, candidate.freeNodes)
@@ -117,11 +81,11 @@ func TestInsertCursorMergesAndReusesSlots(t *testing.T) {
 				require.NoError(t, err)
 				require.False(t, loaded.insertCursor.valid)
 				require.NoError(t, loaded.auditValueStore())
-				requireCursorLookup(t, loaded, control, start)
+				requireTreeLookup(t, loaded, control, start)
 				prefix := netip.PrefixFrom(start.Next(), start.BitLen())
 				require.NoError(t, loaded.Insert(prefix, mmdbtype.Uint32(4)))
 				require.NoError(t, control.Insert(prefix, mmdbtype.Uint32(4)))
-				requireCursorOutput(t, loaded, control)
+				requireTreeOutput(t, loaded, control)
 			})
 		}
 	}
@@ -170,9 +134,9 @@ func TestRetireNodeInvalidatesInsertCursor(t *testing.T) {
 			}
 			require.True(t, candidate.insertCursor.valid)
 			for _, address := range []string{"1.0.0.0", "1.0.0.1", "129.0.0.0"} {
-				requireCursorLookup(t, candidate, control, netip.MustParseAddr(address))
+				requireTreeLookup(t, candidate, control, netip.MustParseAddr(address))
 			}
-			requireCursorOutput(t, candidate, control)
+			requireTreeOutput(t, candidate, control)
 		})
 	}
 }
@@ -221,7 +185,7 @@ func TestLoadRetainsInsertCursor(t *testing.T) {
 							require.NoError(t, control.auditValueStore())
 							address := start.Prev()
 							for range 7 {
-								requireCursorLookup(t, loaded, control, address)
+								requireTreeLookup(t, loaded, control, address)
 								address = address.Next()
 							}
 						}
@@ -231,7 +195,7 @@ func TestLoadRetainsInsertCursor(t *testing.T) {
 						require.NoError(t, control.Insert(prefix, mmdbtype.Uint32(5)))
 						require.True(t, loaded.insertCursor.valid)
 						check()
-						requireCursorOutput(t, loaded, control)
+						requireTreeOutput(t, loaded, control)
 					},
 				)
 			}
@@ -284,15 +248,15 @@ func TestInsertCursorFailureAndPanic(t *testing.T) {
 				}
 			}
 			require.False(t, candidate.insertCursor.valid)
-			requireCursorOutput(t, candidate, control)
+			requireTreeOutput(t, candidate, control)
 			// Retry and then resume ascending inserts after the invalidated path.
 			for _, p := range []string{"1.2.3.0/30", "1.2.3.4/32", "1.2.3.5/32"} {
 				prefix := netip.MustParsePrefix(p)
 				require.NoError(t, candidate.Insert(prefix, mmdbtype.Uint32(2)))
 				require.NoError(t, control.Insert(prefix, mmdbtype.Uint32(2)))
-				requireCursorLookup(t, candidate, control, prefix.Addr())
+				requireTreeLookup(t, candidate, control, prefix.Addr())
 			}
-			requireCursorOutput(t, candidate, control)
+			requireTreeOutput(t, candidate, control)
 		})
 	}
 }
@@ -349,7 +313,7 @@ func TestInsertCursorPartialFailureCoalesces(t *testing.T) {
 				require.Len(t, retryCalls, 1)
 				require.Equal(t, target, retryCalls[0].metadata.ExistingNetwork())
 			}
-			requireCursorOutput(t, candidate, control)
+			requireTreeOutput(t, candidate, control)
 		})
 	}
 }
@@ -445,8 +409,8 @@ func TestInsertCursorMixedPrefixes(t *testing.T) {
 							require.EqualError(t, actualErr, expectedErr.Error())
 						}
 						require.Equal(t, expectedCalls, actualCalls)
-						requireCursorLookup(t, candidate, control, op.prefix.Addr())
-						requireCursorOutput(t, candidate, control)
+						requireTreeLookup(t, candidate, control, op.prefix.Addr())
+						requireTreeOutput(t, candidate, control)
 					}
 				})
 			}
@@ -506,12 +470,26 @@ func TestInsertCursorDirectionChanges(t *testing.T) {
 				require.Nil(t, actualPanic)
 				require.Equal(t, expectedCalls, actualCalls)
 				for _, addr := range addresses {
-					requireCursorLookup(t, candidate, control, addr)
+					requireTreeLookup(t, candidate, control, addr)
 				}
 				require.NoError(t, candidate.auditValueStore())
 				require.NoError(t, control.auditValueStore())
 			}
-			requireCursorOutput(t, candidate, control)
+			requireTreeOutput(t, candidate, control)
 		})
 	}
+}
+
+func newCursorTrees(t *testing.T, opts Options) (candidate, control *Tree) {
+	var err error
+	t.Helper()
+	opts.BuildEpoch = 123
+	opts.DatabaseType = "insert-cursor-test"
+	opts.Description = map[string]string{"en": "Insertion cursor test"}
+	candidate, err = New(opts)
+	require.NoError(t, err)
+	control, err = New(opts)
+	require.NoError(t, err)
+	control.disableInsertCursor = true
+	return candidate, control
 }

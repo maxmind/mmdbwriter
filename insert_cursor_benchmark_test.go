@@ -61,39 +61,6 @@ func BenchmarkTreeInsertAddressOrder(b *testing.B) {
 	}
 }
 
-func addressOrderBenchmarkPrefixes(count int, order string) []netip.Prefix {
-	prefixes := make([]netip.Prefix, count)
-	for i := range prefixes {
-		prefixes[i] = netip.PrefixFrom(netip.AddrFrom4([4]byte{1, byte(i >> 8), byte(i), 0}), 24)
-	}
-	switch order {
-	case "random":
-		//nolint:gosec // Reproducible benchmark order.
-		random := rand.New(rand.NewPCG(1, 2))
-		random.Shuffle(
-			len(prefixes),
-			func(i, j int) { prefixes[i], prefixes[j] = prefixes[j], prefixes[i] },
-		)
-	case "descending":
-		slices.Reverse(prefixes)
-	case "sorted":
-	}
-	return prefixes
-}
-
-func insertAddressOrderBenchmark(tree *Tree, prefixes []netip.Prefix, valueShift uint8) error {
-	for _, prefix := range prefixes {
-		// Values depend on the prefix, never its position in the insertion order.
-		// Shifting by three gives each group of eight /24s the same value,
-		// causing three levels of sibling merges into a /21.
-		ip := prefix.Addr().As4()
-		if err := tree.Insert(prefix, mmdbtype.Uint32((ip[2]>>valueShift)%16)); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 func TestAddressOrderBenchmarkEquivalent(t *testing.T) {
 	for _, ipVersion := range []int{4, 6} {
 		t.Run(strconv.Itoa(ipVersion), func(t *testing.T) {
@@ -154,4 +121,37 @@ func TestAddressOrderBenchmarkEquivalent(t *testing.T) {
 			}
 		})
 	}
+}
+
+func addressOrderBenchmarkPrefixes(count int, order string) []netip.Prefix {
+	prefixes := make([]netip.Prefix, count)
+	for i := range prefixes {
+		prefixes[i] = netip.PrefixFrom(netip.AddrFrom4([4]byte{1, byte(i >> 8), byte(i), 0}), 24)
+	}
+	switch order {
+	case "random":
+		//nolint:gosec // Reproducible benchmark order.
+		random := rand.New(rand.NewPCG(1, 2))
+		random.Shuffle(
+			len(prefixes),
+			func(i, j int) { prefixes[i], prefixes[j] = prefixes[j], prefixes[i] },
+		)
+	case "descending":
+		slices.Reverse(prefixes)
+	case "sorted":
+	}
+	return prefixes
+}
+
+func insertAddressOrderBenchmark(tree *Tree, prefixes []netip.Prefix, valueShift uint8) error {
+	for _, prefix := range prefixes {
+		// Values depend on the prefix, never its position in the insertion order.
+		// Shifting by three gives each group of eight /24s the same value,
+		// causing three levels of sibling merges into a /21.
+		ip := prefix.Addr().As4()
+		if err := tree.Insert(prefix, mmdbtype.Uint32((ip[2]>>valueShift)%16)); err != nil {
+			return err
+		}
+	}
+	return nil
 }
