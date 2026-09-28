@@ -892,6 +892,8 @@ func (t *Tree) insertReservedNetworks() error {
 // is the zero value. Returned values are shared, read-only views that are equal
 // to, but not necessarily the same objects as, the inserted values. Call Copy
 // before modifying one.
+//
+// See [Tree] for concurrency requirements.
 func (t *Tree) Get(ip netip.Addr) (netip.Prefix, mmdbtype.DataType) {
 	lookupIP, ok := t.lookupIP(ip)
 	if !ok {

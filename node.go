@@ -380,7 +380,8 @@ func (t *Tree) retireNode(index nodeIndex) {
 		panic("mmdbwriter: cannot retire the root node")
 	}
 	n := t.nodeAt(index)
-	// Invalidate borrowed paths before this node's slot can be reused.
+	// Invalidate paths saved between inserts before this slot can be reused.
+	// An active cursor walk repairs its path before marking it valid again.
 	t.insertCursor.valid = false
 	*n = node{children: [2]record{{recordType: recordTypeRetired}, {}}}
 	if !t.poisonTreeSlots {

@@ -66,6 +66,10 @@ func (t *Tree) insertWithCursor(iRec *insertRecord) error {
 	// insertNode may have changed iRec.ip while visiting covered records.
 	// Cache the original normalized start, not the last visited address.
 	c.last = ip
+	// insertRecord must preserve cached ancestors. Only the merge loop above
+	// may retire them, and it removes each retired node from the saved path.
+	// Success can therefore revalidate the path despite retireNode's
+	// invalidation; retirement outside this walk leaves the cursor invalid.
 	c.valid = err == nil
 	return err
 }
