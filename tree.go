@@ -107,9 +107,16 @@ type Options struct {
 	Inserter inserter.PureFunc
 }
 
-// Tree represents a MaxMind DB search tree. A Tree is not safe for
-// concurrent use. Lookups materialize shared views lazily, so the caller must
-// synchronize even concurrent Get calls.
+// Tree represents a MaxMind DB search tree.
+//
+// A Tree is not safe for concurrent use. Callers sharing a Tree between
+// goroutines must serialize calls to its methods, including Get. Lookups can
+// update internal caches even when no inserts are running.
+//
+// Insertion callbacks and writers passed to WriteTo must not insert into,
+// remove from, or call WriteTo on the same tree. Those calls return an error
+// before making changes. Defer such operations until the outer call returns.
+// Synchronous Get calls and operations on other trees are allowed.
 type Tree struct {
 	buildEpoch              int64
 	databaseType            string
@@ -135,6 +142,16 @@ type Tree struct {
 	paths     []compressedPath
 	root      nodeIndex
 	treeDepth int
+
+	// mutating protects traversal and temporary references from reentrant
+	// mutation by insertion callbacks and writers. Each entry point must check
+	// and set it before preparing values, retaining references, or finalizing
+	// the tree. It does not synchronize concurrent access.
+	mutating bool
+
+	insertCursor insertCursor
+	// Tests retain the recursive root walk as an oracle for cursor insertion.
+	disableInsertCursor bool
 
 	nodeCount int
 	inserter  inserter.PureFunc
@@ -348,8 +365,6 @@ func (t *Tree) normalizeLoadPrefix(prefix netip.Prefix) (netip.Prefix, error) {
 // (defaults to inserter.Replace).
 //
 // The API requires inserted values to remain immutable.
-//
-// This is not safe to call from multiple threads.
 func (t *Tree) Insert(prefix netip.Prefix, value mmdbtype.DataType) error {
 	return t.insert(
 		prefix,
@@ -370,6 +385,14 @@ func (t *Tree) Insert(prefix netip.Prefix, value mmdbtype.DataType) error {
 // values it may modify. The tree does not copy a value before the call, as not
 // every function needs a copy and copying costs real time.
 //
+// The function must not insert into, remove from, or call WriteTo on this tree.
+// Those calls return an error before making changes. The error's identity and
+// message are not API guarantees. Operations on other trees are allowed.
+//
+// The callback may call Get on this tree. Such a lookup sees the insertion in
+// progress. For example, it may return a /32 that becomes part of a /31 when
+// the insertion finishes merging adjacent records with equal values.
+//
 // The function is called separately for every covered record, except that a
 // reserved or aliased network inside the inserted network is skipped silently.
 // A nil insertFunc returns an error. If the function returns an error partway through the
@@ -381,8 +404,6 @@ func (t *Tree) Insert(prefix netip.Prefix, value mmdbtype.DataType) error {
 //
 // Nodes retired while restoring record boundaries are reused by later
 // inserts. Audit mode retains retired slots to detect stale references.
-//
-// This is not safe to call from multiple threads.
 func (t *Tree) InsertFunc(
 	prefix netip.Prefix,
 	value mmdbtype.DataType,
@@ -405,10 +426,8 @@ func (t *Tree) InsertFunc(
 // must depend only on its arguments. It must not depend on invocation count,
 // order, or external mutable state. Repeated argument pairs may be memoized
 // during the insert, and a non-nil result may be shared by multiple records. A
-// nil pureFunc returns an error. The value ownership and partial-error rules
-// are the same as for InsertFunc.
-//
-// This is not safe to call from multiple threads.
+// nil pureFunc returns an error. The value ownership, callback restrictions,
+// and partial-error rules are the same as for InsertFunc.
 func (t *Tree) InsertPureFunc(
 	prefix netip.Prefix,
 	value mmdbtype.DataType,
@@ -446,6 +465,12 @@ func (t *Tree) insert(
 	node nodeIndex,
 	value mmdbtype.DataType,
 ) error {
+	if t.mutating {
+		return errReentrantMutation
+	}
+	t.mutating = true
+	defer func() { t.mutating = false }()
+
 	var err error
 	if recordType == recordTypeData {
 		prefix, err = t.normalizeInsertPrefix(prefix)
@@ -475,11 +500,19 @@ func (t *Tree) insert(
 
 // insertNormalizedRef inserts an already interned value. It borrows the
 // caller's reference, taking one of its own for the insert.
+// Load currently keeps the tree private until it returns. The insertion guard
+// also protects future callers that may already hold a reference to the tree.
 func (t *Tree) insertNormalizedRef(
 	prefix netip.Prefix,
 	pureFunc inserter.PureFunc,
 	value valueRef,
 ) error {
+	if t.mutating {
+		return errReentrantMutation
+	}
+	t.mutating = true
+	defer func() { t.mutating = false }()
+
 	if t.treeDepth == 32 && !prefix.Addr().Is4() {
 		return errors.New("IPv6 prefixes cannot be inserted into an IPv4 tree")
 	}
@@ -511,7 +544,7 @@ func (t *Tree) insertPrepared(
 	iRec.prefixLen = prefixLen
 	iRec.splitDepth = 0
 	iRec.insertedAs4 = prefix.Addr().Is4()
-	return iRec.insertNode(t.root, 0)
+	return t.insertWithCursor(iRec)
 }
 
 func (t *Tree) newInsertRecord(
@@ -705,7 +738,8 @@ func (t *Tree) InsertRange(
 // InsertedNetwork is the individual subnet being inserted, not the whole
 // range. Subnets are inserted sequentially, so metadata for a later subnet
 // reflects changes made by earlier subnets in the same call. A nil insertFunc
-// returns an error.
+// returns an error. The callback restrictions documented on InsertFunc apply
+// throughout the range.
 func (t *Tree) InsertRangeFunc(
 	start netip.Addr,
 	end netip.Addr,
@@ -728,7 +762,8 @@ func (t *Tree) InsertRangeFunc(
 // InsertRangePureFunc is like InsertPureFunc, except it inserts all subnets
 // within the range of IPs specified by `[start,end]`. Repeated argument pairs
 // may be memoized across the entire range, not just within one of its subnets.
-// A nil pureFunc returns an error.
+// A nil pureFunc returns an error. The callback restrictions documented on
+// InsertFunc apply throughout the range.
 func (t *Tree) InsertRangePureFunc(
 	start netip.Addr,
 	end netip.Addr,
@@ -756,6 +791,12 @@ func (t *Tree) insertRange(
 	node nodeIndex,
 	value mmdbtype.DataType,
 ) error {
+	if t.mutating {
+		return errReentrantMutation
+	}
+	t.mutating = true
+	defer func() { t.mutating = false }()
+
 	if !start.IsValid() {
 		return errors.New("start IP is invalid")
 	}
@@ -852,8 +893,7 @@ func (t *Tree) insertReservedNetworks() error {
 // to, but not necessarily the same objects as, the inserted values. Call Copy
 // before modifying one.
 //
-// Get is not safe to call concurrently with any other Tree method, including
-// other Get calls, because a lookup materializes its view lazily.
+// See [Tree] for concurrency requirements.
 func (t *Tree) Get(ip netip.Addr) (netip.Prefix, mmdbtype.DataType) {
 	lookupIP, ok := t.lookupIP(ip)
 	if !ok {
@@ -879,7 +919,7 @@ func (t *Tree) expandTree() {
 	}
 }
 
-// finalize prepares the tree for writing. It is not threadsafe.
+// finalize prepares the tree for writing.
 func (t *Tree) finalize() {
 	t.expandTree()
 	t.finalizeSubtrees()
@@ -891,7 +931,19 @@ func (t *Tree) finalize() {
 // Finalization uses temporary memory and caches numbering until the next
 // insertion. Tools that traverse the written search tree must support shared
 // nodes and backward references.
+//
+// Neither an insertion callback nor w may call WriteTo on this tree. The writer
+// must also not insert into or remove from this tree. Such calls return an error
+// without making changes or writing output. The error's identity and message
+// are not API guarantees. The writer may call Get synchronously or operate on
+// other trees.
 func (t *Tree) WriteTo(w io.Writer) (int64, error) {
+	if t.mutating {
+		return 0, errReentrantMutation
+	}
+	t.mutating = true
+	// Register this first so deferred buffer flushing also stays guarded.
+	defer func() { t.mutating = false }()
 	if t.nodeCount == 0 {
 		t.finalize()
 	}

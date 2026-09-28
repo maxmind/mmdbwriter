@@ -13,6 +13,10 @@ import (
 // it is equivalent to inserter.Replace.
 var errNilInserterFunc = errors.New("inserter function must not be nil")
 
+var errReentrantMutation = errors.New(
+	"cannot insert into or write a tree during an active insert or write",
+)
+
 // AliasedNetworkError is returned when inserting a aliased network into
 // a Tree where DisableIPv4Aliasing in Options is false.
 type AliasedNetworkError struct {

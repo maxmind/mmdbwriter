@@ -2801,3 +2801,24 @@ func newTestTree(t *testing.T, databaseType string) *Tree {
 	require.NoError(t, err)
 	return tree
 }
+
+func requireTreeLookup(t *testing.T, candidate, control *Tree, address netip.Addr) {
+	t.Helper()
+	expectedPrefix, expectedValue := control.Get(address)
+	actualPrefix, actualValue := candidate.Get(address)
+	require.Equal(t, expectedPrefix, actualPrefix, "lookup boundary for %s", address)
+	require.Equal(t, expectedValue, actualValue, "lookup value for %s", address)
+}
+
+func requireTreeOutput(t *testing.T, candidate, control *Tree) {
+	t.Helper()
+	require.NoError(t, candidate.auditValueStore())
+	require.NoError(t, control.auditValueStore())
+	expected := writeTreeBytes(t, control)
+	actual := writeTreeBytes(t, candidate)
+	require.Equal(t, expected, actual)
+	reader, err := maxminddb.OpenBytes(actual)
+	require.NoError(t, err)
+	defer reader.Close()
+	require.NoError(t, reader.Verify())
+}

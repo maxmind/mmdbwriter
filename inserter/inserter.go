@@ -160,6 +160,9 @@ func (m Metadata) ExistingNetwork() netip.Prefix {
 // value to get a private copy you can modify. Any non-nil returned value becomes
 // tree-owned and must not be modified after the function returns.
 //
+// A callback must not insert into, remove from, or call WriteTo on the tree
+// being updated. Those operations return an error before making changes.
+//
 // A panic propagates. The insertion methods' guarantees for callbacks that
 // return errors do not apply to a panic.
 //
@@ -184,6 +187,14 @@ type PureFunc func(
 // The rules PureFunc documents for modifying values, for panics, and for
 // unvalidated input values apply here too. A Func is never memoized, because
 // its metadata varies per record.
+//
+// A Func must not insert into, remove from, or call WriteTo on the tree being
+// updated. Those operations return an error before making changes. Operations
+// on other trees are allowed.
+//
+// The callback may call Get on this tree. Such a lookup sees the insertion in
+// progress. For example, it may return a /32 that becomes part of a /31 when
+// the insertion finishes merging adjacent records with equal values.
 type Func func(
 	existingValue,
 	newValue mmdbtype.DataType,
