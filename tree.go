@@ -536,8 +536,7 @@ func (t *Tree) insertPrepared(
 ) error {
 	// Any insert can change the reachable node graph, so cached finalization
 	// state must be rebuilt before the next write.
-	t.nodeCount = 0
-	t.nodeNumbers = nil
+	t.invalidateFinalization()
 
 	ip, prefixLen := t.prefixInsertIP(prefix)
 	iRec.ip = ip
@@ -917,6 +916,13 @@ func (t *Tree) expandTree() {
 		t.paths = nil
 		t.freePaths = nil
 	}
+}
+
+// invalidateFinalization clears the state that finalize caches, so the next
+// write rebuilds it.
+func (t *Tree) invalidateFinalization() {
+	t.nodeCount = 0
+	t.nodeNumbers = nil
 }
 
 // finalize prepares the tree for writing.

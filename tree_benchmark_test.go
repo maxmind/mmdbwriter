@@ -239,6 +239,43 @@ func BenchmarkTreeLoadExternalMMDB(b *testing.B) {
 	}
 }
 
+// BenchmarkTreeWriteToExternalMMDB measures WriteTo, including finalization,
+// against a caller-provided database. Set MMDBWRITER_BENCHMARK_DB to the
+// database path to enable it.
+func BenchmarkTreeWriteToExternalMMDB(b *testing.B) {
+	path := os.Getenv("MMDBWRITER_BENCHMARK_DB")
+	if path == "" {
+		b.Skip("MMDBWRITER_BENCHMARK_DB is not set")
+	}
+
+	tree, err := Load(path, Options{IncludeReservedNetworks: true})
+	if err != nil {
+		b.Fatal(err)
+	}
+	// The first write also expands the compressed paths that Load leaves.
+	// Do it before timing, so the result does not depend on the iteration
+	// count.
+	if _, err := tree.WriteTo(io.Discard); err != nil {
+		b.Fatal(err)
+	}
+	// Keep the loading garbage out of measured heap work.
+	//revive:disable-next-line:call-to-gc
+	runtime.GC()
+
+	var written int64
+	b.ReportAllocs()
+	for b.Loop() {
+		// WriteTo caches finalization. Clear it so that each iteration measures
+		// the full write.
+		tree.invalidateFinalization()
+		written, err = tree.WriteTo(io.Discard)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.ReportMetric(float64(written), "file-bytes")
+}
+
 // BenchmarkEnterpriseLoadThenOverlay models the production Enterprise build:
 // load a City-scale source database and rewrite every record through several
 // merge overlay passes. Copies inside the timed loop model the fresh input
