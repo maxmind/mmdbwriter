@@ -58,8 +58,7 @@ func finalizeUnsharedTree(tree *Tree) {
 	tree.expandTree()
 	tree.nodeNumbers = make([]uint32, tree.nodeCountAllocated)
 	tree.nodeCount = 0
-	// The table only counts records. It does no hashing or interning.
-	table := subtreeTable{treeRefs: make([]uint32, len(tree.valueStore.nodes))}
+	counter := recordCounter{treeRefs: make([]uint32, len(tree.valueStore.nodes))}
 	var visit func(nodeIndex)
 	visit = func(index nodeIndex) {
 		tree.nodeNumbers[index] = uint32(newNodeIndex(tree.nodeCount))
@@ -67,7 +66,7 @@ func finalizeUnsharedTree(tree *Tree) {
 		for _, child := range tree.nodeAt(index).children {
 			switch child.recordType {
 			case recordTypeData:
-				table.countRecord(child.value)
+				counter.countRecord(child.value)
 			case recordTypeNode, recordTypeFixedNode:
 				visit(child.nodeIndex)
 			case recordTypeEmpty, recordTypeAlias, recordTypeReserved, recordTypePath,
@@ -76,8 +75,8 @@ func finalizeUnsharedTree(tree *Tree) {
 		}
 	}
 	visit(tree.root)
-	orderRecordValues(tree.valueStore, table.records, table.treeRefs)
-	tree.dataOrder = table.records
+	orderRecordValues(tree.valueStore, counter.records, counter.treeRefs)
+	tree.dataOrder = counter.records
 }
 
 // compareSubtreeReaders keeps only one result per reader, so the same full

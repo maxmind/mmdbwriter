@@ -33,6 +33,8 @@ type subtreeSlot struct {
 // Unlike the paper's long-lived weak table, this table cannot keep otherwise
 // dead nodes alive: the tree already owns every node visited during the pass.
 type subtreeTable struct {
+	recordCounter
+
 	tree      *Tree
 	ids       []uint32
 	slots     []subtreeSlot
@@ -40,8 +42,11 @@ type subtreeTable struct {
 	used      int
 	distinct  uint32
 	protected nodeIndex
-	// treeRefs counts the resident data records that hold each value.
-	// records lists each distinct record value once, in first-seen order.
+}
+
+// recordCounter counts the resident data records that hold each value, and
+// lists each distinct record value once, in first-seen order.
+type recordCounter struct {
 	treeRefs []uint32
 	records  []valueRef
 }
@@ -238,11 +243,11 @@ func (s *subtreeTable) visit(index nodeIndex) (uint32, bool) {
 	return id, unique
 }
 
-func (s *subtreeTable) countRecord(ref valueRef) {
-	if s.treeRefs[ref] == 0 {
-		s.records = append(s.records, ref)
+func (c *recordCounter) countRecord(ref valueRef) {
+	if c.treeRefs[ref] == 0 {
+		c.records = append(c.records, ref)
 	}
-	s.treeRefs[ref]++
+	c.treeRefs[ref]++
 }
 
 func (s *subtreeTable) intern(index nodeIndex, key subtreeKey, hash uint32) uint32 {
