@@ -172,6 +172,7 @@ func TestWriteToPutsSharedRecordValuesFirst(t *testing.T) {
 
 	reader, err := maxminddb.OpenBytes(writeTreeBytes(t, tree))
 	require.NoError(t, err)
+	defer reader.Close()
 	require.NoError(t, reader.Verify())
 
 	loneResult := reader.Lookup(netip.MustParseAddr("1.0.0.0"))
@@ -287,6 +288,7 @@ func TestWriteToRecordValueNestedInEarlierRecord(t *testing.T) {
 
 			reader, err := maxminddb.OpenBytes(writeTreeBytes(t, tree))
 			require.NoError(t, err)
+			defer reader.Close()
 			require.NoError(t, reader.Verify())
 			loaded, err := Load(writeTempDB(t, tree), Options{IncludeReservedNetworks: true})
 			require.NoError(t, err)
