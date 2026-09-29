@@ -152,9 +152,8 @@
   IPv4-only trees and trees with IPv4 aliasing disabled.
 - `WriteTo` now writes the most reused record values first, so they get shorter
   pointers. A rewritten GeoIP Enterprise database is about 8% smaller. Lookup
-  results do not change. More search-tree records now point to values nested
-  in other records, which maxminddb-golang `Reader.Verify()` before v2.7.0
-  rejects.
+  results do not change. More search-tree records now point to values nested in
+  other records, which maxminddb-golang `Reader.Verify()` before v2.7.0 rejects.
 
 ## 1.2.0 (2026-01-14)
 
