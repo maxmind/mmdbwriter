@@ -94,15 +94,10 @@ func TestRecordOrdererGainAndSize(t *testing.T) {
 				treeRefs[ref]++
 			}
 
-			o := recordOrderer{
-				store:    store,
-				treeRefs: treeRefs,
-				cost:     make([]uint8, len(store.nodes)),
-			}
+			o := newRecordOrderer(store, treeRefs)
 			for i, ref := range refs {
-				o.gain, o.size = 0, 0
-				o.visit(ref, true)
-				got := [2]uint64{o.gain, o.size}
+				gain, size := o.measure(ref)
+				got := [2]uint64{gain, size}
 				assert.Equal(t, test.want[i], got, "record %d", i)
 			}
 		})
@@ -118,15 +113,11 @@ func TestRecordOrdererRejectsTooManyTreeRefs(t *testing.T) {
 	treeRefs := make([]uint32, len(store.nodes))
 	treeRefs[ref] = 2
 
-	o := recordOrderer{
-		store:    store,
-		treeRefs: treeRefs,
-		cost:     make([]uint8, len(store.nodes)),
-	}
+	o := newRecordOrderer(store, treeRefs)
 	require.PanicsWithValue(
 		t,
 		fmt.Sprintf("mmdbwriter: value %d is held by 2 data records but has a refcount of 1", ref),
-		func() { o.visit(ref, true) },
+		func() { o.measure(ref) },
 	)
 }
 

@@ -21,11 +21,7 @@ const assumedPointerSize = 3
 // come first and get short pointers. Other records and ties keep first-seen
 // order.
 func orderRecordValues(store *valueStore, records []valueRef, treeRefs []uint32) {
-	o := recordOrderer{
-		store:    store,
-		treeRefs: treeRefs,
-		cost:     make([]uint8, len(store.nodes)),
-	}
+	o := newRecordOrderer(store, treeRefs)
 	type scored struct {
 		ref   valueRef
 		index uint32
@@ -36,9 +32,8 @@ func orderRecordValues(store *valueStore, records []valueRef, treeRefs []uint32)
 	var entries []scored
 	noGain := 0
 	for i, ref := range records {
-		o.gain, o.size = 0, 0
-		o.visit(ref, true)
-		if o.gain == 0 {
+		gain, size := o.measure(ref)
+		if gain == 0 {
 			records[noGain] = ref
 			noGain++
 			continue
@@ -46,7 +41,7 @@ func orderRecordValues(store *valueStore, records []valueRef, treeRefs []uint32)
 		entries = append(entries, scored{
 			ref:   ref,
 			index: uint32(i),
-			score: float64(o.gain) / float64(o.size),
+			score: float64(gain) / float64(size),
 		})
 	}
 	slices.SortFunc(entries, func(a, b scored) int {
@@ -69,6 +64,22 @@ type recordOrderer struct {
 	cost []uint8
 	gain uint64
 	size uint64
+}
+
+func newRecordOrderer(store *valueStore, treeRefs []uint32) recordOrderer {
+	return recordOrderer{
+		store:    store,
+		treeRefs: treeRefs,
+		cost:     make([]uint8, len(store.nodes)),
+	}
+}
+
+// measure returns the gain and size of the record whose value is ref, and
+// marks its new values as written.
+func (o *recordOrderer) measure(ref valueRef) (gain, size uint64) {
+	o.gain, o.size = 0, 0
+	o.visit(ref, true)
+	return o.gain, o.size
 }
 
 // visit adds the record's gain and size to o.gain and o.size, and marks its
