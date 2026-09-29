@@ -1,6 +1,7 @@
 package mmdbwriter
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -106,6 +107,27 @@ func TestRecordOrdererGainAndSize(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRecordOrdererRejectsTooManyTreeRefs(t *testing.T) {
+	store := newValueStore()
+	ref, err := store.intern(mmdbtype.String("held by one data record"))
+	require.NoError(t, err)
+	defer store.release(ref)
+	// The value has a refcount of 1, so 2 data records cannot hold it.
+	treeRefs := make([]uint32, len(store.nodes))
+	treeRefs[ref] = 2
+
+	o := recordOrderer{
+		store:    store,
+		treeRefs: treeRefs,
+		cost:     make([]uint8, len(store.nodes)),
+	}
+	require.PanicsWithValue(
+		t,
+		fmt.Sprintf("mmdbwriter: value %d is held by 2 data records but has a refcount of 1", ref),
+		func() { o.visit(ref, true) },
+	)
 }
 
 func TestOrderRecordValues(t *testing.T) {

@@ -2,6 +2,7 @@ package mmdbwriter
 
 import (
 	"cmp"
+	"fmt"
 	"slices"
 )
 
@@ -105,11 +106,25 @@ func (o *recordOrderer) pointerUses(ref valueRef, node *valueNode, size uint64, 
 	if size <= assumedPointerSize {
 		return 0
 	}
-	slots := uint64(node.refCount - o.treeRefs[ref])
+	treeRefs := o.treeRefs[ref]
+	if treeRefs > node.refCount {
+		panicTreeRefs(ref, treeRefs, node.refCount)
+	}
+	slots := uint64(node.refCount - treeRefs)
 	if root || slots == 0 {
 		return slots
 	}
 	return slots - 1
+}
+
+// Keep formatting out of the scoring path.
+func panicTreeRefs(ref valueRef, treeRefs, refCount uint32) {
+	panic(fmt.Sprintf(
+		"mmdbwriter: value %d is held by %d data records but has a refcount of %d",
+		ref,
+		treeRefs,
+		refCount,
+	))
 }
 
 // referenceCost returns the size of a reference to a written value: a
