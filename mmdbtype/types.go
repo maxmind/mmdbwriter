@@ -14,6 +14,8 @@ import (
 	"slices"
 
 	"github.com/oschwald/maxminddb-golang/v2/mmdbdata"
+
+	"github.com/maxmind/mmdbwriter/v2/internal/ctrlsize"
 )
 
 type typeNum byte
@@ -1029,13 +1031,6 @@ func (t Uint128) WriteTo(w writer) (int64, error) {
 	return numBytes + int64(size), nil
 }
 
-const (
-	firstSize  = 29
-	secondSize = firstSize + 256
-	thirdSize  = secondSize + (1 << 16)
-	maxSize    = thirdSize + (1 << 24)
-)
-
 func writeCtrlByte(w writer, size int, typeN typeNum) (int64, error) {
 	var firstByte byte
 	var secondByte byte
@@ -1047,30 +1042,15 @@ func writeCtrlByte(w writer, size int, typeN typeNum) (int64, error) {
 		secondByte = byte(typeN - 7)
 	}
 
-	leftOver := 0
-	leftOverSize := 0
-	switch {
-	case size < firstSize:
-		firstByte |= byte(size & 0xFF)
-	case size < secondSize:
-		firstByte |= 29
-		leftOver = size - firstSize
-		leftOverSize = 1
-	case size < thirdSize:
-		firstByte |= 30
-		leftOver = size - secondSize
-		leftOverSize = 2
-	case size < maxSize:
-		firstByte |= 31
-		leftOver = size - thirdSize
-		leftOverSize = 3
-	default:
+	if size > ctrlsize.Max {
 		return 0, fmt.Errorf(
 			"cannot store %d bytes; max size is %d",
 			size,
-			maxSize-1,
+			ctrlsize.Max,
 		)
 	}
+	sizeBits, leftOver, leftOverSize := ctrlsize.Split(size)
+	firstByte |= sizeBits
 
 	err := w.WriteByte(firstByte)
 	if err != nil {

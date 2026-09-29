@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 
+	"github.com/maxmind/mmdbwriter/v2/internal/ctrlsize"
 	"github.com/maxmind/mmdbwriter/v2/mmdbtype"
 )
 
@@ -159,27 +160,8 @@ func containerHeaderSize(kind valueKind, size int) uint64 {
 		// A slice uses the extended type byte.
 		header++
 	}
-	_, _, sizeBytes := containerSize(size)
+	_, _, sizeBytes := ctrlsize.Split(size)
 	return header + uint64(sizeBytes) //nolint:gosec // sizeBytes is 0 to 3.
-}
-
-// maxContainerEntries is the largest entry count that 3 size bytes encode.
-const maxContainerEntries = 65821 + 1<<24 - 1
-
-// containerSize returns how a container's entry count is encoded: the value
-// for the control byte's size bits, the value of the size bytes that follow,
-// and how many size bytes follow.
-func containerSize(size int) (control byte, extra, sizeBytes int) {
-	switch {
-	case size < 29:
-		return byte(size), 0, 0 //nolint:gosec // this branch bounds size below 29
-	case size < 285:
-		return 29, size - 29, 1
-	case size < 65821:
-		return 30, size - 285, 2
-	default:
-		return 31, size - 65821, 3
-	}
 }
 
 func writeContainerHeader(
@@ -200,11 +182,11 @@ func writeContainerHeader(
 		first = typeNumber << 5
 	}
 
-	if size > maxContainerEntries {
+	if size > ctrlsize.Max {
 		return fmt.Errorf("cannot store %d container entries", size)
 	}
-	control, remaining, remainingSize := containerSize(size)
-	first |= control
+	sizeBits, remaining, remainingSize := ctrlsize.Split(size)
+	first |= sizeBits
 	if err := writer.WriteByte(first); err != nil {
 		return fmt.Errorf("writing container control byte: %w", err)
 	}
