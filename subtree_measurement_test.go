@@ -78,8 +78,13 @@ func TestSubtreeMeasurement(t *testing.T) {
 		require.NoError(t, err)
 		distinct = uint32(newNodeIndex(tree.nodeCount))
 	case "count":
+		// Canonicalization also counts the records that hold each value and
+		// lists the record values for the data order. This mode includes that
+		// work, so its times are not comparable with measurements from before
+		// the data order existed.
 		tree.nodeNumbers = make([]uint32, tree.nodeCountAllocated)
-		distinct = uint32(newNodeIndex(tree.canonicalizeSubtrees()))
+		count, _, _ := tree.canonicalizeSubtrees()
+		distinct = uint32(newNodeIndex(count))
 	default:
 		t.Fatalf("unknown mode %q", mode)
 	}

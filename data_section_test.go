@@ -2,8 +2,11 @@ package mmdbwriter
 
 import (
 	"bytes"
+	"fmt"
+	"net/netip"
 	"testing"
 
+	"github.com/oschwald/maxminddb-golang/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -149,6 +152,42 @@ func TestWriterInterfaceMethodsBypassTheStore(t *testing.T) {
 		"the interface methods must not touch the store")
 }
 
+func TestWriteToPutsSharedRecordValuesFirst(t *testing.T) {
+	tree, err := New(Options{
+		DatabaseType:            "Test",
+		Description:             map[string]string{"en": "Test"},
+		IPVersion:               4,
+		IncludeReservedNetworks: true,
+	})
+	require.NoError(t, err)
+	// The tree walk reaches this record first, but it shares nothing.
+	lone := mmdbtype.Map{"lone": mmdbtype.String("a value that no other record holds")}
+	require.NoError(t, tree.Insert(netip.MustParsePrefix("1.0.0.0/8"), lone))
+	hot := mmdbtype.Map{"hot": mmdbtype.String("a value that many records hold")}
+	for i := range 4 {
+		prefix := netip.PrefixFrom(netip.AddrFrom4([4]byte{2, byte(i), 0, 0}), 16)
+		value := mmdbtype.Map{"id": mmdbtype.Uint32(i), "shared": hot}
+		require.NoError(t, tree.Insert(prefix, value))
+	}
+
+	reader, err := maxminddb.OpenBytes(writeTreeBytes(t, tree))
+	require.NoError(t, err)
+	defer reader.Close()
+	require.NoError(t, reader.Verify())
+
+	loneResult := reader.Lookup(netip.MustParseAddr("1.0.0.0"))
+	// The first shared record writes the shared values, so it moves ahead.
+	sharedResult := reader.Lookup(netip.MustParseAddr("2.0.0.0"))
+	assert.Less(t, sharedResult.Offset(), loneResult.Offset())
+
+	var loneValue string
+	require.NoError(t, loneResult.DecodePath(&loneValue, "lone"))
+	assert.Equal(t, "a value that no other record holds", loneValue)
+	var hotValue string
+	require.NoError(t, sharedResult.DecodePath(&hotValue, "shared", "hot"))
+	assert.Equal(t, "a value that many records hold", hotValue)
+}
+
 func TestWriteContainerHeaderSizeBoundaries(t *testing.T) {
 	for _, test := range []struct {
 		name string
@@ -156,6 +195,7 @@ func TestWriteContainerHeaderSizeBoundaries(t *testing.T) {
 		size int
 		want []byte
 	}{
+		{"map empty", valueKindMap, 0, []byte{0xe0}},
 		{"map inline", valueKindMap, 28, []byte{0xfc}},
 		{"map one byte start", valueKindMap, 29, []byte{0xfd, 0x00}},
 		{"map one byte end", valueKindMap, 284, []byte{0xfd, 0xff}},
@@ -163,16 +203,98 @@ func TestWriteContainerHeaderSizeBoundaries(t *testing.T) {
 		{"map two byte end", valueKindMap, 65820, []byte{0xfe, 0xff, 0xff}},
 		{"map three byte start", valueKindMap, 65821, []byte{0xff, 0x00, 0x00, 0x00}},
 		{"map three byte end", valueKindMap, 16843036, []byte{0xff, 0xff, 0xff, 0xff}},
+		{"slice inline", valueKindSlice, 0, []byte{0x00, 0x04}},
+		{"slice inline end", valueKindSlice, 28, []byte{0x1c, 0x04}},
 		{"slice extended type", valueKindSlice, 29, []byte{0x1d, 0x04, 0x00}},
+		{"slice one byte end", valueKindSlice, 284, []byte{0x1d, 0x04, 0xff}},
+		{"slice two byte start", valueKindSlice, 285, []byte{0x1e, 0x04, 0x00, 0x00}},
+		{"slice two byte end", valueKindSlice, 65820, []byte{0x1e, 0x04, 0xff, 0xff}},
+		{"slice three byte start", valueKindSlice, 65821, []byte{0x1f, 0x04, 0x00, 0x00, 0x00}},
+		{"slice three byte end", valueKindSlice, 16843036, []byte{0x1f, 0x04, 0xff, 0xff, 0xff}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			var output bytes.Buffer
 			require.NoError(t, writeContainerHeader(&output, test.kind, test.size))
 			assert.Equal(t, test.want, output.Bytes())
+			assert.Equal(t, uint64(len(test.want)), containerHeaderSize(test.kind, test.size))
 		})
 	}
 
-	var output bytes.Buffer
-	err := writeContainerHeader(&output, valueKindMap, 16843037)
-	require.ErrorContains(t, err, "cannot store")
+	// The writer rejects a size that is too large. The size estimate then
+	// gives the largest header.
+	for kind, largest := range map[valueKind]uint64{valueKindMap: 4, valueKindSlice: 5} {
+		var output bytes.Buffer
+		err := writeContainerHeader(&output, kind, 16843037)
+		require.ErrorContains(t, err, "cannot store")
+		assert.Equal(t, largest, containerHeaderSize(kind, 16843037))
+	}
+}
+
+// A record value that an earlier record already wrote nested gets that nested
+// offset. The output must still pass Verify and give the inserted values.
+func TestWriteToRecordValueNestedInEarlierRecord(t *testing.T) {
+	type insert struct {
+		network string
+		value   mmdbtype.DataType
+	}
+	hot := mmdbtype.Map{"hot": mmdbtype.String("a value that many records hold")}
+	// The small value has no gain, so the record that holds it nested beside
+	// hot comes first.
+	smallValue := func(value mmdbtype.DataType) []insert {
+		inserts := []insert{
+			{"1.0.0.0/8", value},
+			{"2.0.0.0/8", mmdbtype.Map{"e": value, "shared": hot}},
+		}
+		for i := range 4 {
+			inserts = append(inserts, insert{
+				fmt.Sprintf("3.%d.0.0/16", i),
+				mmdbtype.Map{"id": mmdbtype.Uint16(i), "shared": hot},
+			})
+		}
+		return inserts
+	}
+	inner := mmdbtype.Map{"x": mmdbtype.String("some long value here")}
+	root := mmdbtype.Map{"v": mmdbtype.String("abcdef")}
+	for _, test := range []struct {
+		name    string
+		inserts []insert
+	}{
+		{"nested first in tree order", []insert{
+			{"1.0.0.0/24", mmdbtype.Map{"a": inner}},
+			{"2.0.0.0/24", inner},
+		}},
+		{"empty map", smallValue(mmdbtype.Map{})},
+		{"empty slice", smallValue(mmdbtype.Slice{})},
+		{"small slice", smallValue(mmdbtype.Slice{mmdbtype.Uint16(0)})},
+		{"short string", smallValue(mmdbtype.String("US"))},
+		{"small integer", smallValue(mmdbtype.Uint16(0))},
+		// Both records tie with no gain, and the holder has the lower address.
+		{"tie", []insert{
+			{"1.0.0.0/10", mmdbtype.Map{"r": root}},
+			{"1.128.0.0/9", root},
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			tree, err := New(Options{
+				DatabaseType:            "Test",
+				Description:             map[string]string{"en": "Test"},
+				IPVersion:               4,
+				IncludeReservedNetworks: true,
+			})
+			require.NoError(t, err)
+			for _, insert := range test.inserts {
+				require.NoError(t, tree.Insert(netip.MustParsePrefix(insert.network), insert.value))
+			}
+
+			reader, err := maxminddb.OpenBytes(writeTreeBytes(t, tree))
+			require.NoError(t, err)
+			defer reader.Close()
+			require.NoError(t, reader.Verify())
+			loaded, err := Load(writeTempDB(t, tree), Options{IncludeReservedNetworks: true})
+			require.NoError(t, err)
+			for _, insert := range test.inserts {
+				requireTreeLookup(t, loaded, tree, netip.MustParsePrefix(insert.network).Addr())
+			}
+		})
+	}
 }
