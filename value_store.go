@@ -672,15 +672,15 @@ func (s *valueStore) matchMapShape(
 	return children, pairs
 }
 
-// keyBytes returns the bytes of the string that a map key ref holds.
-func (s *valueStore) keyBytes(keyRef valueRef) []byte {
-	return scalarPayload(s.payload(s.node(keyRef)))
-}
-
 // keyString returns the string that a map key ref holds, for an error
 // message. It does not cache a materialized value on the shared key node.
 func (s *valueStore) keyString(keyRef valueRef) string {
 	return string(s.keyBytes(keyRef))
+}
+
+// keyBytes returns the bytes of the string that a map key ref holds.
+func (s *valueStore) keyBytes(keyRef valueRef) []byte {
+	return scalarPayload(s.payload(s.node(keyRef)))
 }
 
 func (s *valueStore) internSlice(value mmdbtype.Slice) (valueRef, error) {
