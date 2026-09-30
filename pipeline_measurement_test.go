@@ -17,10 +17,13 @@ import (
 	"github.com/maxmind/mmdbwriter/v2/mmdbtype"
 )
 
-// TestPipelineMeasurement runs once per process so /usr/bin/time can measure
-// peak RSS without retaining warm-up trees. It loads MMDBWRITER_BENCHMARK_DB,
-// merges the MMDBWRITER_PIPELINE_OVERLAYS databases in path-list order, then
-// writes. The output hash detects output changes.
+// TestPipelineMeasurement is an opt-in, single-process measurement harness.
+// It loads MMDBWRITER_BENCHMARK_DB, merges the MMDBWRITER_PIPELINE_OVERLAYS
+// databases in path-list order, then writes. The output hash detects output
+// changes. Set MMDBWRITER_PIPELINE_METADATA to merge with InsertFunc.
+// Compile once, then run fresh processes under /usr/bin/time -v with
+// -test.run='^TestPipelineMeasurement$' -test.count=1 -test.v, so that no
+// other test or repeat adds to the peak RSS.
 func TestPipelineMeasurement(t *testing.T) {
 	overlays := os.Getenv("MMDBWRITER_PIPELINE_OVERLAYS")
 	if overlays == "" {
