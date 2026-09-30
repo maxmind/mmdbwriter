@@ -1557,25 +1557,16 @@ func TestLoadSharesRefsForSharedOffsets(t *testing.T) {
 // points at the first nested copy of its value. The first record caches that
 // offset as a nested value, so the second record must hit the cache.
 func TestLoadReusesNestedOffsetForRecord(t *testing.T) {
-	tree, err := New(Options{
-		DatabaseType:            "mmdbwriter-load-nested-offset",
-		Description:             map[string]string{"en": "Test database"},
-		IncludeReservedNetworks: true,
-		IPVersion:               4,
-		RecordSize:              24,
-	})
-	require.NoError(t, err)
+	tree := newTestTree(t, "mmdbwriter-load-nested-offset")
 
 	shared := mmdbtype.Map{"k": mmdbtype.String("shared value")}
 	outer := mmdbtype.Map{"nested": shared}
 	require.NoError(t, tree.Insert(netip.MustParsePrefix("1.1.1.0/24"), outer))
 	require.NoError(t, tree.Insert(netip.MustParsePrefix("2.2.2.0/24"), shared))
 
-	var buf bytes.Buffer
-	_, err = tree.WriteTo(&buf)
-	require.NoError(t, err)
+	data := writeTreeBytes(t, tree)
 
-	reader, err := maxminddb.OpenBytes(buf.Bytes())
+	reader, err := maxminddb.OpenBytes(data)
 	require.NoError(t, err)
 	defer func() { require.NoError(t, reader.Close()) }()
 	store := newValueStore()
@@ -1602,7 +1593,7 @@ func TestLoadReusesNestedOffsetForRecord(t *testing.T) {
 	require.Zero(t, liveValueNodeCount(store))
 	require.NoError(t, store.audit(nil))
 
-	loaded, err := Load(writeTempFile(t, buf.Bytes()), Options{
+	loaded, err := Load(writeTempFile(t, data), Options{
 		IPVersion:               4,
 		IncludeReservedNetworks: true,
 	})
