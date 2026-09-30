@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/maphash"
+	"io"
 	"math"
 	"math/big"
 	"net/netip"
@@ -2143,6 +2144,7 @@ func TestTreeInsertAndGet(t *testing.T) {
 							BuildEpoch:              epochSec,
 							DisableIPv4Aliasing:     test.disableIPv4Aliasing,
 							IncludeReservedNetworks: test.includeReservedNetworks,
+							RecordSize:              recordSize,
 						},
 					)
 					require.NoError(t, err)
@@ -2493,7 +2495,9 @@ func TestLoadRejectsUnsupportedMetadataDimensions(t *testing.T) {
 		_, err := Load(path, Options{IncludeReservedNetworks: true})
 
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "unsupported RecordSize: 20")
+		assert.Contains(t, err.Error(), "unsupported record_size in metadata: 20")
+		assert.Contains(t, err.Error(), path,
+			"the error does not say which database failed")
 	})
 
 	t.Run("absent record size", func(t *testing.T) {
@@ -2516,7 +2520,7 @@ func TestLoadRejectsUnsupportedMetadataDimensions(t *testing.T) {
 		assert.Contains(t, err.Error(), "unsupported ip_version in metadata: 0")
 	})
 
-	t.Run("explicit options bypass the metadata values", func(t *testing.T) {
+	t.Run("explicit options bypass the ip_version metadata", func(t *testing.T) {
 		path := writeMetadataPatchedDB(t, "ip_version", 5)
 
 		_, err := Load(path, Options{
@@ -2526,6 +2530,20 @@ func TestLoadRejectsUnsupportedMetadataDimensions(t *testing.T) {
 		})
 
 		require.NoError(t, err)
+	})
+
+	// The reader reads the source tree with the source size, so an explicit
+	// RecordSize cannot replace it.
+	t.Run("explicit RecordSize does not bypass the source record_size", func(t *testing.T) {
+		path := writeMetadataPatchedDB(t, "record_size", 20)
+
+		_, err := Load(path, Options{
+			RecordSize:              24,
+			IncludeReservedNetworks: true,
+		})
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "unsupported record_size in metadata: 20")
 	})
 }
 
@@ -2667,6 +2685,176 @@ func TestNewAcceptsSupportedRecordSizes(t *testing.T) {
 			require.NoError(t, err)
 		})
 	}
+}
+
+func TestRecordSizeFor(t *testing.T) {
+	tests := []struct {
+		maxValue int64
+		want     int
+	}{
+		{0, 24},
+		{1<<24 - 1, 24},
+		{1 << 24, 28},
+		{1<<28 - 1, 28},
+		{1 << 28, 32},
+		{1<<32 - 1, 32},
+	}
+	for _, tc := range tests {
+		got, err := recordSizeFor(tc.maxValue)
+		require.NoError(t, err, "max value %d", tc.maxValue)
+		assert.Equal(t, tc.want, got, "max value %d", tc.maxValue)
+	}
+
+	_, err := recordSizeFor(1 << 32)
+	require.ErrorContains(t, err, "32-bit")
+}
+
+// recordSizeTree returns an IPv4 tree with a fixed build epoch, so that writes
+// with different record size options can be compared byte for byte.
+func recordSizeTree(t *testing.T, recordSize int) *Tree {
+	t.Helper()
+
+	tree, err := New(Options{
+		BuildEpoch:              1,
+		DatabaseType:            "mmdbwriter-record-size",
+		Description:             map[string]string{"en": "Test database"},
+		IncludeReservedNetworks: true,
+		IPVersion:               4,
+		RecordSize:              recordSize,
+	})
+	require.NoError(t, err)
+	return tree
+}
+
+// openDB opens db and closes it when the test ends.
+func openDB(t *testing.T, db []byte) *maxminddb.Reader {
+	t.Helper()
+
+	reader, err := maxminddb.OpenBytes(db)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, reader.Close()) })
+	return reader
+}
+
+func TestDefaultRecordSizeIsSmallestThatFits(t *testing.T) {
+	small := netip.MustParsePrefix("2.0.0.0/8")
+	largePrefix := func(i byte) netip.Prefix {
+		return netip.PrefixFrom(netip.AddrFrom4([4]byte{1, 0, i, 0}), 24)
+	}
+	// The large values come first in the data section, and together they take
+	// more than 2^24 bytes, so the small value's offset needs 28 bits. Each one
+	// stays under the reader's 2 MiB decode budget.
+	insertLarge := func(tree *Tree) {
+		for i := range byte(17) {
+			value := make(mmdbtype.Bytes, 1<<20)
+			value[0] = i
+			require.NoError(t, tree.Insert(largePrefix(i), value))
+		}
+	}
+
+	build := func(recordSize int, withLarge bool) *Tree {
+		tree := recordSizeTree(t, recordSize)
+		if withLarge {
+			insertLarge(tree)
+		}
+		require.NoError(t, tree.Insert(small, mmdbtype.String("small")))
+		return tree
+	}
+
+	requireSmall := func(reader *maxminddb.Reader) {
+		t.Helper()
+		var got string
+		require.NoError(t, reader.Lookup(small.Addr()).Decode(&got))
+		assert.Equal(t, "small", got)
+	}
+
+	tree := build(0, false)
+	db := writeTreeBytes(t, tree)
+	reader := openDB(t, db)
+	require.NoError(t, reader.Verify())
+	assert.EqualValues(t, 24, reader.Metadata.RecordSize)
+	assert.True(t, bytes.Equal(writeTreeBytes(t, build(24, false)), db),
+		"the default write differs from a 24-bit write")
+
+	// A later insert that grows the data section gets a bigger size.
+	insertLarge(tree)
+	db = writeTreeBytes(t, tree)
+	reader = openDB(t, db)
+	require.NoError(t, reader.Verify())
+	assert.EqualValues(t, 28, reader.Metadata.RecordSize)
+	assert.True(t, bytes.Equal(writeTreeBytes(t, build(28, true)), db),
+		"the default write differs from a 28-bit write")
+	var gotLarge []byte
+	require.NoError(t, reader.Lookup(netip.MustParseAddr("1.0.16.1")).Decode(&gotLarge))
+	assert.Len(t, gotLarge, 1<<20)
+	assert.Equal(t, byte(16), gotLarge[0])
+	requireSmall(reader)
+
+	_, err := build(24, true).WriteTo(io.Discard)
+	require.ErrorContains(t, err, "exceeded record capacity")
+
+	// Removing the large values shrinks the data section, so the next write
+	// gets a smaller size.
+	for i := range byte(17) {
+		require.NoError(t, tree.Insert(largePrefix(i), nil))
+	}
+	db = writeTreeBytes(t, tree)
+	reader = openDB(t, db)
+	require.NoError(t, reader.Verify())
+	assert.EqualValues(t, 24, reader.Metadata.RecordSize)
+	requireSmall(reader)
+}
+
+// TestDefaultRecordSizeBoundary checks the 24-bit limit to the byte. With a
+// value of boundaryLength bytes, the largest record value is 2^24-1.
+func TestDefaultRecordSizeBoundary(t *testing.T) {
+	const boundaryLength = 16777186
+	for _, tc := range []struct {
+		length int
+		want   uint
+	}{
+		{boundaryLength, 24},
+		{boundaryLength + 1, 28},
+	} {
+		build := func(recordSize int) *Tree {
+			tree := recordSizeTree(t, recordSize)
+			value := make(mmdbtype.Bytes, tc.length)
+			require.NoError(t, tree.Insert(netip.MustParsePrefix("1.0.0.0/8"), value))
+			require.NoError(t, tree.Insert(
+				netip.MustParsePrefix("2.0.0.0/8"),
+				mmdbtype.String("small"),
+			))
+			return tree
+		}
+
+		// The value is larger than the reader's decode budget, so this reads
+		// only the metadata and does not call Verify.
+		reader := openDB(t, writeTreeBytes(t, build(0)))
+		assert.Equal(t, tc.want, reader.Metadata.RecordSize, "length %d", tc.length)
+
+		_, err := build(24).WriteTo(io.Discard)
+		if tc.want == 24 {
+			require.NoError(t, err, "length %d", tc.length)
+		} else {
+			require.ErrorContains(t, err, "exceeded record capacity", "length %d", tc.length)
+		}
+	}
+}
+
+func TestLoadChoosesSmallestRecordSize(t *testing.T) {
+	source := recordSizeTree(t, 28)
+	prefix := netip.MustParsePrefix("1.2.3.0/24")
+	require.NoError(t, source.Insert(prefix, mmdbtype.String("value")))
+
+	tree, err := Load(writeTempDB(t, source), Options{IncludeReservedNetworks: true})
+	require.NoError(t, err)
+	reader := openDB(t, writeTreeBytes(t, tree))
+	require.NoError(t, reader.Verify())
+	assert.EqualValues(t, 24, reader.Metadata.RecordSize)
+
+	var got string
+	require.NoError(t, reader.Lookup(prefix.Addr()).Decode(&got))
+	assert.Equal(t, "value", got)
 }
 
 // TestInsertNilValueRemovesRecord verifies that the default inserter removes

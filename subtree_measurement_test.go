@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/oschwald/maxminddb-golang/v2"
 	"github.com/stretchr/testify/require"
 
 	"github.com/maxmind/mmdbwriter/v2/mmdbtype"
@@ -17,7 +18,7 @@ import (
 
 func subtreeSyntheticTree(tb testing.TB, unique bool) *Tree {
 	tb.Helper()
-	tree, err := New(Options{BuildEpoch: 123, IncludeReservedNetworks: true})
+	tree, err := New(Options{BuildEpoch: 123, IncludeReservedNetworks: true, RecordSize: 28})
 	require.NoError(tb, err)
 	for group := range uint32(8192) {
 		for suffix := range uint32(8) {
@@ -49,14 +50,27 @@ func TestSubtreeMeasurement(t *testing.T) {
 	if mode == "" {
 		t.Skip("MMDBWRITER_SUBTREE_MODE is not set")
 	}
-	start := time.Now()
 	path := os.Getenv("MMDBWRITER_BENCHMARK_DB")
+	synthetic := path == "ipv6-repeated" || path == "ipv6-unique"
+	// Keep the source record size, so that both modes report the same size
+	// and the results compare with earlier measurements.
+	var recordSize int
+	if !synthetic {
+		reader, err := maxminddb.Open(path)
+		require.NoError(t, err)
+		recordSize = int(reader.Metadata.RecordSize)
+		require.NoError(t, reader.Close())
+	}
+	start := time.Now()
 	var tree *Tree
-	if path == "ipv6-repeated" || path == "ipv6-unique" {
+	if synthetic {
 		tree = subtreeSyntheticTree(t, path == "ipv6-unique")
 	} else {
 		var err error
-		tree, err = Load(path, Options{BuildEpoch: 123, IncludeReservedNetworks: true})
+		tree, err = Load(
+			path,
+			Options{BuildEpoch: 123, IncludeReservedNetworks: true, RecordSize: recordSize},
+		)
 		require.NoError(t, err)
 	}
 	loadTime := time.Since(start)

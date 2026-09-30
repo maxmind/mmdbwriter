@@ -184,6 +184,7 @@ func TestDeduplicateSubtrees(t *testing.T) {
 							Options{
 								BuildEpoch:              123,
 								IncludeReservedNetworks: reserved,
+								RecordSize:              size,
 							},
 						)
 						require.NoError(t, err)

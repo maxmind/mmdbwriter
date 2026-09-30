@@ -68,7 +68,9 @@ type Options struct {
 	// RecordSize indicates the number of bits in a record in the search tree.
 	// The supported values are 24, 28, and 32. A smaller size will result in a
 	// smaller database, but it will limit the maximum size of the database.
-	// The default is 28.
+	// The default, 0, makes each WriteTo call use the smallest size that fits
+	// the database. With an explicit size, WriteTo returns an error if the
+	// database does not fit.
 	RecordSize int
 
 	// DisableMetadataPointers prevents the use of pointers in the metadata
@@ -126,6 +128,9 @@ type Tree struct {
 	ipVersion               int
 	languages               []string
 	recordSize              int
+	// autoRecordSize makes WriteTo set recordSize to the smallest size that
+	// fits.
+	autoRecordSize bool
 	// Node blocks preserve pointer stability while retired slots are reused.
 	nodeBlocks         [][]node
 	nodeCountAllocated int
@@ -172,7 +177,6 @@ func New(opts Options) (*Tree, error) {
 		description:             map[string]string{},
 		disableMetadataPointers: opts.DisableMetadataPointers,
 		ipVersion:               6,
-		recordSize:              28,
 		nodeBlocks:              [][]node{make([]node, nodeBlockSize)},
 		nodeCountAllocated:      1,
 		root:                    rootNodeIndex,
@@ -200,9 +204,8 @@ func New(opts Options) (*Tree, error) {
 		tree.languages = opts.Languages
 	}
 
-	if opts.RecordSize != 0 {
-		tree.recordSize = opts.RecordSize
-	}
+	tree.recordSize = opts.RecordSize
+	tree.autoRecordSize = opts.RecordSize == 0
 
 	if opts.Inserter != nil {
 		tree.inserter = opts.Inserter
@@ -217,10 +220,10 @@ func New(opts Options) (*Tree, error) {
 		return nil, fmt.Errorf("unsupported IPVersion: %d", tree.ipVersion)
 	}
 
-	switch tree.recordSize {
-	case 24, 28, 32:
-	default:
-		return nil, fmt.Errorf("unsupported RecordSize: %d", tree.recordSize)
+	if !tree.autoRecordSize {
+		if err := validateRecordSize(tree.recordSize); err != nil {
+			return nil, err
+		}
 	}
 
 	if tree.buildEpoch < 0 {
@@ -241,6 +244,28 @@ func New(opts Options) (*Tree, error) {
 	}
 
 	return tree, nil
+}
+
+func validateRecordSize(recordSize int) error {
+	switch recordSize {
+	case 24, 28, 32:
+		return nil
+	default:
+		return fmt.Errorf("unsupported RecordSize: %d", recordSize)
+	}
+}
+
+// recordSizeFor returns the smallest record size that can hold maxValue.
+func recordSizeFor(maxValue int64) (int, error) {
+	for _, size := range []int{24, 28, 32} {
+		if maxValue < int64(1)<<size {
+			return size, nil
+		}
+	}
+	return 0, fmt.Errorf(
+		"largest record value of %d does not fit in 32-bit records: reduce the size of the database",
+		maxValue,
+	)
 }
 
 // metadataDimension narrows a search tree dimension read from metadata. New
@@ -291,11 +316,16 @@ func Load(path string, opts Options) (*Tree, error) {
 		opts.Languages = metadata.Languages
 	}
 
-	if opts.RecordSize == 0 {
-		opts.RecordSize, err = metadataDimension("record_size", metadata.RecordSize)
-		if err != nil {
-			return nil, fmt.Errorf("loading %s: %w", path, err)
-		}
+	// The written tree does not keep the source record size, but the reader
+	// uses it to read the source tree.
+	switch metadata.RecordSize {
+	case 24, 28, 32:
+	default:
+		return nil, fmt.Errorf(
+			"loading %s: unsupported record_size in metadata: %d",
+			path,
+			metadata.RecordSize,
+		)
 	}
 
 	tree, err := New(opts)
@@ -962,21 +992,37 @@ func (t *Tree) WriteTo(w io.Writer) (int64, error) {
 	//nolint:errcheck // We check the error on flush the only place that matters.
 	defer buf.Flush()
 
-	// We create this here so that we don't have to allocate millions of these. This
-	// may no longer make sense now that we are using a bufio.Writer anyway, which has
-	// WriteByte, but we should probably do some testing.
-	recordBuf := make([]byte, 2*t.recordSize/8)
-
 	usePointers := true
 	dataWriter := newDataWriter(t.valueStore, usePointers)
 
 	// Write the record values first, in the order finalize chose. The tree
 	// walk then only looks up their offsets.
+	maxOffset := -1
 	for _, ref := range t.dataOrder {
-		if _, err := dataWriter.maybeWrite(ref); err != nil {
+		offset, err := dataWriter.maybeWrite(ref)
+		if err != nil {
 			return 0, fmt.Errorf("writing record values: %w", err)
 		}
+		maxOffset = max(maxOffset, offset)
 	}
+
+	if t.autoRecordSize {
+		// Empty records hold nodeCount, and node records hold less.
+		maxValue := int64(t.nodeCount)
+		if maxOffset >= 0 {
+			maxValue += int64(len(dataSectionSeparator)) + int64(maxOffset)
+		}
+		recordSize, err := recordSizeFor(maxValue)
+		if err != nil {
+			return 0, err
+		}
+		t.recordSize = recordSize
+	}
+
+	// We create this here so that we don't have to allocate millions of these. This
+	// may no longer make sense now that we are using a bufio.Writer anyway, which has
+	// WriteByte, but we should probably do some testing.
+	recordBuf := make([]byte, 2*t.recordSize/8)
 
 	nextNumber := uint32(0)
 	numBytes, err := t.writeSubtree(buf, t.root, dataWriter, recordBuf, &nextNumber)

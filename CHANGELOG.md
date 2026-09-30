@@ -154,6 +154,9 @@
   pointers. A rewritten GeoIP Enterprise database is about 8% smaller. Lookup
   results do not change. More search-tree records now point to values nested in
   other records, which maxminddb-golang `Reader.Verify()` before v2.7.0 rejects.
+- The default record size is now the smallest of 24, 28, and 32 that fits the
+  database, so it can change as the database grows. `Load` no longer keeps the
+  source database's record size. Set `Options.RecordSize` to use a fixed size.
 
 ## 1.2.0 (2026-01-14)
 
