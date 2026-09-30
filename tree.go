@@ -319,17 +319,14 @@ func Load(path string, opts Options) (*Tree, error) {
 			return nil, fmt.Errorf("loading network %s from %s: %w", prefix, path, err)
 		}
 
-		value, cached := decoder.cachedTopLevel(uint(res.Offset()))
-		if !cached {
-			value, err = decoder.decodeTopLevel(res)
-			if err != nil {
-				return nil, fmt.Errorf(
-					"unmarshaling record for network %s from %s: %w", prefix, path, err,
-				)
-			}
+		value, err := decoder.decodeTopLevel(res)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"unmarshaling record for network %s from %s: %w", prefix, path, err,
+			)
 		}
 
-		prefix, err := tree.normalizeLoadPrefix(prefix)
+		prefix, err = tree.normalizeLoadPrefix(prefix)
 		if err != nil {
 			tree.valueStore.release(value)
 			return nil, err

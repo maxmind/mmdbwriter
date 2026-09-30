@@ -106,21 +106,16 @@ func (d *storeDecoder) takeResult() valueRef {
 	return ref
 }
 
-// cachedTopLevel returns a new reference to the value decoded at offset, if
-// the cache has one. A top-level result needs no successor cursor, so this
-// skips the Skip that a cache hit in decodeRef does for an inline container.
-func (d *storeDecoder) cachedTopLevel(offset uint) (valueRef, bool) {
-	ref, ok := d.cache[offset]
-	if ok {
-		d.store.retain(ref)
-	}
-	return ref, ok
-}
-
-// decodeTopLevel decodes the record for res after cachedTopLevel missed its
-// offset, and returns a reference that the caller owns.
+// decodeTopLevel returns a reference that the caller owns to the record for
+// res. If the cache has the record offset, it reuses that value. A top-level
+// result needs no successor cursor, so this skips the Skip that a cache hit
+// in decodeRef does for an inline container.
 func (d *storeDecoder) decodeTopLevel(res maxminddb.Result) (valueRef, error) {
 	offset := uint(res.Offset())
+	if ref, ok := d.cache[offset]; ok {
+		d.store.retain(ref)
+		return ref, nil
+	}
 	d.record.offset = offset
 	if err := res.Decode(&d.record); err != nil {
 		return nilValueRef, fmt.Errorf("decoding record at offset %d: %w", offset, err)
@@ -139,12 +134,12 @@ func (d *storeDecoder) decodeRecord(
 		return nilValueRef, mmdbdata.Cursor{}, fmt.Errorf("resolving offset: %w", err)
 	}
 	if offset == recordOffset {
-		// cachedTopLevel already missed this offset.
+		// decodeTopLevel already missed this offset.
 		return d.decodeUncached(cursor, offset)
 	}
 	// The record points at a pointer, as the Perl writer can write. Cache
 	// the value under the record offset too, so the next record with this
-	// offset hits cachedTopLevel.
+	// offset hits the cache in decodeTopLevel.
 	ref, next, err := d.decodeCached(cursor, offset)
 	if err != nil {
 		return nilValueRef, mmdbdata.Cursor{}, err

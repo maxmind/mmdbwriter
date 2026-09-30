@@ -1245,7 +1245,7 @@ func TestStoreDecoderOwnsMapKeys(t *testing.T) {
 
 // TestStoreDecoderCachesPointerRecords decodes a search-tree record that
 // points at a pointer, as the Perl writer can write. The record must share
-// the target's reference, and its own offset must hit cachedTopLevel.
+// the target's reference, and its own offset must be cached.
 func TestStoreDecoderCachesPointerRecords(t *testing.T) {
 	const (
 		targetOffset  = 0
@@ -1258,8 +1258,7 @@ func TestStoreDecoderCachesPointerRecords(t *testing.T) {
 
 	decodeRecord := func(t *testing.T, decoder *storeDecoder, offset uint) valueRef {
 		t.Helper()
-		_, cached := decoder.cachedTopLevel(offset)
-		require.False(t, cached)
+		require.NotContains(t, decoder.cache, offset)
 		record := &recordDecoder{decoder: decoder, offset: offset}
 		_, err := mmdbdata.NewDecoder(data, offset).Cursor().UnmarshalCursor(record)
 		require.NoError(t, err)
@@ -1267,10 +1266,7 @@ func TestStoreDecoderCachesPointerRecords(t *testing.T) {
 	}
 	requireCached := func(t *testing.T, decoder *storeDecoder, offset uint, want valueRef) {
 		t.Helper()
-		ref, cached := decoder.cachedTopLevel(offset)
-		require.True(t, cached, "offset %d", offset)
-		require.Equal(t, want, ref)
-		decoder.store.release(ref)
+		require.Equal(t, want, decoder.cache[offset], "offset %d", offset)
 	}
 
 	for name, firstOffset := range map[string]uint{
@@ -1559,7 +1555,7 @@ func TestLoadSharesRefsForSharedOffsets(t *testing.T) {
 
 // TestLoadReusesNestedOffsetForRecord covers a record that the Go writer
 // points at the first nested copy of its value. The first record caches that
-// offset as a nested value, so the second record must hit cachedTopLevel.
+// offset as a nested value, so the second record must hit the cache.
 func TestLoadReusesNestedOffsetForRecord(t *testing.T) {
 	tree, err := New(Options{
 		DatabaseType:            "mmdbwriter-load-nested-offset",
@@ -1587,15 +1583,14 @@ func TestLoadReusesNestedOffsetForRecord(t *testing.T) {
 	var refs []valueRef
 	for res := range reader.Networks() {
 		require.NoError(t, res.Err())
-		offset := uint(res.Offset())
-		ref, cached := decoder.cachedTopLevel(offset)
+		_, cached := decoder.cache[uint(res.Offset())]
 		if len(refs) == 0 {
 			require.False(t, cached, "the first record must decode")
-			ref, err = decoder.decodeTopLevel(res)
-			require.NoError(t, err)
 		} else {
 			require.True(t, cached, "the second record must reuse the nested offset")
 		}
+		ref, err := decoder.decodeTopLevel(res)
+		require.NoError(t, err)
 		refs = append(refs, ref)
 	}
 	require.Len(t, refs, 2)
