@@ -30,6 +30,9 @@ func TestPipelineMeasurement(t *testing.T) {
 	if path == "" {
 		t.Fatal("MMDBWRITER_BENCHMARK_DB must be set when MMDBWRITER_PIPELINE_OVERLAYS is set")
 	}
+	// The audit checks the whole store after each insert, so it would
+	// dominate every measurement.
+	t.Setenv("MMDBWRITER_REFCOUNT_AUDIT", "")
 	var before runtime.MemStats
 	runtime.ReadMemStats(&before)
 	start := time.Now()
