@@ -1260,12 +1260,9 @@ func TestStoreDecoderCachesPointerRecords(t *testing.T) {
 		t.Helper()
 		_, cached := decoder.cachedTopLevel(offset)
 		require.False(t, cached)
-		// This is what decodeTopLevel does for a maxminddb.Result.
-		decoder.topLevelOffset = offset
-		decoder.topLevelActive = true
-		_, err := mmdbdata.NewDecoder(data, offset).Cursor().UnmarshalCursor(decoder)
+		record := &recordDecoder{decoder: decoder, offset: offset}
+		_, err := mmdbdata.NewDecoder(data, offset).Cursor().UnmarshalCursor(record)
 		require.NoError(t, err)
-		require.False(t, decoder.topLevelActive)
 		return decoder.takeResult()
 	}
 	requireCached := func(t *testing.T, decoder *storeDecoder, offset uint, want valueRef) {

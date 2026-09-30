@@ -18,16 +18,36 @@ type storeDecoder struct {
 	store  *valueStore
 	cache  map[uint]valueRef
 	result valueRef
-	// topLevelActive is true while decodeTopLevel decodes the record at
-	// topLevelOffset.
-	topLevelActive bool
-	topLevelOffset uint
+	// record decodes search-tree records for decodeTopLevel. It is a field so
+	// that passing it to Decode does not allocate.
+	record recordDecoder
 	// pairScratch pools the per-map working slices. Maps nest, so each
 	// decodeMap call takes a slice and returns it when done.
 	pairScratch [][]decodedPair
 }
 
-var _ mmdbdata.CursorUnmarshaler = (*storeDecoder)(nil)
+var (
+	_ mmdbdata.CursorUnmarshaler = (*storeDecoder)(nil)
+	_ mmdbdata.CursorUnmarshaler = (*recordDecoder)(nil)
+)
+
+// recordDecoder decodes the search-tree record at offset into its decoder.
+// decodeRecord must only see an offset that is not in the cache.
+type recordDecoder struct {
+	decoder *storeDecoder
+	offset  uint
+}
+
+func (r *recordDecoder) UnmarshalMaxMindDBCursor(
+	cursor mmdbdata.Cursor,
+) (mmdbdata.Cursor, error) {
+	ref, next, err := r.decoder.decodeRecord(cursor, r.offset)
+	if err != nil {
+		return mmdbdata.Cursor{}, err
+	}
+	r.decoder.setResult(ref)
+	return next, nil
+}
 
 // decodedPair carries one interned key and value of a map being decoded.
 type decodedPair struct {
@@ -56,29 +76,27 @@ func (d *storeDecoder) putPairScratch(pairs []decodedPair) {
 }
 
 func newStoreDecoder(store *valueStore) *storeDecoder {
-	return &storeDecoder{store: store, cache: map[uint]valueRef{}}
+	d := &storeDecoder{store: store, cache: map[uint]valueRef{}}
+	d.record.decoder = d
+	return d
 }
 
 func (d *storeDecoder) UnmarshalMaxMindDBCursor(
 	cursor mmdbdata.Cursor,
 ) (mmdbdata.Cursor, error) {
-	var ref valueRef
-	var next mmdbdata.Cursor
-	var err error
-	if d.topLevelActive {
-		d.topLevelActive = false
-		ref, next, err = d.decodeRecord(cursor, d.topLevelOffset)
-	} else {
-		ref, next, err = d.decodeRef(cursor)
-	}
+	ref, next, err := d.decodeRef(cursor)
 	if err != nil {
 		return mmdbdata.Cursor{}, err
 	}
-	// Release a result the caller never took, so a repeated Decode does not
-	// leak its reference.
+	d.setResult(ref)
+	return next, nil
+}
+
+// setResult stores ref as the top-level result. It releases a result the
+// caller never took, so a repeated Decode does not leak its reference.
+func (d *storeDecoder) setResult(ref valueRef) {
 	d.store.release(d.result)
 	d.result = ref
-	return next, nil
 }
 
 // takeResult transfers ownership of the most recently decoded top-level ref.
@@ -103,11 +121,8 @@ func (d *storeDecoder) cachedTopLevel(offset uint) (valueRef, bool) {
 // offset, and returns a reference that the caller owns.
 func (d *storeDecoder) decodeTopLevel(res maxminddb.Result) (valueRef, error) {
 	offset := uint(res.Offset())
-	d.topLevelOffset = offset
-	d.topLevelActive = true
-	err := res.Decode(d)
-	d.topLevelActive = false
-	if err != nil {
+	d.record.offset = offset
+	if err := res.Decode(&d.record); err != nil {
 		return nilValueRef, fmt.Errorf("decoding record at offset %d: %w", offset, err)
 	}
 	return d.takeResult(), nil
