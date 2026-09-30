@@ -157,6 +157,9 @@
 - The default record size is now the smallest of 24, 28, and 32 that fits the
   database, so it can change as the database grows. `Load` no longer keeps the
   source database's record size. Set `Options.RecordSize` to use a fixed size.
+- `WriteTo` now returns an error before it writes anything if the database
+  does not fit in the explicit `Options.RecordSize`. Before, it wrote part of
+  the search tree and then returned the error.
 
 ## 1.2.0 (2026-01-14)
 

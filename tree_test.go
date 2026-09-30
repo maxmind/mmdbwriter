@@ -2790,8 +2790,12 @@ func TestDefaultRecordSizeIsSmallestThatFits(t *testing.T) {
 	assert.Equal(t, byte(16), gotLarge[0])
 	requireSmall(reader)
 
-	_, err := build(24, true).WriteTo(io.Discard)
+	// A pinned size that is too small fails before WriteTo writes anything.
+	var partial bytes.Buffer
+	n, err := build(24, true).WriteTo(&partial)
 	require.ErrorContains(t, err, "exceeded record capacity")
+	assert.Zero(t, n)
+	assert.Zero(t, partial.Len())
 
 	// Removing the large values shrinks the data section, so the next write
 	// gets a smaller size.

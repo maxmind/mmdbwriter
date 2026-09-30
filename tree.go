@@ -1006,18 +1006,27 @@ func (t *Tree) WriteTo(w io.Writer) (int64, error) {
 		maxOffset = max(maxOffset, offset)
 	}
 
-	if t.autoRecordSize {
-		// Empty records hold nodeCount, and node records hold less.
-		maxValue := int64(t.nodeCount)
-		if maxOffset >= 0 {
-			maxValue += int64(len(dataSectionSeparator)) + int64(maxOffset)
-		}
-		recordSize, err := recordSizeFor(maxValue)
-		if err != nil {
-			return 0, err
-		}
-		t.recordSize = recordSize
+	// Empty records hold nodeCount, and node records hold less. Check the size
+	// before writing any node, so a database that does not fit writes nothing.
+	maxValue := int64(t.nodeCount)
+	if maxOffset >= 0 {
+		maxValue += int64(len(dataSectionSeparator)) + int64(maxOffset)
 	}
+	recordSize, err := recordSizeFor(maxValue)
+	if err != nil {
+		return 0, err
+	}
+	if t.autoRecordSize {
+		t.recordSize = recordSize
+	} else if recordSize > t.recordSize {
+		return 0, fmt.Errorf(
+			"exceeded record capacity: the largest record value, %d, needs %d-bit records, but RecordSize is %d",
+			maxValue,
+			recordSize,
+			t.recordSize,
+		)
+	}
+	dataLen := dataWriter.Len()
 
 	// We create this here so that we don't have to allocate millions of these. This
 	// may no longer make sense now that we are using a bufio.Writer anyway, which has
@@ -1028,6 +1037,15 @@ func (t *Tree) WriteTo(w io.Writer) (int64, error) {
 	numBytes, err := t.writeSubtree(buf, t.root, dataWriter, recordBuf, &nextNumber)
 	if err != nil {
 		return numBytes, err
+	}
+	if dataWriter.Len() != dataLen {
+		// This should only happen if there is a programming bug in this
+		// library. The record size check above assumes that the tree walk
+		// writes no new values.
+		return numBytes, fmt.Errorf(
+			"the search tree walk wrote %d bytes of new data",
+			dataWriter.Len()-dataLen,
+		)
 	}
 	if int64(nextNumber) != int64(t.nodeCount) {
 		// This should only happen if there is a programming bug
@@ -1106,17 +1124,6 @@ func (t *Tree) copyNode(buf []byte, n *node, dataWriter *dataWriter) error {
 	right, err := t.recordValue(&n.children[1], dataWriter)
 	if err != nil {
 		return err
-	}
-
-	maxRecord := int64(1) << t.recordSize
-	if int64(left) >= maxRecord || int64(right) >= maxRecord {
-		return fmt.Errorf(
-			"exceeded record capacity by attempting to write (%d, %d) to node with %d bit record size; "+
-				"try increasing RecordSize or reducing the size of the database",
-			left,
-			right,
-			t.recordSize,
-		)
 	}
 
 	switch t.recordSize {
