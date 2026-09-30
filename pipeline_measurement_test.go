@@ -57,11 +57,13 @@ func insertPipelineOverlay(t *testing.T, tree *Tree, path string) int {
 	db, err := maxminddb.Open(path)
 	require.NoError(t, err)
 	defer func() { require.NoError(t, db.Close()) }()
-	unmarshaler := mmdbtype.NewUnmarshaler()
 	count := 0
 	withMetadata := os.Getenv("MMDBWRITER_PIPELINE_METADATA") != ""
 	for result := range db.Networks() {
-		unmarshaler.Clear()
+		// Decode fresh input for each network. A shared Unmarshaler keeps
+		// its offset cache, so it would retain the decoded overlay graph and
+		// decode shared offsets only once.
+		unmarshaler := mmdbtype.NewUnmarshaler()
 		require.NoError(t, result.Decode(unmarshaler))
 		if withMetadata {
 			require.NoError(
