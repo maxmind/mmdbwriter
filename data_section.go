@@ -44,6 +44,14 @@ func (dw *dataWriter) ensureOffset(ref valueRef) {
 	dw.offsets = append(dw.offsets, make([]writtenType, int(ref)-len(dw.offsets)+1)...)
 }
 
+// offset returns the offset of a value that maybeWrite wrote.
+func (dw *dataWriter) offset(ref valueRef) (int, bool) {
+	if int(ref) >= len(dw.offsets) || !dw.offsets[ref].written {
+		return 0, false
+	}
+	return int(dw.offsets[ref].pointer), true
+}
+
 func (dw *dataWriter) maybeWrite(ref valueRef) (int, error) {
 	dw.ensureOffset(ref)
 	if written := dw.offsets[ref]; written.written {

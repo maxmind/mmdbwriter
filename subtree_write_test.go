@@ -184,6 +184,7 @@ func TestDeduplicateSubtrees(t *testing.T) {
 							Options{
 								BuildEpoch:              123,
 								IncludeReservedNetworks: reserved,
+								RecordSize:              size,
 							},
 						)
 						require.NoError(t, err)
@@ -418,13 +419,10 @@ func TestWriteSubtreePartialWrite(t *testing.T) {
 			failure := errors.New("partial node write")
 			writer := &subtreePartialWriter{remaining: recordBytes + recordBytes/2, err: failure}
 			next := uint32(0)
-			written, err := tree.writeSubtree(
-				writer,
-				tree.root,
-				newDataWriter(tree.valueStore, true),
-				make([]byte, recordBytes),
-				&next,
-			)
+			dw := newDataWriter(tree.valueStore, true)
+			_, err := tree.writeRecordValues(dw)
+			require.NoError(t, err)
+			written, err := tree.writeSubtree(writer, tree.root, dw, size, &next)
 			require.ErrorIs(t, err, failure)
 			require.EqualError(t, err, "writing node: partial node write")
 			require.EqualValues(t, recordBytes+recordBytes/2, written)
@@ -455,7 +453,7 @@ func (w *subtreePartialWriter) Write(p []byte) (int, error) {
 }
 
 func TestWriteSubtreeNodeCountMismatch(t *testing.T) {
-	tree := subtreeTestTree(t, Options{IPVersion: 4})
+	tree := subtreeTestTree(t, Options{IPVersion: 4, RecordSize: 28})
 	tree.finalize()
 	writtenNodes := tree.nodeCount
 	tree.nodeCount++
@@ -466,6 +464,34 @@ func TestWriteSubtreeNodeCountMismatch(t *testing.T) {
 		tree.nodeCount,
 	))
 	require.EqualValues(t, writtenNodes*tree.recordSize/4, written)
+}
+
+// TestCopyNodeRejectsUnwrittenValue checks that the tree walk only looks up
+// offsets. A value that writeRecordValues did not write is an error.
+func TestCopyNodeRejectsUnwrittenValue(t *testing.T) {
+	tree := subtreeTestTree(t, Options{IPVersion: 4, RecordSize: 24})
+	ref, err := tree.valueStore.intern(mmdbtype.String("unwritten"))
+	require.NoError(t, err)
+	defer tree.valueStore.release(ref)
+	n := node{children: [2]record{{recordType: recordTypeData, value: ref}, {}}}
+
+	// The buffer is large enough for any record size.
+	err = tree.copyNode(make([]byte, 8), &n, newDataWriter(tree.valueStore, true), 24)
+
+	require.ErrorContains(t, err, "was not written before the search tree")
+}
+
+// TestCopyNodeRejectsOversizedRecordValue checks that copyNode returns an
+// error, and does not drop the high bits, if a value is too large.
+func TestCopyNodeRejectsOversizedRecordValue(t *testing.T) {
+	tree := subtreeTestTree(t, Options{IPVersion: 4, RecordSize: 24})
+	// Empty records hold nodeCount.
+	tree.nodeCount = 1 << 24
+
+	// The buffer is large enough for any record size.
+	err := tree.copyNode(make([]byte, 8), &node{}, newDataWriter(tree.valueStore, true), 24)
+
+	require.ErrorContains(t, err, "do not fit in 24-bit records")
 }
 
 // Every level on the leftmost path has an internal right sibling, reaching
@@ -552,9 +578,14 @@ func dagCompatibilityFixture(t *testing.T, recordSize int) []byte {
 		IncludeReservedNetworks: true,
 	})
 	require.NoError(t, err)
+	// copyNode only looks up offsets, so write each value as it is created,
+	// in the order that the nodes hold them.
+	dw := newDataWriter(tree.valueStore, true)
 	data := func(value string) record {
 		ref, internErr := tree.valueStore.intern(mmdbtype.String(value))
 		require.NoError(t, internErr)
+		_, writeErr := dw.maybeWrite(ref)
+		require.NoError(t, writeErr)
 		return record{recordType: recordTypeData, value: ref}
 	}
 	nodeRecord := func(index nodeIndex) record { return record{recordType: recordTypeNode, nodeIndex: index} }
@@ -566,11 +597,10 @@ func dagCompatibilityFixture(t *testing.T, recordSize int) []byte {
 	}
 	tree.nodeCount = len(nodes)
 	tree.nodeNumbers = []uint32{0, 1, 2, 3}
-	dw := newDataWriter(tree.valueStore, true)
 	var output bytes.Buffer
 	buf := make([]byte, recordSize/4)
 	for i := range nodes {
-		require.NoError(t, tree.copyNode(buf, &nodes[i], dw))
+		require.NoError(t, tree.copyNode(buf, &nodes[i], dw, recordSize))
 		_, err = output.Write(buf)
 		require.NoError(t, err)
 	}
@@ -578,7 +608,7 @@ func dagCompatibilityFixture(t *testing.T, recordSize int) []byte {
 	output.Write(dw.Bytes())
 	output.Write(metadataStartMarker)
 	metadata := newDataWriter(newValueStore(), true)
-	metadataBytes, err := tree.writeMetadata(metadata)
+	metadataBytes, err := tree.writeMetadata(metadata, recordSize)
 	require.NoError(t, err)
 	require.EqualValues(t, metadata.Len(), metadataBytes)
 	output.Write(metadata.Bytes())
