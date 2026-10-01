@@ -269,7 +269,9 @@ func metadataDimension(name string, value uint) (int, error) {
 // Load loads an existing database into the writer. It interns records into
 // the value store directly from the database, without building intermediate
 // map and slice graphs. Source networks that share a data offset share one
-// stored value.
+// stored value. Load does not keep the source record size: with the default
+// Options.RecordSize, WriteTo chooses the smallest size that fits, so a 28-bit
+// source can be written with 24-bit records.
 // During the load, a cache holds one reference per distinct offset in the
 // source data section. Load releases the cache before it returns. A non-nil
 // Options.Inserter also receives a materialized view of each decoded
