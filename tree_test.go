@@ -2770,23 +2770,6 @@ func TestDefaultRecordSizeIsSmallestThatFits(t *testing.T) {
 	// The large values come first in the data section, and together they take
 	// more than 2^24 bytes, so the small value's offset needs 28 bits. Each one
 	// stays under the reader's 2 MiB decode budget.
-	insertLarge := func(tree *Tree) {
-		for i := range byte(17) {
-			value := make(mmdbtype.Bytes, 1<<20)
-			value[0] = i
-			require.NoError(t, tree.Insert(largePrefix(i), value))
-		}
-	}
-
-	build := func(recordSize int, withLarge bool) *Tree {
-		tree := recordSizeTree(t, recordSize)
-		if withLarge {
-			insertLarge(tree)
-		}
-		require.NoError(t, tree.Insert(small, mmdbtype.String("small")))
-		return tree
-	}
-
 	requireSmall := func(reader *maxminddb.Reader) {
 		t.Helper()
 		var got string
@@ -2794,34 +2777,34 @@ func TestDefaultRecordSizeIsSmallestThatFits(t *testing.T) {
 		assert.Equal(t, "small", got)
 	}
 
-	tree := build(0, false)
+	tree := recordSizeTree(t, 0)
+	require.NoError(t, tree.Insert(small, mmdbtype.String("small")))
 	db := writeTreeBytes(t, tree)
 	reader := openDB(t, db)
 	require.NoError(t, reader.Verify())
 	assert.EqualValues(t, 24, reader.Metadata.RecordSize)
-	assert.True(t, bytes.Equal(writeTreeBytes(t, build(24, false)), db),
+	// Only the size choice differs between the modes, so one comparison with a
+	// pinned write of the same tree is enough.
+	tree.recordSize = 24
+	assert.True(t, bytes.Equal(writeTreeBytes(t, tree), db),
 		"the default write differs from a 24-bit write")
+	tree.recordSize = 0
 
 	// A later insert that grows the data section gets a bigger size.
-	insertLarge(tree)
-	db = writeTreeBytes(t, tree)
-	reader = openDB(t, db)
-	require.NoError(t, reader.Verify())
+	for i := range byte(17) {
+		value := make(mmdbtype.Bytes, 1<<20)
+		value[0] = i
+		require.NoError(t, tree.Insert(largePrefix(i), value))
+	}
+	// This skips Verify on the 17 MiB database. The 28-bit cases of
+	// TestTreeInsertAndGet verify the encoding.
+	reader = openDB(t, writeTreeBytes(t, tree))
 	assert.EqualValues(t, 28, reader.Metadata.RecordSize)
-	assert.True(t, bytes.Equal(writeTreeBytes(t, build(28, true)), db),
-		"the default write differs from a 28-bit write")
 	var gotLarge []byte
 	require.NoError(t, reader.Lookup(netip.MustParseAddr("1.0.16.1")).Decode(&gotLarge))
 	assert.Len(t, gotLarge, 1<<20)
 	assert.Equal(t, byte(16), gotLarge[0])
 	requireSmall(reader)
-
-	// A pinned size that is too small fails before WriteTo writes anything.
-	var partial bytes.Buffer
-	n, err := build(24, true).WriteTo(&partial)
-	require.ErrorContains(t, err, "exceeded record capacity")
-	assert.Zero(t, n)
-	assert.Zero(t, partial.Len())
 
 	// Removing the large values shrinks the data section, so the next write
 	// gets a smaller size.
@@ -2868,17 +2851,25 @@ func TestDefaultRecordSizeBoundary(t *testing.T) {
 		{boundaryLength, 24},
 		{boundaryLength + 1, 28},
 	} {
+		tree := build(tc.length, 0)
 		// The value is larger than the reader's decode budget, so this reads
 		// only the metadata and does not call Verify.
-		reader := openDB(t, writeTreeBytes(t, build(tc.length, 0)))
+		reader := openDB(t, writeTreeBytes(t, tree))
 		assert.Equal(t, tc.want, reader.Metadata.RecordSize, "length %d", tc.length)
 
-		_, err := build(tc.length, 24).WriteTo(io.Discard)
+		// A pinned 24-bit write succeeds exactly when the default chooses 24.
+		tree.recordSize = 24
 		if tc.want == 24 {
+			_, err := tree.WriteTo(io.Discard)
 			require.NoError(t, err, "length %d", tc.length)
-		} else {
-			require.ErrorContains(t, err, "exceeded record capacity", "length %d", tc.length)
+			continue
 		}
+		// A database that does not fit writes nothing.
+		var partial bytes.Buffer
+		n, err := tree.WriteTo(&partial)
+		require.ErrorContains(t, err, "exceeded record capacity", "length %d", tc.length)
+		assert.Zero(t, n)
+		assert.Zero(t, partial.Len())
 	}
 }
 
