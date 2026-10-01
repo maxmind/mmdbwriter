@@ -11,6 +11,8 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/oschwald/maxminddb-golang/v2"
+
 	"github.com/maxmind/mmdbwriter/v2/inserter"
 	"github.com/maxmind/mmdbwriter/v2/mmdbtype"
 )
@@ -248,7 +250,11 @@ func BenchmarkTreeWriteToExternalMMDB(b *testing.B) {
 		b.Skip("MMDBWRITER_BENCHMARK_DB is not set")
 	}
 
-	tree, err := Load(path, Options{IncludeReservedNetworks: true})
+	// Keep the source record size, so file-bytes compares with earlier runs.
+	tree, err := Load(
+		path,
+		Options{IncludeReservedNetworks: true, RecordSize: sourceRecordSize(b, path)},
+	)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -1013,4 +1019,18 @@ func benchmarkDeepMergeValue(country, source string, rank uint16) mmdbtype.Map {
 			"represented": mmdbtype.Bool(rank%20 == 0),
 		},
 	}
+}
+
+// sourceRecordSize returns the record size of the database at path.
+func sourceRecordSize(tb testing.TB, path string) int {
+	tb.Helper()
+	reader, err := maxminddb.Open(path)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	recordSize := int(reader.Metadata.RecordSize)
+	if err := reader.Close(); err != nil {
+		tb.Fatal(err)
+	}
+	return recordSize
 }

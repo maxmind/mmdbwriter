@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/oschwald/maxminddb-golang/v2"
 	"github.com/stretchr/testify/require"
 
 	"github.com/maxmind/mmdbwriter/v2/mmdbtype"
@@ -56,10 +55,7 @@ func TestSubtreeMeasurement(t *testing.T) {
 	// and the results compare with earlier measurements.
 	var recordSize int
 	if !synthetic {
-		reader, err := maxminddb.Open(path)
-		require.NoError(t, err)
-		recordSize = int(reader.Metadata.RecordSize)
-		require.NoError(t, reader.Close())
+		recordSize = sourceRecordSize(t, path)
 	}
 	start := time.Now()
 	var tree *Tree
