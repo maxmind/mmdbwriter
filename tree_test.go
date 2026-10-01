@@ -2739,29 +2739,6 @@ func TestRecordSizeFor(t *testing.T) {
 	}
 }
 
-// recordSizeTree returns an IPv4 tree with a fixed build epoch, so that writes
-// with different record size options can be compared byte for byte.
-func recordSizeTree(t *testing.T, recordSize int) *Tree {
-	t.Helper()
-
-	opts := testTreeOptions("mmdbwriter-record-size")
-	opts.BuildEpoch = 1
-	opts.RecordSize = recordSize
-	tree, err := New(opts)
-	require.NoError(t, err)
-	return tree
-}
-
-// openDB opens db and closes it when the test ends.
-func openDB(t *testing.T, db []byte) *maxminddb.Reader {
-	t.Helper()
-
-	reader, err := maxminddb.OpenBytes(db)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, reader.Close()) })
-	return reader
-}
-
 func TestDefaultRecordSizeIsSmallestThatFits(t *testing.T) {
 	small := netip.MustParsePrefix("2.0.0.0/8")
 	largePrefix := func(i byte) netip.Prefix {
@@ -3025,6 +3002,29 @@ func testTreeOptions(databaseType string) Options {
 		RecordSize:              24,
 		IncludeReservedNetworks: true,
 	}
+}
+
+// recordSizeTree returns an IPv4 tree with a fixed build epoch, so that writes
+// with different record size options can be compared byte for byte.
+func recordSizeTree(t *testing.T, recordSize int) *Tree {
+	t.Helper()
+
+	opts := testTreeOptions("mmdbwriter-record-size")
+	opts.BuildEpoch = 1
+	opts.RecordSize = recordSize
+	tree, err := New(opts)
+	require.NoError(t, err)
+	return tree
+}
+
+// openDB opens db and closes it when the test ends.
+func openDB(t *testing.T, db []byte) *maxminddb.Reader {
+	t.Helper()
+
+	reader, err := maxminddb.OpenBytes(db)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, reader.Close()) })
+	return reader
 }
 
 func requireTreeLookup(t *testing.T, candidate, control *Tree, address netip.Addr) {
