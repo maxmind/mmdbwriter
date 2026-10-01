@@ -2743,14 +2743,10 @@ func TestRecordSizeFor(t *testing.T) {
 func recordSizeTree(t *testing.T, recordSize int) *Tree {
 	t.Helper()
 
-	tree, err := New(Options{
-		BuildEpoch:              1,
-		DatabaseType:            "mmdbwriter-record-size",
-		Description:             map[string]string{"en": "Test database"},
-		IncludeReservedNetworks: true,
-		IPVersion:               4,
-		RecordSize:              recordSize,
-	})
+	opts := testTreeOptions("mmdbwriter-record-size")
+	opts.BuildEpoch = 1
+	opts.RecordSize = recordSize
+	tree, err := New(opts)
 	require.NoError(t, err)
 	return tree
 }
@@ -3012,15 +3008,20 @@ func writeTempFile(t *testing.T, data []byte) string {
 func newTestTree(t *testing.T, databaseType string) *Tree {
 	t.Helper()
 
-	tree, err := New(Options{
+	tree, err := New(testTreeOptions(databaseType))
+	require.NoError(t, err)
+	return tree
+}
+
+// testTreeOptions returns the options that newTestTree uses.
+func testTreeOptions(databaseType string) Options {
+	return Options{
 		DatabaseType:            databaseType,
 		Description:             map[string]string{"en": "Test database"},
 		IPVersion:               4,
 		RecordSize:              24,
 		IncludeReservedNetworks: true,
-	})
-	require.NoError(t, err)
-	return tree
+	}
 }
 
 func requireTreeLookup(t *testing.T, candidate, control *Tree, address netip.Addr) {
