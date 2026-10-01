@@ -255,34 +255,6 @@ func validateRecordSize(recordSize int) error {
 	return nil
 }
 
-// recordSizeFor returns the record size for a database whose largest record
-// value is maxValue. A recordSize of 0 chooses the smallest size that fits.
-func recordSizeFor(maxValue int64, recordSize int) (int, error) {
-	largest := recordSizes[len(recordSizes)-1]
-	if recordSize == 0 {
-		for _, size := range recordSizes {
-			if maxValue < int64(1)<<size {
-				return size, nil
-			}
-		}
-		recordSize = largest
-	} else if maxValue < int64(1)<<recordSize {
-		return recordSize, nil
-	}
-
-	hint := "reduce the size of the database"
-	if recordSize < largest {
-		hint = "set RecordSize to 0 to choose the size automatically, " +
-			"set a larger RecordSize, or reduce the size of the database"
-	}
-	return 0, fmt.Errorf(
-		"exceeded record capacity: the largest record value, %d, does not fit in %d-bit records: %s",
-		maxValue,
-		recordSize,
-		hint,
-	)
-}
-
 // metadataDimension narrows a search tree dimension read from metadata. The
 // caller, or New, checks which values are supported. This rejects zero, which
 // cannot be told apart from an unset or automatic option, and values above
@@ -1095,6 +1067,34 @@ func (t *Tree) writeRecordValues(dw *dataWriter) (int, error) {
 		maxOffset = max(maxOffset, offset)
 	}
 	return maxOffset, nil
+}
+
+// recordSizeFor returns the record size for a database whose largest record
+// value is maxValue. A recordSize of 0 chooses the smallest size that fits.
+func recordSizeFor(maxValue int64, recordSize int) (int, error) {
+	largest := recordSizes[len(recordSizes)-1]
+	if recordSize == 0 {
+		for _, size := range recordSizes {
+			if maxValue < int64(1)<<size {
+				return size, nil
+			}
+		}
+		recordSize = largest
+	} else if maxValue < int64(1)<<recordSize {
+		return recordSize, nil
+	}
+
+	hint := "reduce the size of the database"
+	if recordSize < largest {
+		hint = "set RecordSize to 0 to choose the size automatically, " +
+			"set a larger RecordSize, or reduce the size of the database"
+	}
+	return 0, fmt.Errorf(
+		"exceeded record capacity: the largest record value, %d, does not fit in %d-bit records: %s",
+		maxValue,
+		recordSize,
+		hint,
+	)
 }
 
 func (t *Tree) recordValue(
