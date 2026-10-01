@@ -20,9 +20,11 @@ var errReentrantMutation = errors.New(
 // AliasedNetworkError is returned when inserting a aliased network into
 // a Tree where DisableIPv4Aliasing in Options is false.
 type AliasedNetworkError struct {
-	// AliasedNetwork is the aliased network being inserted into.
+	// AliasedNetwork is the aliased network being inserted into,
+	// reported in InsertedNetwork's address family.
 	AliasedNetwork netip.Prefix
-	// InsertedNetwork is the network being inserted into the Tree.
+	// InsertedNetwork is the masked network being inserted into the Tree.
+	// IPv4-mapped prefixes are reported as IPv4.
 	InsertedNetwork netip.Prefix
 }
 
@@ -72,9 +74,11 @@ func (r *AliasedNetworkError) Error() string {
 // ReservedNetworkError is returned when inserting a reserved network into
 // a Tree where IncludeReservedNetworks in Options is false.
 type ReservedNetworkError struct {
-	// InsertedNetwork is the network being inserted into the Tree.
+	// InsertedNetwork is the masked network being inserted into the Tree.
+	// IPv4-mapped prefixes are reported as IPv4.
 	InsertedNetwork netip.Prefix
-	// ReservedNetwork is the reserved network being inserted into.
+	// ReservedNetwork is the reserved network being inserted into,
+	// reported in InsertedNetwork's address family.
 	ReservedNetwork netip.Prefix
 }
 
