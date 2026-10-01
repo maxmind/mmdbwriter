@@ -255,16 +255,31 @@ func validateRecordSize(recordSize int) error {
 	return nil
 }
 
-// recordSizeFor returns the smallest record size that can hold maxValue.
-func recordSizeFor(maxValue int64) (int, error) {
-	for _, size := range recordSizes {
-		if maxValue < int64(1)<<size {
-			return size, nil
+// recordSizeFor returns the record size for a database whose largest record
+// value is maxValue. A recordSize of 0 chooses the smallest size that fits.
+func recordSizeFor(maxValue int64, recordSize int) (int, error) {
+	largest := recordSizes[len(recordSizes)-1]
+	if recordSize == 0 {
+		for _, size := range recordSizes {
+			if maxValue < int64(1)<<size {
+				return size, nil
+			}
 		}
+		recordSize = largest
+	} else if maxValue < int64(1)<<recordSize {
+		return recordSize, nil
+	}
+
+	hint := "reduce the size of the database"
+	if recordSize < largest {
+		hint = "set RecordSize to 0 to choose the size automatically, " +
+			"set a larger RecordSize, or reduce the size of the database"
 	}
 	return 0, fmt.Errorf(
-		"largest record value of %d does not fit in 32-bit records: reduce the size of the database",
+		"exceeded record capacity: the largest record value, %d, does not fit in %d-bit records: %s",
 		maxValue,
+		recordSize,
+		hint,
 	)
 }
 
@@ -1007,20 +1022,9 @@ func (t *Tree) WriteTo(w io.Writer) (int64, error) {
 	if maxOffset >= 0 {
 		maxValue += int64(len(dataSectionSeparator)) + int64(maxOffset)
 	}
-	recordSize, err := recordSizeFor(maxValue)
+	recordSize, err := recordSizeFor(maxValue, t.recordSize)
 	if err != nil {
 		return 0, err
-	}
-	if t.recordSize != 0 {
-		if recordSize > t.recordSize {
-			return 0, fmt.Errorf(
-				"exceeded record capacity: the largest record value, %d, needs %d-bit records, but RecordSize is %d",
-				maxValue,
-				recordSize,
-				t.recordSize,
-			)
-		}
-		recordSize = t.recordSize
 	}
 
 	nextNumber := uint32(0)

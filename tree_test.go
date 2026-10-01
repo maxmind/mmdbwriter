@@ -2689,24 +2689,53 @@ func TestNewAcceptsSupportedRecordSizes(t *testing.T) {
 
 func TestRecordSizeFor(t *testing.T) {
 	tests := []struct {
-		maxValue int64
-		want     int
+		maxValue   int64
+		recordSize int
+		want       int
 	}{
-		{0, 24},
-		{1<<24 - 1, 24},
-		{1 << 24, 28},
-		{1<<28 - 1, 28},
-		{1 << 28, 32},
-		{1<<32 - 1, 32},
+		{0, 0, 24},
+		{1<<24 - 1, 0, 24},
+		{1 << 24, 0, 28},
+		{1<<28 - 1, 0, 28},
+		{1 << 28, 0, 32},
+		{1<<32 - 1, 0, 32},
+		{1<<24 - 1, 24, 24},
+		{0, 28, 28},
+		{1 << 24, 28, 28},
+		{1<<32 - 1, 32, 32},
 	}
 	for _, tc := range tests {
-		got, err := recordSizeFor(tc.maxValue)
-		require.NoError(t, err, "max value %d", tc.maxValue)
-		assert.Equal(t, tc.want, got, "max value %d", tc.maxValue)
+		got, err := recordSizeFor(tc.maxValue, tc.recordSize)
+		require.NoError(t, err, "max value %d, record size %d", tc.maxValue, tc.recordSize)
+		assert.Equal(t, tc.want, got, "max value %d, record size %d", tc.maxValue, tc.recordSize)
 	}
 
-	_, err := recordSizeFor(1 << 32)
-	require.ErrorContains(t, err, "32-bit")
+	const increaseHint = "set RecordSize to 0"
+	errorTests := []struct {
+		maxValue   int64
+		recordSize int
+		bits       string
+		hint       bool
+	}{
+		{1 << 32, 0, "32-bit", false},
+		{1 << 24, 24, "24-bit", true},
+		// A value too large for any size still names the configured size.
+		{1 << 32, 24, "24-bit", true},
+		{1 << 28, 28, "28-bit", true},
+		{1 << 32, 32, "32-bit", false},
+	}
+	for _, tc := range errorTests {
+		_, err := recordSizeFor(tc.maxValue, tc.recordSize)
+		require.ErrorContains(t, err, "exceeded record capacity",
+			"max value %d, record size %d", tc.maxValue, tc.recordSize)
+		require.ErrorContains(t, err, tc.bits)
+		if tc.hint {
+			require.ErrorContains(t, err, increaseHint)
+		} else {
+			require.NotContains(t, err.Error(), increaseHint)
+			require.ErrorContains(t, err, "reduce the size of the database")
+		}
+	}
 }
 
 // recordSizeTree returns an IPv4 tree with a fixed build epoch, so that writes
