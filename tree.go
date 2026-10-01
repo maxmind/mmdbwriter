@@ -993,15 +993,9 @@ func (t *Tree) WriteTo(w io.Writer) (int64, error) {
 	usePointers := true
 	dataWriter := newDataWriter(t.valueStore, usePointers)
 
-	// Write the record values first, in the order finalize chose. The tree
-	// walk then only looks up their offsets.
-	maxOffset := -1
-	for _, ref := range t.dataOrder {
-		offset, err := dataWriter.maybeWrite(ref)
-		if err != nil {
-			return 0, fmt.Errorf("writing record values: %w", err)
-		}
-		maxOffset = max(maxOffset, offset)
+	maxOffset, err := t.writeRecordValues(dataWriter)
+	if err != nil {
+		return 0, err
 	}
 
 	// Empty records hold nodeCount, and node records hold less. Check the size
@@ -1025,21 +1019,11 @@ func (t *Tree) WriteTo(w io.Writer) (int64, error) {
 		}
 		recordSize = t.recordSize
 	}
-	dataLen := dataWriter.Len()
 
 	nextNumber := uint32(0)
 	numBytes, err := t.writeSubtree(buf, t.root, dataWriter, recordSize, &nextNumber)
 	if err != nil {
 		return numBytes, err
-	}
-	if dataWriter.Len() != dataLen {
-		// This should only happen if there is a programming bug in this
-		// library. The record size check above assumes that the tree walk
-		// writes no new values.
-		return numBytes, fmt.Errorf(
-			"the search tree walk wrote %d bytes of new data",
-			dataWriter.Len()-dataLen,
-		)
 	}
 	if int64(nextNumber) != int64(t.nodeCount) {
 		// This should only happen if there is a programming bug
@@ -1091,14 +1075,34 @@ func (t *Tree) WriteTo(w io.Writer) (int64, error) {
 	return numBytes, nil
 }
 
+// writeRecordValues writes the record values in the order that finalize chose,
+// and returns the largest offset, or -1 if there are none. The tree walk then
+// only looks up their offsets.
+func (t *Tree) writeRecordValues(dw *dataWriter) (int, error) {
+	maxOffset := -1
+	for _, ref := range t.dataOrder {
+		offset, err := dw.maybeWrite(ref)
+		if err != nil {
+			return 0, fmt.Errorf("writing record values: %w", err)
+		}
+		maxOffset = max(maxOffset, offset)
+	}
+	return maxOffset, nil
+}
+
 func (t *Tree) recordValue(
 	r *record,
 	dataWriter *dataWriter,
 ) (int, error) {
 	switch r.recordType {
 	case recordTypeData:
-		offset, err := dataWriter.maybeWrite(r.value)
-		return t.nodeCount + len(dataSectionSeparator) + offset, err
+		offset, ok := dataWriter.offset(r.value)
+		if !ok {
+			// writeRecordValues writes every record value, so this is a bug
+			// in this library.
+			return 0, fmt.Errorf("record value %d was not written before the search tree", r.value)
+		}
+		return t.nodeCount + len(dataSectionSeparator) + offset, nil
 	case recordTypeEmpty, recordTypeReserved:
 		return t.nodeCount, nil
 	case recordTypePath:

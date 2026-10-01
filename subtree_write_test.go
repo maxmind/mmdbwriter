@@ -419,13 +419,10 @@ func TestWriteSubtreePartialWrite(t *testing.T) {
 			failure := errors.New("partial node write")
 			writer := &subtreePartialWriter{remaining: recordBytes + recordBytes/2, err: failure}
 			next := uint32(0)
-			written, err := tree.writeSubtree(
-				writer,
-				tree.root,
-				newDataWriter(tree.valueStore, true),
-				size,
-				&next,
-			)
+			dw := newDataWriter(tree.valueStore, true)
+			_, err := tree.writeRecordValues(dw)
+			require.NoError(t, err)
+			written, err := tree.writeSubtree(writer, tree.root, dw, size, &next)
 			require.ErrorIs(t, err, failure)
 			require.EqualError(t, err, "writing node: partial node write")
 			require.EqualValues(t, recordBytes+recordBytes/2, written)
@@ -467,6 +464,21 @@ func TestWriteSubtreeNodeCountMismatch(t *testing.T) {
 		tree.nodeCount,
 	))
 	require.EqualValues(t, writtenNodes*tree.recordSize/4, written)
+}
+
+// TestCopyNodeRejectsUnwrittenValue checks that the tree walk only looks up
+// offsets. A value that writeRecordValues did not write is an error.
+func TestCopyNodeRejectsUnwrittenValue(t *testing.T) {
+	tree := subtreeTestTree(t, Options{IPVersion: 4, RecordSize: 24})
+	ref, err := tree.valueStore.intern(mmdbtype.String("unwritten"))
+	require.NoError(t, err)
+	defer tree.valueStore.release(ref)
+	n := node{children: [2]record{{recordType: recordTypeData, value: ref}, {}}}
+
+	// The buffer is large enough for any record size.
+	err = tree.copyNode(make([]byte, 8), &n, newDataWriter(tree.valueStore, true), 24)
+
+	require.ErrorContains(t, err, "was not written before the search tree")
 }
 
 // Every level on the leftmost path has an internal right sibling, reaching
@@ -553,9 +565,14 @@ func dagCompatibilityFixture(t *testing.T, recordSize int) []byte {
 		IncludeReservedNetworks: true,
 	})
 	require.NoError(t, err)
+	// copyNode only looks up offsets, so write each value as it is created,
+	// in the order that the nodes hold them.
+	dw := newDataWriter(tree.valueStore, true)
 	data := func(value string) record {
 		ref, internErr := tree.valueStore.intern(mmdbtype.String(value))
 		require.NoError(t, internErr)
+		_, writeErr := dw.maybeWrite(ref)
+		require.NoError(t, writeErr)
 		return record{recordType: recordTypeData, value: ref}
 	}
 	nodeRecord := func(index nodeIndex) record { return record{recordType: recordTypeNode, nodeIndex: index} }
@@ -567,7 +584,6 @@ func dagCompatibilityFixture(t *testing.T, recordSize int) []byte {
 	}
 	tree.nodeCount = len(nodes)
 	tree.nodeNumbers = []uint32{0, 1, 2, 3}
-	dw := newDataWriter(tree.valueStore, true)
 	var output bytes.Buffer
 	buf := make([]byte, recordSize/4)
 	for i := range nodes {
