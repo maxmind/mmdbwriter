@@ -21,6 +21,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/maxmind/mmdbwriter/v2/inserter"
+	"github.com/maxmind/mmdbwriter/v2/internal/ctrlsize"
 	"github.com/maxmind/mmdbwriter/v2/mmdbtype"
 )
 
@@ -2834,10 +2835,32 @@ func TestDefaultRecordSizeIsSmallestThatFits(t *testing.T) {
 	requireSmall(reader)
 }
 
-// TestDefaultRecordSizeBoundary checks the 24-bit limit to the byte. With a
-// value of boundaryLength bytes, the largest record value is 2^24-1.
+// TestDefaultRecordSizeBoundary checks the 24-bit limit to the byte.
 func TestDefaultRecordSizeBoundary(t *testing.T) {
-	const boundaryLength = 16777186
+	build := func(length, recordSize int) *Tree {
+		tree := recordSizeTree(t, recordSize)
+		value := make(mmdbtype.Bytes, length)
+		require.NoError(t, tree.Insert(netip.MustParsePrefix("1.0.0.0/8"), value))
+		require.NoError(t, tree.Insert(
+			netip.MustParsePrefix("2.0.0.0/8"),
+			mmdbtype.String("small"),
+		))
+		return tree
+	}
+
+	// The large value comes first in the data section, so the offset of the
+	// small value is the size of the large one: a control byte, the size
+	// bytes, and the payload. The node count does not depend on the length.
+	probe := build(1, 0)
+	probe.finalize()
+	const limit = 1<<24 - 1
+	_, _, sizeBytes := ctrlsize.Split(limit)
+	boundaryLength := limit - probe.nodeCount - len(dataSectionSeparator) - 1 - sizeBytes
+	for _, length := range []int{boundaryLength, boundaryLength + 1} {
+		_, _, got := ctrlsize.Split(length)
+		require.Equal(t, sizeBytes, got, "size bytes for length %d", length)
+	}
+
 	for _, tc := range []struct {
 		length int
 		want   uint
@@ -2845,23 +2868,12 @@ func TestDefaultRecordSizeBoundary(t *testing.T) {
 		{boundaryLength, 24},
 		{boundaryLength + 1, 28},
 	} {
-		build := func(recordSize int) *Tree {
-			tree := recordSizeTree(t, recordSize)
-			value := make(mmdbtype.Bytes, tc.length)
-			require.NoError(t, tree.Insert(netip.MustParsePrefix("1.0.0.0/8"), value))
-			require.NoError(t, tree.Insert(
-				netip.MustParsePrefix("2.0.0.0/8"),
-				mmdbtype.String("small"),
-			))
-			return tree
-		}
-
 		// The value is larger than the reader's decode budget, so this reads
 		// only the metadata and does not call Verify.
-		reader := openDB(t, writeTreeBytes(t, build(0)))
+		reader := openDB(t, writeTreeBytes(t, build(tc.length, 0)))
 		assert.Equal(t, tc.want, reader.Metadata.RecordSize, "length %d", tc.length)
 
-		_, err := build(24).WriteTo(io.Discard)
+		_, err := build(tc.length, 24).WriteTo(io.Discard)
 		if tc.want == 24 {
 			require.NoError(t, err, "length %d", tc.length)
 		} else {
