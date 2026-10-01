@@ -2,6 +2,7 @@ package mmdbwriter
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"maps"
 	"net/netip"
@@ -299,6 +300,37 @@ func BenchmarkValueStoreStringInterning(b *testing.B) {
 					store.release(other)
 				}
 			})
+		})
+	}
+}
+
+func BenchmarkValueStoreChangingLayouts(b *testing.B) {
+	for _, variableKey := range []int{8, 15} {
+		b.Run(strconv.Itoa(variableKey), func(b *testing.B) {
+			values := make([]mmdbtype.Map, 32)
+			for version := range values {
+				value := mmdbtype.Map{}
+				for index := range 16 {
+					key := fmt.Sprintf("key%03d", index)
+					if index == variableKey {
+						key += fmt.Sprintf("-%02d", version)
+					}
+					value[mmdbtype.String(key)] = mmdbtype.Uint32(index)
+				}
+				values[version] = value
+			}
+			store := newValueStore()
+			var previous valueRef
+			index := 0
+			b.ReportAllocs()
+			for b.Loop() {
+				ref, err := store.intern(values[index%len(values)])
+				requireNoBenchmarkError(b, err)
+				store.release(previous)
+				previous = ref
+				index++
+			}
+			store.release(previous)
 		})
 	}
 }

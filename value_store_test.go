@@ -3,6 +3,7 @@ package mmdbwriter
 import (
 	"bytes"
 	"fmt"
+	"hash/maphash"
 	"math"
 	"reflect"
 	"strconv"
@@ -767,4 +768,157 @@ func TestDataIdentityDistinguishesKindsAndRejectsScalars(t *testing.T) {
 		_, ok = dataIdentity(value)
 		assert.False(t, ok)
 	}
+}
+
+func TestMapShapesSurviveChurnAndCollisions(t *testing.T) {
+	store := newValueStoreWithHash(func([]byte) uint64 { return 1 })
+	var refs []valueRef
+	external := map[valueRef]uint64{}
+	for index := range 100 {
+		value := mmdbtype.Map{
+			"a": mmdbtype.Uint32(index),
+			mmdbtype.String(string(rune('b' + index%8))): mmdbtype.Map{
+				"a": mmdbtype.String("nested"), "b": mmdbtype.Bool(true),
+			},
+		}
+		ref, err := store.intern(value)
+		require.NoError(t, err)
+		external[ref]++
+		refs = append(refs, ref)
+		require.True(t, value.Equal(store.materialize(ref)))
+		_, err = store.intern(mmdbtype.Map{"a": nil, "b": mmdbtype.String("invalid")})
+		require.Error(t, err)
+		if len(refs) > 4 {
+			old := refs[0]
+			refs = refs[1:]
+			external[old]--
+			if external[old] == 0 {
+				delete(external, old)
+			}
+			store.release(old)
+		}
+		require.NoError(t, store.audit(external))
+	}
+	for _, ref := range refs {
+		store.release(ref)
+	}
+	require.NoError(t, store.audit(nil))
+	for _, shape := range store.mapShapes {
+		require.Zero(t, shape.ref)
+	}
+}
+
+// TestMapShapeHitReleasesKeysOnError fails a map on its last key after
+// internMap reuses the cached key layout. The keys before it are borrowed from
+// the cached map, so the error path must release them and leave that map as
+// it was.
+func TestMapShapeHitReleasesKeysOnError(t *testing.T) {
+	tests := []struct {
+		name  string
+		value mmdbtype.DataType
+		err   string
+	}{
+		{
+			name:  "nil value",
+			value: nil,
+			err:   `map key "c" has a nil value`,
+		},
+		{
+			name:  "unsupported value",
+			value: mmdbtype.Pointer(1),
+			err:   `interning value for map key "c": unsupported MMDB data type mmdbtype.Pointer`,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := newValueStore()
+			existing := mmdbtype.Map{
+				"a": mmdbtype.Uint32(1),
+				"b": mmdbtype.String("shared"),
+				"c": mmdbtype.Bool(true),
+			}
+			ref, err := store.intern(existing)
+			require.NoError(t, err)
+			require.Equal(t, mapShape{ref: ref}, store.mapShapes[3])
+
+			_, err = store.intern(mmdbtype.Map{
+				"a": mmdbtype.Uint32(2),
+				"b": mmdbtype.String("shared"),
+				"c": test.value,
+			})
+			require.EqualError(t, err, test.err)
+			require.NoError(t, store.audit(map[valueRef]uint64{ref: 1}))
+			require.True(t, existing.Equal(store.materialize(ref)))
+			require.Equal(t, mapShape{ref: ref}, store.mapShapes[3])
+
+			retry := mmdbtype.Map{
+				"a": mmdbtype.Uint32(2),
+				"b": mmdbtype.String("shared"),
+				"c": mmdbtype.Bool(false),
+			}
+			retryRef, err := store.intern(retry)
+			require.NoError(t, err)
+			require.True(t, retry.Equal(store.materialize(retryRef)))
+			require.True(t, existing.Equal(store.materialize(ref)))
+			require.Equal(t, mapShape{ref: retryRef}, store.mapShapes[3])
+			require.NoError(t, store.audit(map[valueRef]uint64{ref: 1, retryRef: 1}))
+
+			store.release(retryRef)
+			store.release(ref)
+			require.NoError(t, store.audit(nil))
+		})
+	}
+}
+
+// TestMapShapeHitSkipsKeyInterning counts hash calls to show that internMap
+// reuses cached key refs. A map that misses the cache hashes its keys, its
+// values and itself. A map that hits hashes only its values and itself.
+func TestMapShapeHitSkipsKeyInterning(t *testing.T) {
+	const (
+		miss = 7 // 3 keys, 3 values and the map
+		hit  = 4 // 3 values and the map
+	)
+	seed := maphash.MakeSeed()
+	hashes := 0
+	store := newValueStoreWithHash(func(b []byte) uint64 {
+		hashes++
+		return maphash.Bytes(seed, b)
+	})
+	next := uint32(0)
+	external := map[valueRef]uint64{}
+	internCounting := func(keys ...mmdbtype.String) int {
+		t.Helper()
+		value := mmdbtype.Map{}
+		for _, key := range keys {
+			next++
+			value[key] = mmdbtype.Uint32(next)
+		}
+		hashes = 0
+		ref, err := store.intern(value)
+		require.NoError(t, err)
+		count := hashes
+		external[ref]++
+		require.True(t, value.Equal(store.materialize(ref)))
+		return count
+	}
+	continent := []mmdbtype.String{"code", "geoname_id", "names"}
+	country := []mmdbtype.String{"geoname_id", "iso_code", "names"}
+
+	require.Equal(t, miss, internCounting(continent...))
+	require.Equal(t, hit, internCounting(continent...))
+	// A different layout misses and turns the cache off for the next
+	// mapShapeSkipAfterMiss maps.
+	require.Equal(t, miss, internCounting(country...))
+	for range mapShapeSkipAfterMiss {
+		require.Equal(t, miss, internCounting(country...))
+	}
+	require.Equal(t, hit, internCounting(country...))
+
+	require.NoError(t, store.audit(external))
+	for ref, count := range external {
+		for range count {
+			store.release(ref)
+		}
+	}
+	require.NoError(t, store.audit(nil))
 }
