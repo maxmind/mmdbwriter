@@ -125,9 +125,10 @@ func (t *Tree) writeSubtree(
 	w io.Writer,
 	index nodeIndex,
 	dw *dataWriter,
-	buf []byte,
+	recordSize int,
 	next *uint32,
 ) (int64, error) {
+	buf := make([]byte, recordSize/4)
 	// Each search node consumes one address bit. The stack holds the next node
 	// plus at most one pending right sibling per ancestor. IPv6 search nodes
 	// occupy depths 0 through 127, so at most 128 entries are needed.
@@ -146,7 +147,7 @@ func (t *Tree) writeSubtree(
 			return numBytes, fmt.Errorf("node %d numbered %d but %d expected", index, number, *next)
 		}
 		n := t.nodeAt(index)
-		if err := t.copyNode(buf, n, dw); err != nil {
+		if err := t.copyNode(buf, n, dw, recordSize); err != nil {
 			return numBytes, err
 		}
 		nb, err := w.Write(buf)

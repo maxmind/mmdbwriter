@@ -423,7 +423,7 @@ func TestWriteSubtreePartialWrite(t *testing.T) {
 				writer,
 				tree.root,
 				newDataWriter(tree.valueStore, true),
-				make([]byte, recordBytes),
+				size,
 				&next,
 			)
 			require.ErrorIs(t, err, failure)
@@ -456,7 +456,7 @@ func (w *subtreePartialWriter) Write(p []byte) (int, error) {
 }
 
 func TestWriteSubtreeNodeCountMismatch(t *testing.T) {
-	tree := subtreeTestTree(t, Options{IPVersion: 4})
+	tree := subtreeTestTree(t, Options{IPVersion: 4, RecordSize: 28})
 	tree.finalize()
 	writtenNodes := tree.nodeCount
 	tree.nodeCount++
@@ -571,7 +571,7 @@ func dagCompatibilityFixture(t *testing.T, recordSize int) []byte {
 	var output bytes.Buffer
 	buf := make([]byte, recordSize/4)
 	for i := range nodes {
-		require.NoError(t, tree.copyNode(buf, &nodes[i], dw))
+		require.NoError(t, tree.copyNode(buf, &nodes[i], dw, recordSize))
 		_, err = output.Write(buf)
 		require.NoError(t, err)
 	}
@@ -579,7 +579,7 @@ func dagCompatibilityFixture(t *testing.T, recordSize int) []byte {
 	output.Write(dw.Bytes())
 	output.Write(metadataStartMarker)
 	metadata := newDataWriter(newValueStore(), true)
-	metadataBytes, err := tree.writeMetadata(metadata)
+	metadataBytes, err := tree.writeMetadata(metadata, recordSize)
 	require.NoError(t, err)
 	require.EqualValues(t, metadata.Len(), metadataBytes)
 	output.Write(metadata.Bytes())

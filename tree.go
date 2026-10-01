@@ -127,10 +127,9 @@ type Tree struct {
 	disableMetadataPointers bool
 	ipVersion               int
 	languages               []string
-	recordSize              int
-	// autoRecordSize makes WriteTo set recordSize to the smallest size that
-	// fits.
-	autoRecordSize bool
+	// recordSize is the configured record size. Zero makes each WriteTo call
+	// choose the smallest size that fits.
+	recordSize int
 	// Node blocks preserve pointer stability while retired slots are reused.
 	nodeBlocks         [][]node
 	nodeCountAllocated int
@@ -205,7 +204,6 @@ func New(opts Options) (*Tree, error) {
 	}
 
 	tree.recordSize = opts.RecordSize
-	tree.autoRecordSize = opts.RecordSize == 0
 
 	if opts.Inserter != nil {
 		tree.inserter = opts.Inserter
@@ -220,7 +218,7 @@ func New(opts Options) (*Tree, error) {
 		return nil, fmt.Errorf("unsupported IPVersion: %d", tree.ipVersion)
 	}
 
-	if !tree.autoRecordSize {
+	if tree.recordSize != 0 {
 		if err := validateRecordSize(tree.recordSize); err != nil {
 			return nil, err
 		}
@@ -1016,25 +1014,21 @@ func (t *Tree) WriteTo(w io.Writer) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	if t.autoRecordSize {
-		t.recordSize = recordSize
-	} else if recordSize > t.recordSize {
-		return 0, fmt.Errorf(
-			"exceeded record capacity: the largest record value, %d, needs %d-bit records, but RecordSize is %d",
-			maxValue,
-			recordSize,
-			t.recordSize,
-		)
+	if t.recordSize != 0 {
+		if recordSize > t.recordSize {
+			return 0, fmt.Errorf(
+				"exceeded record capacity: the largest record value, %d, needs %d-bit records, but RecordSize is %d",
+				maxValue,
+				recordSize,
+				t.recordSize,
+			)
+		}
+		recordSize = t.recordSize
 	}
 	dataLen := dataWriter.Len()
 
-	// We create this here so that we don't have to allocate millions of these. This
-	// may no longer make sense now that we are using a bufio.Writer anyway, which has
-	// WriteByte, but we should probably do some testing.
-	recordBuf := make([]byte, 2*t.recordSize/8)
-
 	nextNumber := uint32(0)
-	numBytes, err := t.writeSubtree(buf, t.root, dataWriter, recordBuf, &nextNumber)
+	numBytes, err := t.writeSubtree(buf, t.root, dataWriter, recordSize, &nextNumber)
 	if err != nil {
 		return numBytes, err
 	}
@@ -1078,7 +1072,7 @@ func (t *Tree) WriteTo(w io.Writer) (int64, error) {
 	// The metadata gets its own store, so WriteTo does not mutate the tree's
 	// store and the metadata writer's offset table stays metadata-sized.
 	metadataWriter := newDataWriter(newValueStore(), !t.disableMetadataPointers)
-	_, err = t.writeMetadata(metadataWriter)
+	_, err = t.writeMetadata(metadataWriter, recordSize)
 	if err != nil {
 		return numBytes, fmt.Errorf("writing metadata: %w", err)
 	}
@@ -1116,7 +1110,7 @@ func (t *Tree) recordValue(
 	}
 }
 
-func (t *Tree) copyNode(buf []byte, n *node, dataWriter *dataWriter) error {
+func (t *Tree) copyNode(buf []byte, n *node, dataWriter *dataWriter, recordSize int) error {
 	left, err := t.recordValue(&n.children[0], dataWriter)
 	if err != nil {
 		return err
@@ -1126,7 +1120,7 @@ func (t *Tree) copyNode(buf []byte, n *node, dataWriter *dataWriter) error {
 		return err
 	}
 
-	switch t.recordSize {
+	switch recordSize {
 	case 24:
 		buf[0] = byte((left >> 16) & 0xFF)
 		buf[1] = byte((left >> 8) & 0xFF)
@@ -1152,12 +1146,12 @@ func (t *Tree) copyNode(buf []byte, n *node, dataWriter *dataWriter) error {
 		buf[6] = byte((right >> 8) & 0xFF)
 		buf[7] = byte(right & 0xFF)
 	default:
-		return fmt.Errorf("unsupported record size of %d", t.recordSize)
+		return fmt.Errorf("unsupported record size of %d", recordSize)
 	}
 	return nil
 }
 
-func (t *Tree) writeMetadata(dw *dataWriter) (int64, error) {
+func (t *Tree) writeMetadata(dw *dataWriter, recordSize int) (int64, error) {
 	description := make(mmdbtype.Map, len(t.description))
 	for k, v := range t.description {
 		description[mmdbtype.String(k)] = mmdbtype.String(v)
@@ -1186,7 +1180,7 @@ func (t *Tree) writeMetadata(dw *dataWriter) (int64, error) {
 		//nolint:gosec // nodeCount is validated above
 		"node_count": mmdbtype.Uint32(t.nodeCount),
 		//nolint:gosec // recordSize is always 24, 28, or 32
-		"record_size": mmdbtype.Uint16(t.recordSize),
+		"record_size": mmdbtype.Uint16(recordSize),
 	}
 	ref, err := dw.store.intern(metadata)
 	if err != nil {
