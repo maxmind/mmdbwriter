@@ -1124,6 +1124,19 @@ func (t *Tree) copyNode(buf []byte, n *node, dataWriter *dataWriter, recordSize 
 		return err
 	}
 
+	// WriteTo checks the largest record value before the walk, so this is a
+	// bug in this library. Without the check, the encoding below would drop
+	// the high bits.
+	maxRecord := int64(1) << recordSize
+	if int64(left) >= maxRecord || int64(right) >= maxRecord {
+		return fmt.Errorf(
+			"record values (%d, %d) do not fit in %d-bit records",
+			left,
+			right,
+			recordSize,
+		)
+	}
+
 	switch recordSize {
 	case 24:
 		buf[0] = byte((left >> 16) & 0xFF)

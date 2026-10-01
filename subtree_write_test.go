@@ -481,6 +481,19 @@ func TestCopyNodeRejectsUnwrittenValue(t *testing.T) {
 	require.ErrorContains(t, err, "was not written before the search tree")
 }
 
+// TestCopyNodeRejectsOversizedRecordValue checks that copyNode returns an
+// error, and does not drop the high bits, if a value is too large.
+func TestCopyNodeRejectsOversizedRecordValue(t *testing.T) {
+	tree := subtreeTestTree(t, Options{IPVersion: 4, RecordSize: 24})
+	// Empty records hold nodeCount.
+	tree.nodeCount = 1 << 24
+
+	// The buffer is large enough for any record size.
+	err := tree.copyNode(make([]byte, 8), &node{}, newDataWriter(tree.valueStore, true), 24)
+
+	require.ErrorContains(t, err, "do not fit in 24-bit records")
+}
+
 // Every level on the leftmost path has an internal right sibling, reaching
 // the pending-sibling bound even though those identical right subtrees share.
 func TestSubtreeWriteMaximumPendingSiblings(t *testing.T) {
