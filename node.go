@@ -106,8 +106,8 @@ type insertRecord struct {
 	// flag fits in padding, and rebuilding the prefix per record measures at
 	// about 4ns.
 	//
-	// Only the metadata path reads it, but every path maintains it, so it can
-	// never hold a value from an earlier insert.
+	// Metadata and insertion errors use this flag. Every insertion path
+	// maintains it, so it cannot hold a value from an earlier insert.
 	insertedAs4 bool
 	// splitDepth is the depth of the record a split chain started from, which
 	// is the extent that record had before this insertion. Tree depths are at
@@ -555,7 +555,13 @@ func (iRec *insertRecord) insertRecord(
 		return iRec.mergeChildrenAfterInsert(r, iRec.insertNode(r.nodeIndex, newDepth))
 	case recordTypeReserved:
 		if iRec.prefixLen >= newDepth {
-			return newReservedNetworkError(iRec.ip, newDepth, iRec.prefixLen, iRec.tree.treeDepth)
+			return newReservedNetworkError(
+				iRec.ip,
+				newDepth,
+				iRec.prefixLen,
+				iRec.tree.treeDepth,
+				iRec.insertedAs4,
+			)
 		}
 		// We are inserting a network that contains a reserved network. Leave
 		// the reserved record as it is, and do not report it to an inserter.
@@ -567,7 +573,13 @@ func (iRec *insertRecord) insertRecord(
 			return nil
 		}
 		// attempting to insert _into_ an aliased network
-		return newAliasedNetworkError(iRec.ip, newDepth, iRec.prefixLen, iRec.tree.treeDepth)
+		return newAliasedNetworkError(
+			iRec.ip,
+			newDepth,
+			iRec.prefixLen,
+			iRec.tree.treeDepth,
+			iRec.insertedAs4,
+		)
 	default:
 		return fmt.Errorf("inserting into record type %d is not implemented", r.recordType)
 	}

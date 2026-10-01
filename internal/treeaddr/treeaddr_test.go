@@ -101,12 +101,3 @@ func TestPrefixFromInsertIP(t *testing.T) {
 		})
 	}
 }
-
-func TestIsIPv4SubtreeIP(t *testing.T) {
-	assert.True(t, IsIPv4SubtreeIP([16]byte{12: 1, 13: 2, 14: 3, 15: 4}))
-	assert.True(t, IsIPv4SubtreeIP([16]byte{}))
-	assert.False(t, IsIPv4SubtreeIP([16]byte{0x20, 0x01}))
-	// A genuine IPv6 address inside ::/96 satisfies the test, which is why
-	// callers that know the family should not use it. See ENG-5302.
-	assert.True(t, IsIPv4SubtreeIP([16]byte{15: 1}))
-}

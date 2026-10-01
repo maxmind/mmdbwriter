@@ -42,14 +42,3 @@ func prefixFromAddr(addr netip.Addr, prefixLen int) (netip.Prefix, error) {
 	}
 	return prefix, nil
 }
-
-// IsIPv4SubtreeIP reports whether ip is in the IPv4 subtree of a 128-bit
-// search tree.
-func IsIPv4SubtreeIP(ip [16]byte) bool {
-	for _, b := range ip[:12] {
-		if b != 0 {
-			return false
-		}
-	}
-	return true
-}
