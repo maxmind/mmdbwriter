@@ -2,6 +2,9 @@
 
 ## 2.0.0
 
+- Fixed reserved and aliased network errors to use the insertion's address
+  family. IPv6 prefixes within `::/96` now remain IPv6 in the error fields and
+  messages instead of being reported as IPv4.
 - Changed the module path to `github.com/maxmind/mmdbwriter/v2`.
 - Changed `Tree.Insert`, `Tree.InsertFunc`, `Tree.InsertRange`,
   `Tree.InsertRangeFunc`, and `Tree.Get` to use `net/netip` types instead of

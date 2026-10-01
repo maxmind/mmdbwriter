@@ -26,10 +26,16 @@ type AliasedNetworkError struct {
 	InsertedNetwork netip.Prefix
 }
 
-func newAliasedNetworkError(ip [16]byte, curPrefixLen, recPrefixLen, treeDepth int) error {
+func newAliasedNetworkError(
+	ip [16]byte,
+	curPrefixLen,
+	recPrefixLen,
+	treeDepth int,
+	as4 bool,
+) error {
 	anErr := &AliasedNetworkError{}
 	var err error
-	anErr.InsertedNetwork, err = prefixFromInsertIP(ip, recPrefixLen, treeDepth)
+	anErr.InsertedNetwork, err = treeaddr.PrefixFromInsertIP(ip, recPrefixLen, treeDepth, as4)
 	if err != nil {
 		return errors.Join(
 			fmt.Errorf(
@@ -41,7 +47,7 @@ func newAliasedNetworkError(ip [16]byte, curPrefixLen, recPrefixLen, treeDepth i
 		)
 	}
 
-	anErr.AliasedNetwork, err = prefixFromInsertIP(ip, curPrefixLen, treeDepth)
+	anErr.AliasedNetwork, err = treeaddr.PrefixFromInsertIP(ip, curPrefixLen, treeDepth, as4)
 	if err != nil {
 		return errors.Join(
 			fmt.Errorf(
@@ -79,10 +85,11 @@ func newReservedNetworkError(
 	curPrefixLen,
 	recPrefixLen,
 	treeDepth int,
+	as4 bool,
 ) error {
 	rnErr := &ReservedNetworkError{}
 	var err error
-	rnErr.InsertedNetwork, err = prefixFromInsertIP(ip, recPrefixLen, treeDepth)
+	rnErr.InsertedNetwork, err = treeaddr.PrefixFromInsertIP(ip, recPrefixLen, treeDepth, as4)
 	if err != nil {
 		return errors.Join(
 			fmt.Errorf(
@@ -94,7 +101,7 @@ func newReservedNetworkError(
 		)
 	}
 
-	rnErr.ReservedNetwork, err = prefixFromInsertIP(ip, curPrefixLen, treeDepth)
+	rnErr.ReservedNetwork, err = treeaddr.PrefixFromInsertIP(ip, curPrefixLen, treeDepth, as4)
 	if err != nil {
 		return errors.Join(
 			fmt.Errorf(
@@ -106,13 +113,6 @@ func newReservedNetworkError(
 		)
 	}
 	return rnErr
-}
-
-func prefixFromInsertIP(ip [16]byte, prefixLen, treeDepth int) (netip.Prefix, error) {
-	// Keep the error path's existing family inference. Tree addresses do not
-	// encode an address family, so other callers supply their own decision.
-	as4 := treeDepth == 32 || (treeaddr.IsIPv4SubtreeIP(ip) && prefixLen >= 96)
-	return treeaddr.PrefixFromInsertIP(ip, prefixLen, treeDepth, as4)
 }
 
 func (r *ReservedNetworkError) Error() string {
