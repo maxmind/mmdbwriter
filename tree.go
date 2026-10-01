@@ -10,6 +10,7 @@ import (
 	"math"
 	"net/netip"
 	"os"
+	"slices"
 	"time"
 
 	"github.com/oschwald/maxminddb-golang/v2"
@@ -244,18 +245,19 @@ func New(opts Options) (*Tree, error) {
 	return tree, nil
 }
 
+// recordSizes lists the supported record sizes, smallest first.
+var recordSizes = []int{24, 28, 32}
+
 func validateRecordSize(recordSize int) error {
-	switch recordSize {
-	case 24, 28, 32:
-		return nil
-	default:
+	if !slices.Contains(recordSizes, recordSize) {
 		return fmt.Errorf("unsupported RecordSize: %d", recordSize)
 	}
+	return nil
 }
 
 // recordSizeFor returns the smallest record size that can hold maxValue.
 func recordSizeFor(maxValue int64) (int, error) {
-	for _, size := range []int{24, 28, 32} {
+	for _, size := range recordSizes {
 		if maxValue < int64(1)<<size {
 			return size, nil
 		}
@@ -266,11 +268,10 @@ func recordSizeFor(maxValue int64) (int, error) {
 	)
 }
 
-// metadataDimension narrows a search tree dimension read from metadata. New
-// validates which values are supported; this rejects two cases it cannot see.
-// Zero is rejected because it is indistinguishable from an unset Option and
-// would be silently replaced by a default. Values above math.MaxInt32 are
-// rejected because the uint to int conversion is otherwise unchecked.
+// metadataDimension narrows a search tree dimension read from metadata. The
+// caller, or New, checks which values are supported. This rejects zero, which
+// cannot be told apart from an unset or automatic option, and values above
+// math.MaxInt32, which the uint to int conversion would not check.
 func metadataDimension(name string, value uint) (int, error) {
 	if value == 0 || value > math.MaxInt32 {
 		return 0, fmt.Errorf("unsupported %s in metadata: %d", name, value)
@@ -316,13 +317,15 @@ func Load(path string, opts Options) (*Tree, error) {
 
 	// The written tree does not keep the source record size, but the reader
 	// uses it to read the source tree.
-	switch metadata.RecordSize {
-	case 24, 28, 32:
-	default:
+	sourceRecordSize, err := metadataDimension("record_size", metadata.RecordSize)
+	if err != nil {
+		return nil, fmt.Errorf("loading %s: %w", path, err)
+	}
+	if !slices.Contains(recordSizes, sourceRecordSize) {
 		return nil, fmt.Errorf(
 			"loading %s: unsupported record_size in metadata: %d",
 			path,
-			metadata.RecordSize,
+			sourceRecordSize,
 		)
 	}
 
