@@ -584,6 +584,9 @@ func (r *modelRun) step(i int) error {
 		r.trace = append(r.trace, fmt.Sprintf("%d: WriteTo", i))
 		return r.fullCheck()
 	default:
+		if r.src.byte() < 96 {
+			return r.naiveLoad(i)
+		}
 		return r.loadRoundTrip(i)
 	}
 }
@@ -1427,6 +1430,20 @@ func (r *modelRun) loadRoundTrip(i int) error {
 			return r.fail("reader-networks", "%v", err)
 		}
 	}
+	return r.adoptLoad(loaded, loadErr, want, wantErr, effective, targetInserter)
+}
+
+// adoptLoad checks a load's error against the model. After a successful
+// load, the run continues with the loaded tree, the expected model, and the
+// load's options.
+func (r *modelRun) adoptLoad(
+	loaded *Tree,
+	loadErr error,
+	want *treeModel,
+	wantErr bool,
+	opts Options,
+	named *namedPure,
+) error {
 	if wantErr != (loadErr != nil) {
 		return r.fail("load-error", "model expects error=%v, Load returned %v", wantErr, loadErr)
 	}
@@ -1436,9 +1453,9 @@ func (r *modelRun) loadRoundTrip(i int) error {
 	loaded.disableInsertCursor = r.tree.disableInsertCursor
 	r.tree = loaded
 	r.model = want
-	r.opts = effective
-	r.optsInserter = targetInserter
-	if !sameConfig {
+	r.opts = opts
+	r.optsInserter = named
+	if cfg := configFor(opts); cfg != r.cfg {
 		r.cfg = cfg
 		r.anchors = modelAnchors(cfg)
 		r.probes = nil
@@ -1450,6 +1467,64 @@ func (r *modelRun) loadRoundTrip(i int) error {
 		return err
 	}
 	return r.fullCheck()
+}
+
+// naiveLoad writes the model with the naive writer, checks the file with the
+// reader, and loads it with the tree's options. The loaded tree must hold
+// the model's values.
+func (r *modelRun) naiveLoad(i int) error {
+	if r.skipKnown && r.modelHasMappedData() {
+		// Known bug: Load normalizes networks in ::ffff:0:0/96 to IPv4 and
+		// inserts them over the IPv4 subtree.
+		r.trace = append(r.trace, fmt.Sprintf("%d: naive Load skipped", i))
+		return nil
+	}
+	db, err := writeNaiveDatabase(r.src, r.model)
+	if err != nil {
+		return r.fail("naive-writer", "%v", err)
+	}
+	data := db.data
+	reader, err := maxminddb.OpenBytes(data)
+	if err != nil {
+		return r.fail("naive-writer", "open: %v", err)
+	}
+	defer reader.Close()
+	if !db.recordPointers && !db.duplicateKeys {
+		if err := reader.Verify(); err != nil {
+			return r.fail("naive-writer", "verify: %v", err)
+		}
+	}
+	if err := r.checkNetworks(reader); err != nil {
+		return fmt.Errorf("[naive-writer] %w", err)
+	}
+	if err := r.checkNetworksSkippingAliases(reader); err != nil {
+		return fmt.Errorf("[naive-writer] %w", err)
+	}
+	r.loads++
+	path := filepath.Join(r.dir, fmt.Sprintf("naive-%d.mmdb", r.loads))
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		return err
+	}
+	loaded, loadErr := Load(path, r.opts)
+	r.trace = append(r.trace, fmt.Sprintf("%d: naive Load (%d bytes) -> %v", i, len(data), loadErr))
+	want, wantErr := r.roundTripModel(r.optsInserter)
+	wantErr = wantErr || db.duplicateKeys
+	return r.adoptLoad(loaded, loadErr, want, wantErr, r.opts, r.optsInserter)
+}
+
+// modelHasMappedData reports whether the raw ::ffff:0:0/96 region holds data
+// in a tree without aliasing.
+func (r *modelRun) modelHasMappedData() bool {
+	if r.cfg.depth != 128 || r.cfg.aliasing {
+		return false
+	}
+	mapped := r.model.prefixToRange(netip.MustParsePrefix("::ffff:0:0/96"))
+	for _, run := range r.model.runs(mapped) {
+		if r.model.get(run.first).value != nil {
+			return true
+		}
+	}
+	return false
 }
 
 // genLoadOptions returns the options for a load. Half of the time they are
