@@ -20,7 +20,6 @@ import (
 
 	"github.com/oschwald/maxminddb-golang/v2"
 
-	"github.com/maxmind/mmdbwriter/v2/inserter"
 	"github.com/maxmind/mmdbwriter/v2/mmdbtype"
 )
 
@@ -399,4 +398,3 @@ func compareWithV1(t *testing.T, bin string, log *v1Log) map[string][]string {
 	return diffs
 }
 
-var _ = inserter.Replace
