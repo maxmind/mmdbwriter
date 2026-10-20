@@ -272,6 +272,9 @@ type modelRun struct {
 	// strictGetReader also requires Tree.Get and a reader lookup of the same
 	// address to agree.
 	strictGetReader bool
+	// callbackErr holds the first failure a callback found. Callbacks cannot
+	// return it, so the insert check reports it.
+	callbackErr error
 	// skipKnown skips checks that fail because of bugs this prototype has
 	// already found, so a run can find other bugs.
 	skipKnown bool
@@ -622,13 +625,13 @@ func (r *modelRun) insertPrefix(
 	fn *namedPure,
 	withMetadata bool,
 ) error {
-	var calls []metadataCall
+	var calls []modelCall
 	var err error
 	switch {
 	case fn == nil:
 		err = r.tree.Insert(p, v)
 	case withMetadata:
-		err = r.tree.InsertFunc(p, v, recordingFunc(fn.fn, &calls))
+		err = r.tree.InsertFunc(p, v, r.recordingFunc(fn.fn, &calls))
 	default:
 		err = r.tree.InsertPureFunc(p, v, fn.fn)
 	}
@@ -654,13 +657,13 @@ func (r *modelRun) insertRange(
 	fn *namedPure,
 	withMetadata bool,
 ) error {
-	var calls []metadataCall
+	var calls []modelCall
 	var err error
 	switch {
 	case fn == nil:
 		err = r.tree.InsertRange(start, end, v)
 	case withMetadata:
-		err = r.tree.InsertRangeFunc(start, end, v, recordingFunc(fn.fn, &calls))
+		err = r.tree.InsertRangeFunc(start, end, v, r.recordingFunc(fn.fn, &calls))
 	default:
 		err = r.tree.InsertRangePureFunc(start, end, v, fn.fn)
 	}
@@ -695,14 +698,93 @@ func (r *modelRun) insertRange(
 	return r.finishInsert(want, pieces, v, fn, calls, withMetadata, true, err)
 }
 
-func recordingFunc(fn inserter.PureFunc, calls *[]metadataCall) inserter.Func {
+// modelCall is one InsertFunc callback: its arguments and the lookups it
+// made.
+type modelCall struct {
+	existing mmdbtype.DataType
+	metadata inserter.Metadata
+	gets     []callbackGet
+}
+
+// callbackGet is a Get that a callback made during an insert.
+type callbackGet struct {
+	query  netip.Addr
+	prefix netip.Prefix
+	value  mmdbtype.DataType
+}
+
+// recordingFunc wraps a pure function as an inserter.Func. Each call records
+// its arguments and looks up addresses around the insert. The first call also
+// tries a reentrant mutation, which must fail without effect.
+func (r *modelRun) recordingFunc(fn inserter.PureFunc, calls *[]modelCall) inserter.Func {
 	return func(
 		old, newValue mmdbtype.DataType,
 		metadata inserter.Metadata,
 	) (mmdbtype.DataType, error) {
-		*calls = append(*calls, metadataCall{existing: old, metadata: metadata})
+		if len(*calls) == 0 && r.callbackErr == nil {
+			r.callbackErr = r.tryReentrantMutation(metadata.InsertedNetwork)
+		}
+		*calls = append(*calls, modelCall{
+			existing: old,
+			metadata: metadata,
+			gets:     r.callbackGets(metadata),
+		})
 		return fn(old, newValue)
 	}
+}
+
+// callbackGets looks up the ends of the existing record and of the inserted
+// network, and the addresses next to the inserted network.
+func (r *modelRun) callbackGets(metadata inserter.Metadata) []callbackGet {
+	existing := r.model.prefixToRange(metadata.ExistingNetwork())
+	inserted := r.model.prefixToRange(metadata.InsertedNetwork)
+	addrs := []u128{existing.first, existing.last, inserted.first, inserted.last}
+	if inserted.first != (u128{}) {
+		addrs = append(addrs, inserted.first.sub1())
+	}
+	if inserted.last != lowMask(r.cfg.depth) {
+		addrs = append(addrs, inserted.last.add1())
+	}
+	var gets []callbackGet
+	for _, a := range addrs {
+		if r.model.resolveAlias(a) != a {
+			// Alias lookups can hit the known compressed-path bug.
+			continue
+		}
+		query := a.addr16()
+		if r.cfg.depth == 32 || (a.hi == 0 && a.lo>>32 == 0) {
+			query = a.addr4()
+		}
+		prefix, value := r.tree.Get(query)
+		gets = append(gets, callbackGet{query: query, prefix: prefix, value: value})
+	}
+	return gets
+}
+
+// tryReentrantMutation tries one mutation of the tree from inside a callback.
+// It returns an error if the tree accepts the mutation.
+func (r *modelRun) tryReentrantMutation(network netip.Prefix) error {
+	value := mmdbtype.String("reentrant")
+	var err error
+	var written int
+	op := len(r.trace) % 4
+	switch op {
+	case 0:
+		err = r.tree.Insert(network, value)
+	case 1:
+		err = r.tree.InsertRange(network.Addr(), network.Addr(), value)
+	case 2:
+		err = r.tree.InsertPureFunc(network, value, inserter.Replace)
+	case 3:
+		var buf bytes.Buffer
+		_, err = r.tree.WriteTo(&buf)
+		written = buf.Len()
+	}
+	if !errors.Is(err, errReentrantMutation) || written != 0 {
+		return r.fail("reentrant", "reentrant operation %d on %s returned %v and wrote %d bytes",
+			op, network, err, written)
+	}
+	return nil
 }
 
 func (r *modelRun) finishInsert(
@@ -710,11 +792,14 @@ func (r *modelRun) finishInsert(
 	pieces []mrange,
 	v mmdbtype.DataType,
 	fn *namedPure,
-	calls []metadataCall,
+	calls []modelCall,
 	withMetadata bool,
 	isRange bool,
 	got error,
 ) error {
+	if err := r.callbackErr; err != nil {
+		return err
+	}
 	if want == modelErrNone {
 		var pure inserter.PureFunc
 		switch {
@@ -918,7 +1003,7 @@ func (r *modelRun) checkReturnedPrefix(
 // piece's insertable addresses in order.
 func (r *modelRun) checkCalls(
 	states []pieceState,
-	calls []metadataCall,
+	calls []modelCall,
 	result modelErrKind,
 	isRange bool,
 ) error {
@@ -956,6 +1041,13 @@ func (r *modelRun) checkCalls(
 					"call %d: ExistingNetwork %s, existing %s, model constant=%v %s",
 					ci, existing, canon(call.existing), ok, seg.key)
 			}
+			post := r.model
+			if si+1 < len(states) {
+				post = states[si+1].model
+			}
+			if err := r.checkCallbackGets(call, st, post, er); err != nil {
+				return err
+			}
 			if done {
 				return r.fail("metadata-tiling", "call %d after the piece was covered", ci)
 			}
@@ -990,6 +1082,36 @@ func (r *modelRun) checkCalls(
 	}
 	if ci != len(calls) {
 		return r.fail("metadata-tiling", "%d unexpected calls", len(calls)-ci)
+	}
+	return nil
+}
+
+// checkCallbackGets checks the lookups a callback made. Inside the piece,
+// addresses before the current record hold their new values and the others
+// hold their old values. Addresses outside the piece hold their old values.
+func (r *modelRun) checkCallbackGets(
+	call modelCall,
+	st pieceState,
+	post *treeModel,
+	record mrange,
+) error {
+	for _, g := range call.gets {
+		ma, ok := r.model.getAddr(g.query)
+		if !ok {
+			return r.fail("callback-get", "cannot map %s", g.query)
+		}
+		want := st.model.get(ma)
+		if st.piece.contains(ma) && ma.cmp(record.first) < 0 {
+			want = post.get(ma)
+		}
+		if canon(g.value) != want.key {
+			return r.fail("callback-get", "Get(%s) in a callback for record %s = %s, model %s",
+				g.query, call.metadata.ExistingNetwork(), canon(g.value), want.key)
+		}
+		if !g.prefix.IsValid() || !r.model.prefixToRange(g.prefix).contains(ma) {
+			return r.fail("callback-get", "Get(%s) in a callback returned %s",
+				g.query, g.prefix)
+		}
 	}
 	return nil
 }
