@@ -458,7 +458,12 @@ func (r *modelRun) genPrefix() netip.Prefix {
 	if r.src.byte() == 255 {
 		return netip.Prefix{}
 	}
-	a, bits := r.genModelAddr(), r.genBits()
+	return r.apiPrefix(r.genModelAddr(), r.genBits())
+}
+
+// apiPrefix returns one of the forms a caller can use for a tree-space
+// prefix.
+func (r *modelRun) apiPrefix(a u128, bits int) netip.Prefix {
 	addr := r.apiAddr(a)
 	switch {
 	case addr.Is4():
@@ -526,7 +531,9 @@ func (r *modelRun) genPure() namedPure {
 func (r *modelRun) step(i int) error {
 	op := r.src.intn(32)
 	switch {
-	case op < 8 || op >= 25:
+	case op >= 25 && op < 27:
+		return r.burst(i)
+	case op < 8 || op >= 27:
 		p, v := r.genPrefix(), r.genValue()
 		return r.insertPrefix(i, "Insert", p, v, nil, false)
 	case op < 12:
@@ -570,6 +577,39 @@ func (r *modelRun) step(i int) error {
 	default:
 		return r.loadRoundTrip(i)
 	}
+}
+
+// burst inserts a repeating pattern of adjacent small prefixes at one or two
+// aligned bases. The tree then holds equal subtrees that WriteTo can share.
+func (r *modelRun) burst(i int) error {
+	bases := []u128{r.genModelAddr()}
+	if r.src.byte() < 128 {
+		bases = append(bases, r.genModelAddr())
+	}
+	host := r.src.intn(3)
+	count := 2 + r.src.intn(15)
+	pattern := make([]mmdbtype.DataType, 1+r.src.intn(3))
+	for j := range pattern {
+		pattern[j] = r.genValue()
+	}
+	bits := r.cfg.depth - host
+	for _, base := range bases {
+		start := prefixRange(base, bits-5, r.cfg.depth).first
+		for j := range count {
+			p := r.apiPrefix(start, bits)
+			err := r.insertPrefix(i, "Insert(burst)", p, pattern[j%len(pattern)], nil, false)
+			if err != nil {
+				return err
+			}
+			for range 1 << host {
+				if start == lowMask(r.cfg.depth) {
+					return nil
+				}
+				start = start.add1()
+			}
+		}
+	}
+	return nil
 }
 
 // insertPrefix runs one prefix insert on the tree and the model. A nil fn
