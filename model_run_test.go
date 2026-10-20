@@ -275,6 +275,8 @@ type modelRun struct {
 	// callbackErr holds the first failure a callback found. Callbacks cannot
 	// return it, so the insert check reports it.
 	callbackErr error
+	// onWrite, if set, receives every database that fullCheck writes.
+	onWrite func(*modelRun, []byte)
 	// skipKnown skips checks that fail because of bugs this prototype has
 	// already found, so a run can find other bugs.
 	skipKnown bool
@@ -285,12 +287,24 @@ const modelMaxOperations = 64
 // runTreeModel interprets data as a tree configuration and a sequence of
 // operations. It applies each operation to a Tree and to the model and
 // returns the first disagreement.
-func runTreeModel(data []byte, dir string, strict bool) (err error) {
+func runTreeModel(data []byte, dir string, strict bool) error {
+	return runTreeModelWith(data, dir, strict, nil)
+}
+
+// runTreeModelWith is runTreeModel with a function that receives every
+// database that the full check writes.
+func runTreeModelWith(
+	data []byte,
+	dir string,
+	strict bool,
+	onWrite func(*modelRun, []byte),
+) (err error) {
 	r := &modelRun{
 		src:             &byteSource{data: data},
 		dir:             dir,
 		strictGetReader: strict,
 		skipKnown:       os.Getenv("MMDBWRITER_MODEL_KNOWN") != "off",
+		onWrite:         onWrite,
 	}
 	defer func() {
 		if p := recover(); p != nil {
@@ -1137,6 +1151,9 @@ func (r *modelRun) fullCheck() error {
 	}
 	if n != int64(buf.Len()) {
 		return r.fail("write-count", "WriteTo returned %d for %d bytes", n, buf.Len())
+	}
+	if r.onWrite != nil {
+		r.onWrite(r, buf.Bytes())
 	}
 	var again bytes.Buffer
 	if _, err := r.tree.WriteTo(&again); err != nil {
