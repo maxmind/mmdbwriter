@@ -119,7 +119,9 @@ func TestTreeModelPythonReaders(t *testing.T) {
 }
 
 // knownPythonError reports whether an iteration error comes from a known bug
-// in the Python reader:
+// in the Python reader 3.2.0. The reader's main branch fixes both bugs and
+// the skipped networks below, so these filters can go once a release has
+// the fixes:
 //
 //   - The pure-Python reader treats the address 2^32 (::1:0:0) as IPv4,
 //     because _IPV4_MAX_NUM is 2**32, not 2**32 - 1.
