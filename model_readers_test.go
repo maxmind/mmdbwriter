@@ -85,7 +85,7 @@ func TestTreeModelPythonReaders(t *testing.T) {
 		for i := range data {
 			data[i] = byte(rng.Uint32())
 		}
-		if err := runTreeModelWith(data, dir, false, onWrite); err != nil {
+		if err := runTreeModelWith(data, dir, modelRunOptions{onWrite: onWrite}); err != nil {
 			t.Fatal(err)
 		}
 	}

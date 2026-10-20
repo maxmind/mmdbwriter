@@ -311,6 +311,8 @@ type modelRun struct {
 	callbackErr error
 	// onWrite, if set, receives every database that fullCheck writes.
 	onWrite func(*modelRun, []byte)
+	// v1, if set, logs the operations that mmdbwriter v1 can replay.
+	v1 *v1Log
 	// skipKnown skips checks that fail because of bugs this prototype has
 	// already found, so a run can find other bugs.
 	skipKnown bool
@@ -322,23 +324,31 @@ const modelMaxOperations = 64
 // operations. It applies each operation to a Tree and to the model and
 // returns the first disagreement.
 func runTreeModel(data []byte, dir string, strict bool) error {
-	return runTreeModelWith(data, dir, strict, nil)
+	return runTreeModelWith(data, dir, modelRunOptions{strict: strict})
 }
 
-// runTreeModelWith is runTreeModel with a function that receives every
-// database that the full check writes.
-func runTreeModelWith(
-	data []byte,
-	dir string,
-	strict bool,
-	onWrite func(*modelRun, []byte),
-) (err error) {
+// modelRunOptions holds the optional parts of a model run.
+type modelRunOptions struct {
+	// strict also requires Tree.Get and a reader lookup to agree.
+	strict bool
+	// onWrite, if set, receives every database that the full check writes.
+	onWrite func(*modelRun, []byte)
+	// v1, if set, receives the operations that mmdbwriter v1 can replay.
+	v1 *v1Log
+}
+
+// runTreeModelWith is runTreeModel with optional parts.
+func runTreeModelWith(data []byte, dir string, opts modelRunOptions) (err error) {
 	r := &modelRun{
 		src:             &byteSource{data: data},
 		dir:             dir,
-		strictGetReader: strict,
+		strictGetReader: opts.strict,
 		skipKnown:       os.Getenv("MMDBWRITER_MODEL_KNOWN") != "off",
-		onWrite:         onWrite,
+		onWrite:         opts.onWrite,
+		v1:              opts.v1,
+	}
+	if r.v1 != nil {
+		defer r.v1.stop(r)
 	}
 	defer func() {
 		if p := recover(); p != nil {
@@ -362,9 +372,10 @@ func runTreeModelWith(
 }
 
 func (r *modelRun) fail(tag, format string, args ...any) error {
+	cursor := r.tree != nil && !r.tree.disableInsertCursor
 	return fmt.Errorf("[%s] %s\nconfig: %+v cursor=%v audit=%v\ntrace:\n%s",
 		tag, fmt.Sprintf(format, args...), r.cfg,
-		!r.tree.disableInsertCursor, r.opts.RefcountAudit,
+		cursor, r.opts.RefcountAudit,
 		strings.Join(r.trace, "\n"))
 }
 
@@ -686,6 +697,7 @@ func (r *modelRun) insertPrefix(
 	withMetadata bool,
 ) error {
 	var calls []modelCall
+	logged := r.v1 != nil && r.v1.logPrefix(r, p, v, fn)
 	err, panicked := callTree(func() error {
 		switch {
 		case fn == nil:
@@ -699,6 +711,18 @@ func (r *modelRun) insertPrefix(
 	r.trace = append(r.trace, fmt.Sprintf(
 		"%d: %s(%s, %s) -> %v%s", i, name, p, canon(v), err, panicNote(panicked),
 	))
+	if logged {
+		r.v1.result(r.trace[len(r.trace)-1], err)
+	}
+	defer func() {
+		switch {
+		case r.v1 == nil:
+		case logged:
+			r.v1.done(r)
+		default:
+			r.v1.skipped(r)
+		}
+	}()
 
 	var pieces []mrange
 	want := modelErrNone
@@ -721,6 +745,7 @@ func (r *modelRun) insertRange(
 	withMetadata bool,
 ) error {
 	var calls []modelCall
+	logged := r.v1 != nil && r.v1.logRange(r, start, end, v, fn)
 	err, panicked := callTree(func() error {
 		switch {
 		case fn == nil:
@@ -734,6 +759,18 @@ func (r *modelRun) insertRange(
 	r.trace = append(r.trace, fmt.Sprintf(
 		"%d: %s(%s, %s, %s) -> %v%s", i, name, start, end, canon(v), err, panicNote(panicked),
 	))
+	if logged {
+		r.v1.result(r.trace[len(r.trace)-1], err)
+	}
+	defer func() {
+		switch {
+		case r.v1 == nil:
+		case logged:
+			r.v1.done(r)
+		default:
+			r.v1.skipped(r)
+		}
+	}()
 
 	want := modelErrNone
 	var pieces []mrange
@@ -1570,6 +1607,9 @@ func (r *modelRun) fileHasMappedNetworks(path string) (bool, error) {
 // tree. Half of the loads use the tree's own options. The others change the
 // aliasing, reserved-network, IP version, record size, or inserter options.
 func (r *modelRun) loadRoundTrip(i int) error {
+	if r.v1 != nil {
+		r.v1.stop(r)
+	}
 	r.loads++
 	path := filepath.Join(r.dir, fmt.Sprintf("load-%d.mmdb", r.loads))
 	file, err := os.Create(path)
@@ -1666,6 +1706,9 @@ func (r *modelRun) adoptLoad(
 // reader, and loads it with the tree's options. The loaded tree must hold
 // the model's values.
 func (r *modelRun) naiveLoad(i int) error {
+	if r.v1 != nil {
+		r.v1.stop(r)
+	}
 	if r.skipKnown && r.modelHasMappedData() {
 		// Known bug: Load normalizes networks in ::ffff:0:0/96 to IPv4 and
 		// inserts them over the IPv4 subtree.
