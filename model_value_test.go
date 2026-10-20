@@ -13,6 +13,7 @@ import (
 
 	"github.com/oschwald/maxminddb-golang/v2"
 
+	"github.com/maxmind/mmdbwriter/v2/inserter"
 	"github.com/maxmind/mmdbwriter/v2/mmdbtype"
 )
 
@@ -59,6 +60,16 @@ func runValueModel(data []byte, dir string) (err error) {
 		}
 	}
 
+	// The inserter package's merges match the reference merges, and leave
+	// their arguments unchanged.
+	for _, pair := range [][2]mmdbtype.DataType{
+		{v, other}, {other, v}, {v, v.Copy()}, {nil, v}, {v, nil},
+	} {
+		if err := checkMerges(pair[0], pair[1]); err != nil {
+			return fail("merge", "%v", err)
+		}
+	}
+
 	// The store interns by content, even when every value shares one hash.
 	for _, store := range []*valueStore{
 		newValueStore(),
@@ -71,6 +82,28 @@ func runValueModel(data []byte, dir string) (err error) {
 
 	if err := checkWireRoundTrip(v, other, dir); err != nil {
 		return fail("wire", "%v", err)
+	}
+	return nil
+}
+
+func checkMerges(existing, newValue mmdbtype.DataType) error {
+	before := [2]string{canon(existing), canon(newValue)}
+	for _, merge := range []struct {
+		name      string
+		got, want inserter.PureFunc
+	}{
+		{"DeepMerge", inserter.DeepMerge, referenceDeepMerge},
+		{"TopLevelMerge", inserter.TopLevelMerge, referenceTopLevelMerge},
+	} {
+		got, gotErr := merge.got(existing, newValue)
+		want, wantErr := merge.want(existing, newValue)
+		if (gotErr == nil) != (wantErr == nil) || canon(got) != canon(want) {
+			return fmt.Errorf("%s(%s, %s) = %s, %v; reference %s, %v",
+				merge.name, before[0], before[1], canon(got), gotErr, canon(want), wantErr)
+		}
+		if canon(existing) != before[0] || canon(newValue) != before[1] {
+			return fmt.Errorf("%s changed its arguments", merge.name)
+		}
 	}
 	return nil
 }
