@@ -397,4 +397,3 @@ func compareWithV1(t *testing.T, bin string, log *v1Log) map[string][]string {
 	}
 	return diffs
 }
-
