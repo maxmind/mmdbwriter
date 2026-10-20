@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/debug"
+	"slices"
 	"strings"
 
 	"github.com/oschwald/maxminddb-golang/v2"
@@ -394,6 +395,9 @@ func (r *modelRun) setup() error {
 	}
 	if b&1 != 0 {
 		r.opts.IPVersion = 4
+	}
+	if r.src.byte()&1 != 0 {
+		r.opts.Languages = []string{"en", "de"}
 	}
 	if choice := (b >> 5) & 3; choice != 0 {
 		f := modelPureFuncs[[]int{0, 0, 3, 6}[choice]] // Replace, DeepMerge, wrapOld
@@ -1120,7 +1124,18 @@ func (r *modelRun) checkGetResult(
 	if hasPointerTypes(value) {
 		return r.fail("get-view", "Get(%s) returned a pointer type: %T", addr, value)
 	}
-	return r.checkReturnedPrefix("Get", addr, ma, prefix, wantKey)
+	if err := r.checkReturnedPrefix("Get", addr, ma, prefix, wantKey); err != nil {
+		return err
+	}
+	// For an IPv4 query, a record at or below the IPv4 subtree comes back in
+	// IPv4 form, and a shallower record in IPv6 form.
+	if addr.Unmap().Is4() {
+		bits := rangeDepth(r.model.prefixToRange(prefix), r.cfg.depth)
+		if wantIPv4 := r.cfg.depth == 32 || bits >= 96; prefix.Addr().Is4() != wantIPv4 {
+			return r.fail("get-prefix-form", "Get(%s) returned %s", addr, prefix)
+		}
+	}
+	return nil
 }
 
 // treeHasLivePaths reports whether the tree holds a compressed path that
@@ -1386,7 +1401,8 @@ func (r *modelRun) checkFileMetadata(reader *maxminddb.Reader, db []byte) error 
 		return r.fail("file-metadata", "description %v", md.Description)
 	case int(md.IPVersion) != r.opts.IPVersion:
 		return r.fail("file-metadata", "IP version %d", md.IPVersion)
-	case len(md.Languages) != 0:
+	case len(md.Languages) != len(r.opts.Languages) ||
+		(len(md.Languages) != 0 && !slices.Equal(md.Languages, r.opts.Languages)):
 		return r.fail("file-metadata", "languages %v", md.Languages)
 	case int(md.RecordSize) != recordSize:
 		return r.fail("file-metadata", "record size %d, want %d", md.RecordSize, recordSize)
@@ -1628,6 +1644,15 @@ func (r *modelRun) loadRoundTrip(i int) error {
 	if effective.IPVersion == 0 {
 		effective.IPVersion = r.opts.IPVersion
 	}
+	if effective.DatabaseType == "" {
+		effective.DatabaseType = r.opts.DatabaseType
+	}
+	if effective.Description == nil {
+		effective.Description = r.opts.Description
+	}
+	if effective.Languages == nil {
+		effective.Languages = r.opts.Languages
+	}
 	cfg := configFor(effective)
 	sameConfig := cfg == r.cfg
 	if sameConfig && r.skipKnown {
@@ -1797,6 +1822,12 @@ func (r *modelRun) genLoadOptions() (Options, *namedPure) {
 		opts.IPVersion = 10 - opts.IPVersion // Switch between 4 and 6.
 	}
 	opts.RecordSize = []int{0, 24, 28, 32}[(b>>4)&3]
+	if b&64 != 0 {
+		// Load takes these from the file's metadata.
+		opts.DatabaseType = ""
+		opts.Description = nil
+		opts.Languages = nil
+	}
 	named = nil
 	opts.Inserter = nil
 	if choice := r.src.intn(4); choice != 0 {
