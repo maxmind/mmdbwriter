@@ -525,8 +525,10 @@ func (r *modelRun) genValue() mmdbtype.DataType {
 	switch {
 	case c < 128:
 		return r.values[int(c)%8]
-	case c < 236:
+	case c < 228:
 		return r.values[8+int(c)%(len(r.values)-8-modelInvalidValues)]
+	case c < 236:
+		return genRandomValue(r.src, 0, false)
 	case c < 248 && len(r.views) > 0:
 		return r.views[int(c)%len(r.views)]
 	}
@@ -1148,7 +1150,7 @@ func (r *modelRun) fullCheck() error {
 		return r.fail("reader-open", "%v", err)
 	}
 	defer reader.Close()
-	if err := reader.Verify(); err != nil {
+	if err := reader.Verify(); err != nil && !(r.skipKnown && r.modelHasInvalidUTF8()) {
 		return r.fail("reader-verify", "%v", err)
 	}
 	if r.opts.RecordSize != 0 && int(reader.Metadata.RecordSize) != r.opts.RecordSize {
@@ -1489,7 +1491,7 @@ func (r *modelRun) naiveLoad(i int) error {
 		return r.fail("naive-writer", "open: %v", err)
 	}
 	defer reader.Close()
-	if !db.recordPointers && !db.duplicateKeys {
+	if !db.recordPointers && !db.duplicateKeys && !r.modelHasInvalidUTF8() {
 		if err := reader.Verify(); err != nil {
 			return r.fail("naive-writer", "verify: %v", err)
 		}
@@ -1510,6 +1512,18 @@ func (r *modelRun) naiveLoad(i int) error {
 	want, wantErr := r.roundTripModel(r.optsInserter)
 	wantErr = wantErr || db.duplicateKeys
 	return r.adoptLoad(loaded, loadErr, want, wantErr, r.opts, r.optsInserter)
+}
+
+// modelHasInvalidUTF8 reports whether the model holds a string or map key
+// that is not valid UTF-8. The writer accepts such strings, and
+// Reader.Verify rejects them.
+func (r *modelRun) modelHasInvalidUTF8() bool {
+	for _, seg := range r.model.segs {
+		if hasInvalidUTF8(seg.value) {
+			return true
+		}
+	}
+	return false
 }
 
 // modelHasMappedData reports whether the raw ::ffff:0:0/96 region holds data

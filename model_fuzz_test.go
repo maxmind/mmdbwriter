@@ -23,9 +23,35 @@ func FuzzTreeModel(f *testing.F) {
 }
 
 // TestTreeModelRandom runs random operation sequences on every test run.
-// MMDBWRITER_MODEL_SEED replays a seed, and MMDBWRITER_MODEL_RUNS sets the
-// number of sequences.
 func TestTreeModelRandom(t *testing.T) {
+	strict := os.Getenv("MMDBWRITER_MODEL_STRICT") != ""
+	runRandomInputs(t, 200, func(data []byte, dir string) error {
+		return runTreeModel(data, dir, strict)
+	})
+}
+
+func FuzzValueModel(f *testing.F) {
+	for b := range 16 {
+		f.Add([]byte{byte(b * 16), 0, 1, 2, 3})
+	}
+	f.Fuzz(func(t *testing.T, data []byte) {
+		if err := runValueModel(data, t.TempDir()); err != nil {
+			t.Fatal(err)
+		}
+	})
+}
+
+// TestValueModelRandom checks random values on every test run.
+func TestValueModelRandom(t *testing.T) {
+	runRandomInputs(t, 200, runValueModel)
+}
+
+// runRandomInputs checks a property against random inputs and shrinks the
+// first failing input. MMDBWRITER_MODEL_SEED replays a seed,
+// MMDBWRITER_MODEL_RUNS sets the number of inputs, and
+// MMDBWRITER_MODEL_NOSHRINK reports a failure without shrinking it.
+func runRandomInputs(t *testing.T, runs int, property func(data []byte, dir string) error) {
+	t.Helper()
 	seed := uint64(time.Now().UnixNano())
 	if s := os.Getenv("MMDBWRITER_MODEL_SEED"); s != "" {
 		var err error
@@ -34,7 +60,6 @@ func TestTreeModelRandom(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	runs := 200
 	if s := os.Getenv("MMDBWRITER_MODEL_RUNS"); s != "" {
 		var err error
 		runs, err = strconv.Atoi(s)
@@ -42,7 +67,6 @@ func TestTreeModelRandom(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	strict := os.Getenv("MMDBWRITER_MODEL_STRICT") != ""
 	rng := rand.New(rand.NewPCG(seed, 0))
 	dir := t.TempDir()
 	for run := range runs {
@@ -50,7 +74,7 @@ func TestTreeModelRandom(t *testing.T) {
 		for i := range data {
 			data[i] = byte(rng.Uint32())
 		}
-		err := runTreeModel(data, dir, strict)
+		err := property(data, dir)
 		if err == nil {
 			continue
 		}
@@ -59,12 +83,12 @@ func TestTreeModelRandom(t *testing.T) {
 		}
 		tag := failureTag(err)
 		minimal := shrinkModelInput(data, func(candidate []byte) bool {
-			err := runTreeModel(candidate, dir, strict)
+			err := property(candidate, dir)
 			return err != nil && failureTag(err) == tag
 		})
 		t.Fatalf(
 			"seed %d run %d failed\nminimized input %s\n%v",
-			seed, run, hex.EncodeToString(minimal), runTreeModel(minimal, dir, strict),
+			seed, run, hex.EncodeToString(minimal), property(minimal, dir),
 		)
 	}
 }
