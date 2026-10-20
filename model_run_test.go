@@ -603,7 +603,7 @@ func (r *modelRun) insertPrefix(
 	} else {
 		want = modelErrInput
 	}
-	return r.finishInsert(want, pieces, v, fn, calls, withMetadata, err)
+	return r.finishInsert(want, pieces, v, fn, calls, withMetadata, false, err)
 }
 
 func (r *modelRun) insertRange(
@@ -652,7 +652,7 @@ func (r *modelRun) insertRange(
 		pieces = rangePrefixes(rng, r.cfg.depth)
 		r.addProbes(rng)
 	}
-	return r.finishInsert(want, pieces, v, fn, calls, withMetadata, err)
+	return r.finishInsert(want, pieces, v, fn, calls, withMetadata, true, err)
 }
 
 func recordingFunc(fn inserter.PureFunc, calls *[]metadataCall) inserter.Func {
@@ -672,6 +672,7 @@ func (r *modelRun) finishInsert(
 	fn *namedPure,
 	calls []metadataCall,
 	withMetadata bool,
+	isRange bool,
 	got error,
 ) error {
 	if want == modelErrNone {
@@ -698,7 +699,7 @@ func (r *modelRun) finishInsert(
 			var states []pieceState
 			want = r.model.apply(pieces, resolve, &states)
 			if withMetadata {
-				if err := r.checkCalls(states, calls, want); err != nil {
+				if err := r.checkCalls(states, calls, want, isRange); err != nil {
 					return err
 				}
 			}
@@ -791,19 +792,14 @@ func (r *modelRun) checkGet(addr netip.Addr, keepView bool) error {
 		}
 		return nil
 	}
-	if r.skipKnown && r.model.resolveAlias(ma) != ma {
+	want := r.model.get(r.model.resolveAlias(ma))
+	err := r.checkGetResult(addr, ma, prefix, value, want.key)
+	if err != nil && r.skipKnown && r.model.resolveAlias(ma) != ma && treeHasLivePaths(r.tree) {
 		// Known bug: Get through the 2001::/32 and 2002::/16 aliases compares
 		// compressed-path bits at alias-relative depths.
 		return nil
 	}
-	want := r.model.get(r.model.resolveAlias(ma))
-	if canon(value) != want.key {
-		return r.fail("get-value", "Get(%s) = %s, model %s", addr, canon(value), want.key)
-	}
-	if hasPointerTypes(value) {
-		return r.fail("get-view", "Get(%s) returned a pointer type: %T", addr, value)
-	}
-	if err := r.checkReturnedPrefix("Get", addr, ma, prefix, want.key); err != nil {
+	if err != nil {
 		return err
 	}
 	if keepView && value != nil {
@@ -813,6 +809,33 @@ func (r *modelRun) checkGet(addr netip.Addr, keepView bool) error {
 		}
 	}
 	return nil
+}
+
+func (r *modelRun) checkGetResult(
+	addr netip.Addr,
+	ma u128,
+	prefix netip.Prefix,
+	value mmdbtype.DataType,
+	wantKey string,
+) error {
+	if canon(value) != wantKey {
+		return r.fail("get-value", "Get(%s) = %s, model %s", addr, canon(value), wantKey)
+	}
+	if hasPointerTypes(value) {
+		return r.fail("get-view", "Get(%s) returned a pointer type: %T", addr, value)
+	}
+	return r.checkReturnedPrefix("Get", addr, ma, prefix, wantKey)
+}
+
+// treeHasLivePaths reports whether the tree holds a compressed path that
+// WriteTo has not expanded yet.
+func treeHasLivePaths(tree *Tree) bool {
+	for _, path := range tree.paths {
+		if path.record.recordType != recordTypeRetired {
+			return true
+		}
+	}
+	return false
 }
 
 // checkReturnedPrefix checks that a returned prefix contains the query and
@@ -853,7 +876,12 @@ func (r *modelRun) checkReturnedPrefix(
 // existing record must be constant in the model as it stood before that
 // piece, hold the existing value, and the calls for a piece must tile the
 // piece's insertable addresses in order.
-func (r *modelRun) checkCalls(states []pieceState, calls []metadataCall, result modelErrKind) error {
+func (r *modelRun) checkCalls(
+	states []pieceState,
+	calls []metadataCall,
+	result modelErrKind,
+	isRange bool,
+) error {
 	ci := 0
 	for si, st := range states {
 		parts := st.model.subtractExcluded(st.piece)
@@ -868,7 +896,8 @@ func (r *modelRun) checkCalls(states []pieceState, calls []metadataCall, result 
 			if r.model.prefixToRange(call.metadata.InsertedNetwork) != st.piece {
 				break
 			}
-			if !r.skipKnown && call.metadata.InsertedNetwork.Addr().Is4In6() &&
+			// Known bug: range subnets are not normalized.
+			if !(r.skipKnown && isRange) && call.metadata.InsertedNetwork.Addr().Is4In6() &&
 				call.metadata.InsertedNetwork.Bits() >= 96 {
 				return r.fail("metadata-normalization",
 					"InsertedNetwork %s is IPv4-mapped", call.metadata.InsertedNetwork)
@@ -1023,23 +1052,57 @@ func (r *modelRun) checkNetworks(reader *maxminddb.Reader) error {
 // checkNetworksSkippingAliases checks that the default iteration, which skips
 // aliases, covers every address outside the aliases exactly once.
 func (r *modelRun) checkNetworksSkippingAliases(reader *maxminddb.Reader) error {
+	// Known reader bug: when the IPv4 start is a data record, the default
+	// iteration also skips every network outside ::/96 that has the same
+	// value. skipKey holds that value, and the check accepts those gaps.
+	skipKey := ""
 	if r.skipKnown && r.cfg.depth == 128 && !r.cfg.aliasing {
-		// Known reader bug: when the IPv4 start is a data record, at or above
-		// /96, the alias check skips every other network with the same value.
 		res := reader.Lookup(netip.IPv4Unspecified())
 		if res.Found() && (res.Prefix().Addr().Is6() || res.Prefix().Bits() == 0) {
-			return nil
+			skipKey = r.model.get(u128{}).key
 		}
 	}
-	var expected []mrange
-	expected = subtractRanges(mrange{u128{}, lowMask(r.cfg.depth)}, aliasRanges(r.model.aliases))
+	expected := subtractRanges(mrange{u128{}, lowMask(r.cfg.depth)}, aliasRanges(r.model.aliases))
 	part := 0
 	next := expected[0].first
+	// skipGap moves next past a gap that the reader bug explains.
+	skipGap := func(end u128, endsPart bool) bool {
+		if skipKey == "" {
+			return false
+		}
+		gap := mrange{next, end}
+		if endsPart {
+			gap.last = expected[part].last
+		}
+		ipv4 := prefixRange(u128{}, 96, 128)
+		for _, run := range r.model.runs(gap) {
+			if run.overlaps(ipv4) || r.model.get(run.first).key != skipKey {
+				return false
+			}
+		}
+		return true
+	}
 	for res := range reader.Networks(maxminddb.IncludeNetworksWithoutData()) {
 		if err := res.Err(); err != nil {
 			return r.fail("reader-networks", "%v", err)
 		}
 		nr := r.model.prefixToRange(res.Prefix())
+		for part < len(expected) && nr.first.cmp(next) > 0 {
+			if nr.first.cmp(expected[part].last) > 0 {
+				if !skipGap(u128{}, true) {
+					break
+				}
+				part++
+				if part < len(expected) {
+					next = expected[part].first
+				}
+				continue
+			}
+			if !skipGap(nr.first.sub1(), false) {
+				break
+			}
+			next = nr.first
+		}
 		if part == len(expected) || nr.first != next || !nr.within(expected[part]) {
 			return r.fail("reader-tiling-default", "network %s, want start %s",
 				res.Prefix(), next.addr16())
@@ -1051,6 +1114,12 @@ func (r *modelRun) checkNetworksSkippingAliases(reader *maxminddb.Reader) error 
 			}
 		} else {
 			next = nr.last.add1()
+		}
+	}
+	for part < len(expected) && skipGap(u128{}, true) {
+		part++
+		if part < len(expected) {
+			next = expected[part].first
 		}
 	}
 	if part != len(expected) {
@@ -1111,29 +1180,32 @@ func (r *modelRun) checkReaderAddr(reader *maxminddb.Reader, a u128) error {
 	return nil
 }
 
-func (r *modelRun) mappedRegionHasData() bool {
+// fileHasMappedNetworks reports whether Load would read a data network that
+// is IPv4-mapped at /96 or longer from the file.
+func (r *modelRun) fileHasMappedNetworks(path string) (bool, error) {
 	if r.cfg.depth != 128 || r.cfg.aliasing {
-		return false
+		return false, nil
 	}
-	mapped := r.model.prefixToRange(netip.MustParsePrefix("::ffff:0:0/96"))
-	for _, run := range r.model.runs(mapped) {
-		if r.model.get(run.first).value != nil {
-			return true
+	reader, err := maxminddb.Open(path)
+	if err != nil {
+		return false, err
+	}
+	defer reader.Close()
+	for res := range reader.Networks(maxminddb.IncludeAliasedNetworks()) {
+		if err := res.Err(); err != nil {
+			return false, err
+		}
+		if p := res.Prefix(); p.Addr().Is4In6() && p.Bits() >= 96 {
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }
 
 // loadRoundTrip writes the tree, loads it with the same options, and
 // continues with the loaded tree. With a nil Options.Inserter, the loaded tree
 // must hold the same values. Otherwise each value v becomes Inserter(nil, v).
 func (r *modelRun) loadRoundTrip(i int) error {
-	if r.skipKnown && r.mappedRegionHasData() {
-		// Known bug: Load normalizes networks in ::ffff:0:0/96 to IPv4 and
-		// inserts them over the IPv4 subtree.
-		r.trace = append(r.trace, fmt.Sprintf("%d: Load round trip skipped", i))
-		return nil
-	}
 	r.loads++
 	path := filepath.Join(r.dir, fmt.Sprintf("load-%d.mmdb", r.loads))
 	file, err := os.Create(path)
@@ -1147,8 +1219,20 @@ func (r *modelRun) loadRoundTrip(i int) error {
 	if err := file.Close(); err != nil {
 		return err
 	}
-	loaded, err := Load(path, r.opts)
-	r.trace = append(r.trace, fmt.Sprintf("%d: Load round trip -> %v", i, err))
+	if r.skipKnown {
+		mapped, err := r.fileHasMappedNetworks(path)
+		if err != nil {
+			return r.fail("reader-networks", "%v", err)
+		}
+		if mapped {
+			// Known bug: Load normalizes networks in ::ffff:0:0/96 to IPv4 and
+			// inserts them over the IPv4 subtree.
+			r.trace = append(r.trace, fmt.Sprintf("%d: Load round trip skipped", i))
+			return nil
+		}
+	}
+	loaded, loadErr := Load(path, r.opts)
+	r.trace = append(r.trace, fmt.Sprintf("%d: Load round trip -> %v", i, loadErr))
 
 	want := newTreeModel(r.cfg)
 	wantErr := false
@@ -1170,10 +1254,10 @@ func (r *modelRun) loadRoundTrip(i int) error {
 		}
 		want.set(mrange{seg.start, last}, normalizeValue(value))
 	}
-	if wantErr != (err != nil) {
-		return r.fail("load-error", "model expects error=%v, Load returned %v", wantErr, err)
+	if wantErr != (loadErr != nil) {
+		return r.fail("load-error", "model expects error=%v, Load returned %v", wantErr, loadErr)
 	}
-	if err != nil {
+	if loadErr != nil {
 		return nil
 	}
 	loaded.disableInsertCursor = r.tree.disableInsertCursor
