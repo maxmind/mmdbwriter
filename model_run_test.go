@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"math/bits"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -107,6 +108,39 @@ var modelPureFuncs = []namedPure{
 		}
 		return newValue, nil
 	}},
+	{
+		name: "panicOnU32_1",
+		fn: func(old, newValue mmdbtype.DataType) (mmdbtype.DataType, error) {
+			if canon(old) == canon(mmdbtype.Uint32(1)) {
+				panic(errModelPanic)
+			}
+			return newValue, nil
+		},
+		// The model stops where the tree panics.
+		model: func(old, newValue mmdbtype.DataType) (mmdbtype.DataType, error) {
+			if canon(old) == canon(mmdbtype.Uint32(1)) {
+				return nil, errModelPanic
+			}
+			return newValue, nil
+		},
+	},
+}
+
+// errModelPanic is the value a test inserter panics with.
+var errModelPanic = errors.New("model test inserter panic")
+
+// callTree runs a tree operation and recovers a panic from a test inserter.
+// Any other panic propagates.
+func callTree(op func() error) (err error, panicked bool) {
+	defer func() {
+		if p := recover(); p != nil {
+			if p != errModelPanic { //nolint:errorlint // The panic value is the sentinel itself.
+				panic(p)
+			}
+			panicked = true
+		}
+	}()
+	return op(), false
 }
 
 // referenceTopLevelMerge states TopLevelMerge's documented behavior without
@@ -344,6 +378,7 @@ func (r *modelRun) setup() error {
 		DisableIPv4Aliasing:     b&2 != 0,
 		IncludeReservedNetworks: b&4 != 0,
 		RefcountAudit:           b&8 != 0,
+		DisableMetadataPointers: b&128 != 0,
 		RecordSize:              []int{0, 24, 28, 32}[r.src.intn(4)],
 	}
 	if b&1 != 0 {
@@ -651,16 +686,19 @@ func (r *modelRun) insertPrefix(
 	withMetadata bool,
 ) error {
 	var calls []modelCall
-	var err error
-	switch {
-	case fn == nil:
-		err = r.tree.Insert(p, v)
-	case withMetadata:
-		err = r.tree.InsertFunc(p, v, r.recordingFunc(fn.fn, &calls))
-	default:
-		err = r.tree.InsertPureFunc(p, v, fn.fn)
-	}
-	r.trace = append(r.trace, fmt.Sprintf("%d: %s(%s, %s) -> %v", i, name, p, canon(v), err))
+	err, panicked := callTree(func() error {
+		switch {
+		case fn == nil:
+			return r.tree.Insert(p, v)
+		case withMetadata:
+			return r.tree.InsertFunc(p, v, r.recordingFunc(fn.fn, &calls))
+		default:
+			return r.tree.InsertPureFunc(p, v, fn.fn)
+		}
+	})
+	r.trace = append(r.trace, fmt.Sprintf(
+		"%d: %s(%s, %s) -> %v%s", i, name, p, canon(v), err, panicNote(panicked),
+	))
 
 	var pieces []mrange
 	want := modelErrNone
@@ -671,7 +709,7 @@ func (r *modelRun) insertPrefix(
 	} else {
 		want = modelErrInput
 	}
-	return r.finishInsert(want, pieces, v, fn, calls, withMetadata, false, err)
+	return r.finishInsert(want, pieces, v, fn, calls, withMetadata, false, panicked, err)
 }
 
 func (r *modelRun) insertRange(
@@ -683,17 +721,18 @@ func (r *modelRun) insertRange(
 	withMetadata bool,
 ) error {
 	var calls []modelCall
-	var err error
-	switch {
-	case fn == nil:
-		err = r.tree.InsertRange(start, end, v)
-	case withMetadata:
-		err = r.tree.InsertRangeFunc(start, end, v, r.recordingFunc(fn.fn, &calls))
-	default:
-		err = r.tree.InsertRangePureFunc(start, end, v, fn.fn)
-	}
+	err, panicked := callTree(func() error {
+		switch {
+		case fn == nil:
+			return r.tree.InsertRange(start, end, v)
+		case withMetadata:
+			return r.tree.InsertRangeFunc(start, end, v, r.recordingFunc(fn.fn, &calls))
+		default:
+			return r.tree.InsertRangePureFunc(start, end, v, fn.fn)
+		}
+	})
 	r.trace = append(r.trace, fmt.Sprintf(
-		"%d: %s(%s, %s, %s) -> %v", i, name, start, end, canon(v), err,
+		"%d: %s(%s, %s, %s) -> %v%s", i, name, start, end, canon(v), err, panicNote(panicked),
 	))
 
 	want := modelErrNone
@@ -720,7 +759,7 @@ func (r *modelRun) insertRange(
 		pieces = rangePrefixes(rng, r.cfg.depth)
 		r.addProbes(rng)
 	}
-	return r.finishInsert(want, pieces, v, fn, calls, withMetadata, true, err)
+	return r.finishInsert(want, pieces, v, fn, calls, withMetadata, true, panicked, err)
 }
 
 // modelCall is one InsertFunc callback: its arguments and the lookups it
@@ -820,10 +859,14 @@ func (r *modelRun) finishInsert(
 	calls []modelCall,
 	withMetadata bool,
 	isRange bool,
+	panicked bool,
 	got error,
 ) error {
 	if err := r.callbackErr; err != nil {
 		return err
+	}
+	if panicked {
+		return r.afterPanic(pieces, v, fn)
 	}
 	if want == modelErrNone {
 		var pure inserter.PureFunc
@@ -861,6 +904,72 @@ func (r *modelRun) finishInsert(
 	if err := r.tree.auditValueStore(); err != nil {
 		return r.fail("audit", "%v", err)
 	}
+	return r.checkProbes()
+}
+
+func panicNote(panicked bool) string {
+	if panicked {
+		return " (panic)"
+	}
+	return ""
+}
+
+// afterPanic checks the tree after an inserter panicked. The insertion
+// guarantees do not apply after a panic, so the check is weak: the tree
+// passes the audit and accepts new operations, and every address holds its
+// old value or its new value. The model then takes the tree's values, read
+// back with the reader.
+func (r *modelRun) afterPanic(pieces []mrange, v mmdbtype.DataType, fn *namedPure) error {
+	if fn == nil {
+		return r.fail("panic", "a direct insert panicked")
+	}
+	if r.tree.mutating {
+		return r.fail("panic", "the tree still rejects mutations after a panic")
+	}
+	if err := r.tree.auditValueStore(); err != nil {
+		return r.fail("audit", "after a panic: %v", err)
+	}
+	post := r.model.clone()
+	model := fn.modelFunc()
+	post.apply(pieces, func(old mmdbtype.DataType) (mmdbtype.DataType, error) {
+		return model(old, v)
+	}, nil)
+	var buf bytes.Buffer
+	if _, err := r.tree.WriteTo(&buf); err != nil {
+		return r.fail("write", "after a panic: %v", err)
+	}
+	reader, err := maxminddb.OpenBytes(buf.Bytes())
+	if err != nil {
+		return r.fail("reader-open", "after a panic: %v", err)
+	}
+	defer reader.Close()
+	synced := newTreeModel(r.cfg)
+	var u mmdbtype.Unmarshaler
+	for res := range reader.Networks(maxminddb.IncludeAliasedNetworks()) {
+		if err := res.Err(); err != nil {
+			return r.fail("reader-networks", "after a panic: %v", err)
+		}
+		nr := r.model.prefixToRange(res.Prefix())
+		if _, ok := r.model.resolveAliasRange(nr); !ok || r.model.resolveAlias(nr.first) != nr.first {
+			continue // Aliased networks repeat the IPv4 subtree.
+		}
+		u.Clear()
+		if err := res.Decode(&u); err != nil {
+			return r.fail("reader-decode", "after a panic: %v", err)
+		}
+		value := normalizeValue(u.Result())
+		key := canon(value)
+		for _, run := range r.model.runs(nr) {
+			for _, sub := range post.runs(run) {
+				if key != r.model.get(sub.first).key && key != post.get(sub.first).key {
+					return r.fail("panic-state", "after a panic %s holds %s, old %s, new %s",
+						res.Prefix(), key, r.model.get(sub.first).key, post.get(sub.first).key)
+				}
+			}
+		}
+		synced.set(nr, value)
+	}
+	r.model = synced
 	return r.checkProbes()
 }
 
@@ -1055,11 +1164,21 @@ func (r *modelRun) checkCalls(
 			if call.metadata.TreeDepth != r.cfg.depth {
 				return r.fail("metadata", "TreeDepth %d", call.metadata.TreeDepth)
 			}
+			if got, want := call.metadata.InsertedDepth(), rangeDepth(st.piece, r.cfg.depth); got != want {
+				return r.fail("metadata", "InsertedDepth %d for %s, want %d",
+					got, call.metadata.InsertedNetwork, want)
+			}
 			existing := call.metadata.ExistingNetwork()
 			if !existing.IsValid() {
 				return r.fail("metadata", "invalid ExistingNetwork for %+v", call.metadata)
 			}
 			er := r.model.prefixToRange(existing)
+			if got, want := call.metadata.ExistingDepth, rangeDepth(er, r.cfg.depth); got != want {
+				return r.fail("metadata", "ExistingDepth %d for %s", got, existing)
+			}
+			if got, want := call.metadata.ExistingAddr, treeLayout(er.first, r.cfg.depth); got != want {
+				return r.fail("metadata", "ExistingAddr %x for %s, want %x", got, existing, want)
+			}
 			seg, ok := st.model.constant(er)
 			if !ok || seg.key != canon(call.existing) {
 				return r.fail("metadata-existing",
@@ -1141,6 +1260,28 @@ func (r *modelRun) checkCallbackGets(
 	return nil
 }
 
+// rangeDepth returns the prefix length, in tree bits, of a prefix range.
+func rangeDepth(r mrange, depth int) int {
+	diff := u128{r.first.hi ^ r.last.hi, r.first.lo ^ r.last.lo}
+	host := bits.Len64(diff.lo)
+	if diff.hi != 0 {
+		host = 64 + bits.Len64(diff.hi)
+	}
+	return depth - host
+}
+
+// treeLayout returns a tree-space address in the byte layout that
+// inserter.Metadata.ExistingAddr uses.
+func treeLayout(a u128, depth int) [16]byte {
+	var out [16]byte
+	if depth == 32 {
+		v := uint32(a.lo) //nolint:gosec // IPv4 tree addresses fit.
+		out[0], out[1], out[2], out[3] = byte(v>>24), byte(v>>16), byte(v>>8), byte(v)
+		return out
+	}
+	return a.addr16().As16()
+}
+
 // fullCheck writes the tree, reads it with maxminddb-golang, and compares
 // every network with the model.
 func (r *modelRun) fullCheck() error {
@@ -1170,8 +1311,8 @@ func (r *modelRun) fullCheck() error {
 	if err := reader.Verify(); err != nil && !(r.skipKnown && r.modelHasInvalidUTF8()) {
 		return r.fail("reader-verify", "%v", err)
 	}
-	if r.opts.RecordSize != 0 && int(reader.Metadata.RecordSize) != r.opts.RecordSize {
-		return r.fail("metadata", "record size %d", reader.Metadata.RecordSize)
+	if err := r.checkFileMetadata(reader, buf.Bytes()); err != nil {
+		return err
 	}
 	if err := r.checkNetworks(reader); err != nil {
 		return err
@@ -1183,6 +1324,39 @@ func (r *modelRun) fullCheck() error {
 		if err := r.checkReaderAddr(reader, a); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// checkFileMetadata checks the metadata section and the data section
+// separator of a written database.
+func (r *modelRun) checkFileMetadata(reader *maxminddb.Reader, db []byte) error {
+	md := reader.Metadata
+	recordSize := r.opts.RecordSize
+	if recordSize == 0 {
+		// The test databases are small, so the smallest size always fits.
+		recordSize = 24
+	}
+	switch {
+	case md.BinaryFormatMajorVersion != 2 || md.BinaryFormatMinorVersion != 0:
+		return r.fail("file-metadata", "format version %d.%d",
+			md.BinaryFormatMajorVersion, md.BinaryFormatMinorVersion)
+	case md.BuildEpoch != 1:
+		return r.fail("file-metadata", "build epoch %d", md.BuildEpoch)
+	case md.DatabaseType != r.opts.DatabaseType:
+		return r.fail("file-metadata", "database type %q", md.DatabaseType)
+	case len(md.Description) != 1 || md.Description["en"] != r.opts.Description["en"]:
+		return r.fail("file-metadata", "description %v", md.Description)
+	case int(md.IPVersion) != r.opts.IPVersion:
+		return r.fail("file-metadata", "IP version %d", md.IPVersion)
+	case len(md.Languages) != 0:
+		return r.fail("file-metadata", "languages %v", md.Languages)
+	case int(md.RecordSize) != recordSize:
+		return r.fail("file-metadata", "record size %d, want %d", md.RecordSize, recordSize)
+	}
+	treeSize := int(md.NodeCount) * int(md.RecordSize) / 4
+	if treeSize+16 > len(db) || !bytes.Equal(db[treeSize:treeSize+16], make([]byte, 16)) {
+		return r.fail("file-metadata", "no data section separator after %d nodes", md.NodeCount)
 	}
 	return nil
 }
