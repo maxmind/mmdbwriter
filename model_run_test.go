@@ -340,14 +340,7 @@ func (r *modelRun) setup() error {
 		r.optsInserter = &f
 		r.opts.Inserter = f.fn
 	}
-	r.cfg = modelConfig{
-		depth:    128,
-		aliasing: !r.opts.DisableIPv4Aliasing,
-		reserved: !r.opts.IncludeReservedNetworks,
-	}
-	if r.opts.IPVersion == 4 {
-		r.cfg = modelConfig{depth: 32, reserved: r.cfg.reserved}
-	}
+	r.cfg = configFor(r.opts)
 	tree, err := New(r.opts)
 	if err != nil {
 		return fmt.Errorf("New: %w", err)
@@ -359,6 +352,19 @@ func (r *modelRun) setup() error {
 	r.anchors = modelAnchors(r.cfg)
 	r.trace = append(r.trace, fmt.Sprintf("New(%s)", r.describeOptions()))
 	return nil
+}
+
+// configFor returns the model configuration for tree options with an
+// explicit IPVersion.
+func configFor(opts Options) modelConfig {
+	if opts.IPVersion == 4 {
+		return modelConfig{depth: 32, reserved: !opts.IncludeReservedNetworks}
+	}
+	return modelConfig{
+		depth:    128,
+		aliasing: !opts.DisableIPv4Aliasing,
+		reserved: !opts.IncludeReservedNetworks,
+	}
 }
 
 func (r *modelRun) describeOptions() string {
@@ -1364,9 +1370,9 @@ func (r *modelRun) fileHasMappedNetworks(path string) (bool, error) {
 	return false, nil
 }
 
-// loadRoundTrip writes the tree, loads it with the same options, and
-// continues with the loaded tree. With a nil Options.Inserter, the loaded tree
-// must hold the same values. Otherwise each value v becomes Inserter(nil, v).
+// loadRoundTrip writes the tree, loads it, and continues with the loaded
+// tree. Half of the loads use the tree's own options. The others change the
+// aliasing, reserved-network, IP version, record size, or inserter options.
 func (r *modelRun) loadRoundTrip(i int) error {
 	r.loads++
 	path := filepath.Join(r.dir, fmt.Sprintf("load-%d.mmdb", r.loads))
@@ -1381,7 +1387,14 @@ func (r *modelRun) loadRoundTrip(i int) error {
 	if err := file.Close(); err != nil {
 		return err
 	}
-	if r.skipKnown {
+	target, targetInserter := r.genLoadOptions()
+	effective := target
+	if effective.IPVersion == 0 {
+		effective.IPVersion = r.opts.IPVersion
+	}
+	cfg := configFor(effective)
+	sameConfig := cfg == r.cfg
+	if sameConfig && r.skipKnown {
 		mapped, err := r.fileHasMappedNetworks(path)
 		if err != nil {
 			return r.fail("reader-networks", "%v", err)
@@ -1393,28 +1406,26 @@ func (r *modelRun) loadRoundTrip(i int) error {
 			return nil
 		}
 	}
-	loaded, loadErr := Load(path, r.opts)
-	r.trace = append(r.trace, fmt.Sprintf("%d: Load round trip -> %v", i, loadErr))
+	loaded, loadErr := Load(path, target)
+	name := "nil"
+	if targetInserter != nil {
+		name = targetInserter.name
+	}
+	r.trace = append(r.trace, fmt.Sprintf(
+		"%d: Load(IPVersion:%d DisableIPv4Aliasing:%v IncludeReservedNetworks:%v RecordSize:%d Inserter:%s) -> %v",
+		i, target.IPVersion, target.DisableIPv4Aliasing, target.IncludeReservedNetworks,
+		target.RecordSize, name, loadErr,
+	))
 
-	want := newTreeModel(r.cfg)
-	wantErr := false
-	for si, seg := range r.model.segs {
-		if seg.value == nil {
-			continue
+	var want *treeModel
+	var wantErr bool
+	if sameConfig {
+		want, wantErr = r.roundTripModel(targetInserter)
+	} else {
+		want, wantErr, err = replayModel(path, cfg, targetInserter)
+		if err != nil {
+			return r.fail("reader-networks", "%v", err)
 		}
-		last := lowMask(r.cfg.depth)
-		if si+1 < len(r.model.segs) {
-			last = r.model.segs[si+1].start.sub1()
-		}
-		value := seg.value
-		if r.optsInserter != nil {
-			value, err = r.optsInserter.modelFunc()(nil, normalizeValue(seg.value))
-			if err != nil || (value != nil && !validValue(value)) {
-				wantErr = true
-				break
-			}
-		}
-		want.set(mrange{seg.start, last}, normalizeValue(value))
 	}
 	if wantErr != (loadErr != nil) {
 		return r.fail("load-error", "model expects error=%v, Load returned %v", wantErr, loadErr)
@@ -1425,6 +1436,13 @@ func (r *modelRun) loadRoundTrip(i int) error {
 	loaded.disableInsertCursor = r.tree.disableInsertCursor
 	r.tree = loaded
 	r.model = want
+	r.opts = effective
+	r.optsInserter = targetInserter
+	if !sameConfig {
+		r.cfg = cfg
+		r.anchors = modelAnchors(cfg)
+		r.probes = nil
+	}
 	if err := r.tree.auditValueStore(); err != nil {
 		return r.fail("audit", "after load: %v", err)
 	}
@@ -1432,4 +1450,103 @@ func (r *modelRun) loadRoundTrip(i int) error {
 		return err
 	}
 	return r.fullCheck()
+}
+
+// genLoadOptions returns the options for a load. Half of the time they are
+// the tree's own options.
+func (r *modelRun) genLoadOptions() (Options, *namedPure) {
+	opts := r.opts
+	named := r.optsInserter
+	b := r.src.byte()
+	if b < 128 {
+		return opts, named
+	}
+	if b&1 != 0 {
+		opts.DisableIPv4Aliasing = !opts.DisableIPv4Aliasing
+	}
+	if b&2 != 0 {
+		opts.IncludeReservedNetworks = !opts.IncludeReservedNetworks
+	}
+	switch (b >> 2) & 3 {
+	case 1:
+		opts.IPVersion = 0 // Use the version in the file's metadata.
+	case 2:
+		opts.IPVersion = 10 - opts.IPVersion // Switch between 4 and 6.
+	}
+	opts.RecordSize = []int{0, 24, 28, 32}[(b>>4)&3]
+	named = nil
+	opts.Inserter = nil
+	if choice := r.src.intn(4); choice != 0 {
+		f := modelPureFuncs[[]int{0, 0, 3, 6}[choice]] // Replace, DeepMerge, wrapOld
+		named = &f
+		opts.Inserter = f.fn
+	}
+	return opts, named
+}
+
+// roundTripModel returns the model after a load with the tree's own
+// configuration: each value v becomes inserter(nil, v), or stays v with no
+// inserter.
+func (r *modelRun) roundTripModel(named *namedPure) (*treeModel, bool) {
+	want := newTreeModel(r.cfg)
+	for si, seg := range r.model.segs {
+		if seg.value == nil {
+			continue
+		}
+		last := lowMask(r.cfg.depth)
+		if si+1 < len(r.model.segs) {
+			last = r.model.segs[si+1].start.sub1()
+		}
+		value := seg.value
+		if named != nil {
+			var err error
+			value, err = named.modelFunc()(nil, normalizeValue(seg.value))
+			if err != nil || (value != nil && !validValue(value)) {
+				return nil, true
+			}
+		}
+		want.set(mrange{seg.start, last}, normalizeValue(value))
+	}
+	return want, false
+}
+
+// replayModel returns the model after a load with a different configuration.
+// It inserts each network that Load reads from the file into an empty model,
+// in the order the reader yields them, with the documented insert rules.
+func replayModel(path string, cfg modelConfig, named *namedPure) (*treeModel, bool, error) {
+	reader, err := maxminddb.Open(path)
+	if err != nil {
+		return nil, false, err
+	}
+	defer reader.Close()
+	var iterOpts []maxminddb.NetworksOption
+	if cfg.depth == 128 && !cfg.aliasing {
+		iterOpts = append(iterOpts, maxminddb.IncludeAliasedNetworks())
+	}
+	m := newTreeModel(cfg)
+	var u mmdbtype.Unmarshaler
+	for res := range reader.Networks(iterOpts...) {
+		if err := res.Err(); err != nil {
+			return nil, false, err
+		}
+		u.Clear()
+		if err := res.Decode(&u); err != nil {
+			return nil, false, err
+		}
+		value := normalizeValue(u.Result())
+		piece, ok := m.insertRange(res.Prefix())
+		if !ok {
+			return nil, true, nil
+		}
+		resolve := func(old mmdbtype.DataType) (mmdbtype.DataType, error) {
+			if named == nil {
+				return value, nil
+			}
+			return named.modelFunc()(old, value)
+		}
+		if m.apply([]mrange{piece}, resolve, nil) != modelErrNone {
+			return nil, true, nil
+		}
+	}
+	return m, false, nil
 }
