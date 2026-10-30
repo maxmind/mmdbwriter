@@ -2399,6 +2399,42 @@ func TestGet_IPv4MappedIn128BitTree(t *testing.T) {
 	assert.Equal(t, network.String(), getNetwork.String(), "IPv4-mapped lookup")
 }
 
+func TestGetThroughIPv4AliasInCompressedPath(t *testing.T) {
+	tree, err := New(Options{DatabaseType: "mmdbwriter-alias-path"})
+	require.NoError(t, err)
+
+	// A lone /29 is stored as a compressed path until WriteTo expands it.
+	require.NoError(t, tree.Insert(netip.MustParsePrefix("1.2.3.0/29"), mmdbtype.Uint32(1)))
+
+	tests := []struct {
+		addr    string
+		network string
+		value   mmdbtype.DataType
+	}{
+		{"1.2.3.4", "1.2.3.0/29", mmdbtype.Uint32(1)},
+		{"2001:0:102:304::", "2001:0:102:300::/61", mmdbtype.Uint32(1)},
+		{"2002:102:304::", "2002:102:300::/45", mmdbtype.Uint32(1)},
+		// These diverge from the path at the /24 boundary.
+		{"1.2.2.4", "1.2.2.0/24", nil},
+		{"2001:0:102:204::", "2001:0:102:200::/56", nil},
+		{"2002:102:204::", "2002:102:200::/40", nil},
+	}
+
+	check := func(t *testing.T) {
+		t.Helper()
+		for _, test := range tests {
+			network, value := tree.Get(netip.MustParseAddr(test.addr))
+			assert.Equal(t, test.network, network.String(), test.addr)
+			assert.Equal(t, test.value, value, test.addr)
+		}
+	}
+
+	t.Run("before WriteTo", check)
+	_, err = tree.WriteTo(io.Discard)
+	require.NoError(t, err)
+	t.Run("after WriteTo", check)
+}
+
 func s2ip(v string) *any {
 	i := any(v)
 	return &i
