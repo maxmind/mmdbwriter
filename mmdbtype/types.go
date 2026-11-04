@@ -4,6 +4,7 @@ package mmdbtype
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"math/bits"
 	"reflect"
 	"slices"
+	"strconv"
 
 	"github.com/oschwald/maxminddb-golang/v2/mmdbdata"
 
@@ -939,13 +941,17 @@ func (t Uint64) WriteTo(w writer) (int64, error) {
 }
 
 // Uint128 is the MaxMind DB unsigned 128-bit integer type.
-// Its value is High*2^64 + Low. The zero value is zero.
+// Its value is High*2^64 + Low. The zero value is zero. It marshals to JSON
+// as an unquoted decimal integer.
 type Uint128 struct {
 	High uint64
 	Low  uint64
 }
 
-var _ DataType = Uint128{}
+var (
+	_ DataType       = Uint128{}
+	_ json.Marshaler = Uint128{}
+)
 
 // Uint128FromBig converts v without modifying it. Nil, negative, and values
 // wider than 128 bits return an error.
@@ -973,6 +979,14 @@ func (t Uint128) BigInt() *big.Int {
 	binary.BigEndian.PutUint64(buf[:8], t.High)
 	binary.BigEndian.PutUint64(buf[8:], t.Low)
 	return new(big.Int).SetBytes(buf[:])
+}
+
+// MarshalJSON encodes t as an unquoted decimal integer.
+func (t Uint128) MarshalJSON() ([]byte, error) {
+	if t.High == 0 {
+		return strconv.AppendUint(nil, t.Low, 10), nil
+	}
+	return []byte(t.BigInt().String()), nil
 }
 
 // Copy the value.

@@ -116,6 +116,7 @@
   `Uint128FromBig` and `BigInt` conversions. Returned values and existing
   inserter arguments are now `Uint128`; update pointer type assertions
   accordingly. Thanks to Luiz Ferraz (@Fryuni). GitHub #39.
+- `mmdbtype.Uint128` now marshals to JSON as an unquoted decimal integer.
 - Reworked tree storage to use indexed arenas with stable node addresses. Merged
   nodes and materialized sparse paths are recycled during mutation. Finalization
   releases the expanded path arena and uses 32-bit node numbers. Audit mode
