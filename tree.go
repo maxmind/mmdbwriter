@@ -158,7 +158,11 @@ type Tree struct {
 	mutating bool
 
 	insertCursor insertCursor
-	// Tests retain the recursive root walk as an oracle for cursor insertion.
+	// insertStack is insertWalk's frame stack. Keeping it here avoids clearing
+	// a pointer-holding array on every insert, and the mutating guard ensures
+	// only one walk uses it at a time.
+	insertStack [128]insertFrame
+	// Tests retain the root walk as an oracle for cursor insertion.
 	disableInsertCursor bool
 
 	nodeCount int
