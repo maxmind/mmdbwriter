@@ -447,52 +447,117 @@ func (t *Tree) materializePath(startDepth int, path compressedPath) record {
 	return child
 }
 
+// insertFrame is one node on the explicit stack of insertWalk.
+type insertFrame struct {
+	// r owns the node and is merged when the frame is popped. It is nil for
+	// the root passed to insertNode, which has no owning record to merge.
+	r     *record
+	index nodeIndex
+	// depth is the node's depth. Its children are at depth+1.
+	depth int
+	// nextChild is the child to visit next, or 2 once none remain.
+	nextChild uint8
+}
+
+// insertNode inserts into the children of the node at index without merging
+// the node itself.
 func (iRec *insertRecord) insertNode(
 	index nodeIndex,
 	currentDepth int,
 ) error {
-	newDepth := currentDepth + 1
-	node := iRec.tree.nodeAt(index)
-	// Check if we are inside the network already
-	if newDepth > iRec.prefixLen {
-		// Data already exists for the network so insert into all the children.
-		// Identical child records are merged as recursion unwinds.
-		//
-		// Record which child we take in iRec.ip. Navigation no longer reads
-		// these bits once the walk is deeper than prefixLen, so they can carry
-		// the descent path that metadata needs to report a record more
-		// specific than the insert. Both branches write the bit, because a
-		// sibling subtree may have left it set. Nothing restores it:
-		// maskedTreeAddr drops every bit past the record's own depth,
-		// PrefixFromInsertIP masks at prefixLen, and insertPrepared overwrites
-		// ip for the next subnet of a range.
-		setBitAt(&iRec.ip, currentDepth, 0)
-		err := iRec.insertRecord(&node.children[0], newDepth)
-		if err != nil {
-			return err
-		}
-		setBitAt(&iRec.ip, currentDepth, 1)
-		return iRec.insertRecord(&node.children[1], newDepth)
-	}
-
-	// We haven't reached the network yet.
-	pos := bitAt(iRec.ip, currentDepth)
-	return iRec.insertRecord(&node.children[pos], newDepth)
+	return iRec.insertWalk(nil, index, currentDepth)
 }
 
+// insertRecord inserts into r, a record at depth newDepth, then merges r's
+// children if r is or becomes a node.
 func (iRec *insertRecord) insertRecord(
 	r *record,
 	newDepth int,
 ) error {
-	switch r.recordType {
-	case recordTypeNode, recordTypeFixedNode:
-		return iRec.mergeChildrenAfterInsert(r, iRec.insertNode(r.nodeIndex, newDepth))
-	case recordTypePath:
+	descend, err := iRec.insertAt(r, newDepth)
+	if !descend {
+		return err
+	}
+	return iRec.insertWalk(r, r.nodeIndex, newDepth)
+}
+
+// insertWalk visits the subtree below a node depth first with an explicit
+// stack rather than recursion. Recursion would make the call stack at every
+// allocation and inserter callback vary with tree depth and shape, and each
+// distinct stack costs a heap-profile bucket that the runtime never frees
+// (https://github.com/golang/go/issues/69590).
+func (iRec *insertRecord) insertWalk(r *record, index nodeIndex, depth int) error {
+	// A node consumes one address bit, so nodes occupy depths 0 through 127
+	// and a walk holds at most one frame per depth.
+	stack := &iRec.tree.insertStack
+	stack[0] = insertFrame{r: r, index: index, depth: depth}
+	sp := 1
+	var err error
+	for sp > 0 {
+		f := &stack[sp-1]
+		// After an error, skip the remaining children but still merge every
+		// node on the stack, restoring record boundaries as the walk unwinds.
+		if err == nil && f.nextChild < 2 {
+			child := iRec.nextChild(f)
+			var descend bool
+			descend, err = iRec.insertAt(child, f.depth+1)
+			if descend {
+				stack[sp] = insertFrame{r: child, index: child.nodeIndex, depth: f.depth + 1}
+				sp++
+			}
+			continue
+		}
+		sp--
+		if f.r != nil {
+			err = iRec.mergeChildrenAfterInsert(f.r, err)
+		}
+	}
+	return err
+}
+
+// nextChild returns the next child of f's node to visit and advances f.
+func (iRec *insertRecord) nextChild(f *insertFrame) *record {
+	node := iRec.tree.nodeAt(f.index)
+	// Check if we are inside the network already
+	if f.depth+1 > iRec.prefixLen {
+		// Data already exists for the network so insert into all the children.
+		// Identical child records are merged as the walk unwinds.
+		//
+		// Record which child we take in iRec.ip. Navigation no longer reads
+		// these bits once the walk is deeper than prefixLen, so they can carry
+		// the descent path that metadata needs to report a record more
+		// specific than the insert. Both children write the bit, because a
+		// sibling subtree may have left it set. Nothing restores it:
+		// maskedTreeAddr drops every bit past the record's own depth,
+		// PrefixFromInsertIP masks at prefixLen, and insertPrepared overwrites
+		// ip for the next subnet of a range.
+		pos := f.nextChild
+		setBitAt(&iRec.ip, f.depth, pos)
+		f.nextChild++
+		return &node.children[pos]
+	}
+
+	// We haven't reached the network yet.
+	f.nextChild = 2
+	return &node.children[bitAt(iRec.ip, f.depth)]
+}
+
+// insertAt applies the insert to r, a record at depth newDepth, unless r is
+// or becomes a node. It reports whether the caller must then insert into the
+// node's children and merge them.
+func (iRec *insertRecord) insertAt(
+	r *record,
+	newDepth int,
+) (bool, error) {
+	for r.recordType == recordTypePath {
 		index := r.nodeIndex
 		path := iRec.tree.pathAt(index)
 		*r = iRec.tree.materializePath(newDepth, path)
 		iRec.tree.retirePath(index)
-		return iRec.insertRecord(r, newDepth)
+	}
+	switch r.recordType {
+	case recordTypeNode, recordTypeFixedNode:
+		return true, nil
 	case recordTypeEmpty, recordTypeData:
 		if newDepth >= iRec.prefixLen {
 			if iRec.recordType == recordTypeData {
@@ -502,7 +567,7 @@ func (iRec *insertRecord) insertRecord(
 				}
 				value, owned, err := iRec.resolveValue(r.value, existingDepth)
 				if err != nil {
-					return err
+					return false, err
 				}
 				iRec.replaceDataRecord(r, value, owned)
 			} else {
@@ -516,7 +581,7 @@ func (iRec *insertRecord) insertRecord(
 				r.value = nilValueRef
 				iRec.store.release(oldValue)
 			}
-			return nil
+			return false, nil
 		}
 
 		if r.recordType == recordTypeEmpty && iRec.recordType == recordTypeData {
@@ -525,10 +590,10 @@ func (iRec *insertRecord) insertRecord(
 			// an empty record and splitDepth is necessarily zero here.
 			value, owned, err := iRec.resolveValue(nilValueRef, newDepth)
 			if err != nil {
-				return err
+				return false, err
 			}
 			if value == nilValueRef {
-				return nil
+				return false, nil
 			}
 			if !owned {
 				iRec.store.retain(value)
@@ -538,7 +603,7 @@ func (iRec *insertRecord) insertRecord(
 				recordType: recordTypeData,
 			})
 			r.recordType = recordTypePath
-			return nil
+			return false, nil
 		}
 
 		// We are splitting this record so we create two duplicate child
@@ -552,10 +617,10 @@ func (iRec *insertRecord) insertRecord(
 		r.nodeIndex = iRec.tree.newNode([2]record{*r, *r})
 		r.value = nilValueRef
 		r.recordType = recordTypeNode
-		return iRec.mergeChildrenAfterInsert(r, iRec.insertNode(r.nodeIndex, newDepth))
+		return true, nil
 	case recordTypeReserved:
 		if iRec.prefixLen >= newDepth {
-			return newReservedNetworkError(
+			return false, newReservedNetworkError(
 				iRec.ip,
 				newDepth,
 				iRec.prefixLen,
@@ -565,15 +630,15 @@ func (iRec *insertRecord) insertRecord(
 		}
 		// We are inserting a network that contains a reserved network. Leave
 		// the reserved record as it is, and do not report it to an inserter.
-		return nil
+		return false, nil
 	case recordTypeAlias:
 		if iRec.prefixLen < newDepth {
 			// Do nothing. We are inserting a network that contains an aliased
 			// network. We silently ignore.
-			return nil
+			return false, nil
 		}
 		// attempting to insert _into_ an aliased network
-		return newAliasedNetworkError(
+		return false, newAliasedNetworkError(
 			iRec.ip,
 			newDepth,
 			iRec.prefixLen,
@@ -581,7 +646,7 @@ func (iRec *insertRecord) insertRecord(
 			iRec.insertedAs4,
 		)
 	default:
-		return fmt.Errorf("inserting into record type %d is not implemented", r.recordType)
+		return false, fmt.Errorf("inserting into record type %d is not implemented", r.recordType)
 	}
 }
 

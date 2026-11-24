@@ -3,11 +3,14 @@ package mmdbwriter
 import (
 	"errors"
 	"fmt"
+	"net/netip"
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/maxmind/mmdbwriter/v2/inserter"
 	"github.com/maxmind/mmdbwriter/v2/mmdbtype"
 )
 
@@ -176,4 +179,38 @@ func TestMaybeMergeChildren(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Each distinct call stack seen by the heap profiler costs a bucket that is
+// never freed (https://github.com/golang/go/issues/69590). Callbacks, and the
+// allocations around them, should therefore see the same stack depth however
+// deep the records they resolve.
+func TestInsertCallbackStackDepthIsConstant(t *testing.T) {
+	tree, err := New(Options{IPVersion: 6, DisableIPv4Aliasing: true})
+	require.NoError(t, err)
+	for i, prefix := range []string{
+		"2a00:1450::/32",
+		"2a00:1450:8000::/33",
+		"2a00:1450::1/128",
+		"2a00:1450::ff00/120",
+		"2a00:1450:1:2:3:4:5:6/127",
+	} {
+		require.NoError(t, tree.Insert(netip.MustParsePrefix(prefix), mmdbtype.Uint32(i)))
+	}
+
+	depths := map[int]int{}
+	stackDepths := map[int]bool{}
+	pcs := make([]uintptr, 512)
+	err = tree.InsertFunc(
+		netip.MustParsePrefix("2a00::/16"),
+		mmdbtype.String("cover"),
+		func(_, newValue mmdbtype.DataType, metadata inserter.Metadata) (mmdbtype.DataType, error) {
+			depths[metadata.ExistingNetwork().Bits()]++
+			stackDepths[runtime.Callers(0, pcs)] = true
+			return newValue, nil
+		},
+	)
+	require.NoError(t, err)
+	assert.Contains(t, depths, 128)
+	assert.Len(t, stackDepths, 1, "callback stack depth varies with record depth")
 }
