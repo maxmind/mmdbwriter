@@ -675,8 +675,16 @@ func (t *Tree) getRecord(
 	}
 
 	switch r.recordType {
-	case recordTypeNode, recordTypeAlias, recordTypeFixedNode:
+	case recordTypeNode, recordTypeFixedNode:
 		return t.getNode(r.nodeIndex, ip, depth)
+	case recordTypeAlias:
+		// Compressed paths below the IPv4 root store bits and depths at the
+		// root's position, ::/96. Move the aliased IPv4 bits there for the walk.
+		// Every alias network is byte-aligned.
+		var ipv4 [16]byte
+		copy(ipv4[12:], ip[depth/8:depth/8+4])
+		prefixLen, ipv4Record := t.getNode(r.nodeIndex, ipv4, 96)
+		return prefixLen - 96 + depth, ipv4Record
 	case recordTypeRetired:
 		// A reachable retired record indicates an internal ownership bug.
 		// Panic instead of reporting missing data from a corrupt tree.
