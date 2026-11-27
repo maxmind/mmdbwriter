@@ -2,6 +2,7 @@ package mmdbtype
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"math"
 	"math/big"
@@ -125,5 +126,40 @@ func TestUint128WriteErrors(t *testing.T) {
 		require.ErrorIs(t, err, failure)
 		assert.Equal(t, int64(limit), written)
 		assert.Equal(t, limit, w.Len())
+	}
+}
+
+func TestUint128MarshalJSON(t *testing.T) {
+	for _, test := range []struct {
+		want  string
+		value Uint128
+	}{
+		{"0", Uint128{}},
+		{"500", Uint128{Low: 500}},
+		{"18446744073709551615", Uint128{Low: math.MaxUint64}},
+		{"18446744073709551616", Uint128{High: 1}},
+		{"18446744073709551658", Uint128{High: 1, Low: 42}},
+		{
+			"340282366920938463463374607431768211455",
+			Uint128{High: math.MaxUint64, Low: math.MaxUint64},
+		},
+	} {
+		t.Run(test.want, func(t *testing.T) {
+			got, err := json.Marshal(test.value)
+			require.NoError(t, err)
+			assert.Equal(t, test.want, string(got))
+
+			got, err = json.Marshal(&test.value)
+			require.NoError(t, err)
+			assert.Equal(t, test.want, string(got))
+
+			got, err = json.Marshal(Map{"k": test.value})
+			require.NoError(t, err)
+			assert.Equal(t, `{"k":`+test.want+`}`, string(got))
+
+			got, err = json.Marshal(Slice{test.value})
+			require.NoError(t, err)
+			assert.Equal(t, `[`+test.want+`]`, string(got))
+		})
 	}
 }
